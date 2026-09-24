@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nerdearla — Subtítulos en vivo</title>
+<link rel="stylesheet" href="/estilo.css">
+</head>
+<body class="pagina-indice">
+<header class="cabecera-indice">
+  <h1>Sesiones en vivo</h1>
+  <p class="ayuda">Elegí una sesión y un idioma. Sin login, sin app.</p>
+</header>
+<main id="lista-sesiones" class="lista-sesiones">
+  <p class="estado-carga">Buscando sesiones…</p>
+</main>
+<script>
+(function () {
+  'use strict';
+
+  var params = new URLSearchParams(location.search);
+  var hubParam = params.get('hub');
+  var hubHost = hubParam || (location.hostname + ':8100');
+  var apiUrl = 'http://' + hubHost + '/api/sesiones';
+  var cont = document.getElementById('lista-sesiones');
+
+  function nombreEstado(s) {
+    if (s === 'live') return 'en vivo';
+    if (s === 'idle') return 'en espera';
+    if (s === 'ended') return 'finalizada';
+    return s || 'desconocido';
+  }
+
+  function linksIdioma(s) {
+    var idiomas = [s.lang];
+    var otro = s.lang === 'en' ? 'es' : (s.lang === 'es' ? 'en' : null);
+    if (otro) idiomas.push(otro);
+    return idiomas.map(function (xx) {
+      var qs = new URLSearchParams();
+      qs.set('lang', xx);
+      if (hubParam) qs.set('hub', hubParam);
+      var a = document.createElement('a');
+      a.href = '/s/' + encodeURIComponent(s.session_id) + '?' + qs.toString();
+      a.className = 'link-idioma';
+      a.textContent = xx === s.lang ? (xx + ' (original)') : xx;
+      return a;
+    });
+  }
+
+  function render(sesiones) {
+    cont.textContent = '';
+    if (!sesiones || sesiones.length === 0) {
+      var vacio = document.createElement('p');
+      vacio.className = 'estado-carga';
+      vacio.textContent = 'No hay sesiones activas todavía.';
+      cont.appendChild(vacio);
+      return;
+    }
+    sesiones.forEach(function (s) {
+      var tarjeta = document.createElement('article');
+      tarjeta.className = 'tarjeta-sesion';
+
+      var h2 = document.createElement('h2');
+      h2.textContent = s.title || s.session_id;
+      tarjeta.appendChild(h2);
+
+      var meta = document.createElement('p');
+      meta.className = 'meta-sesion';
+      var badge = document.createElement('span');
+      badge.className = 'badge badge--' + (s.state || 'desconocido');
+      badge.textContent = nombreEstado(s.state);
+      meta.appendChild(badge);
+      if (s.replay) {
+        var badgeReplay = document.createElement('span');
+        badgeReplay.className = 'badge badge--replay';
+        badgeReplay.textContent = 'REPLAY';
+        meta.appendChild(badgeReplay);
+      }
+      tarjeta.appendChild(meta);
+
+      var idLinea = document.createElement('p');
+      idLinea.className = 'id-sesion';
+      idLinea.textContent = 'id: ' + s.session_id;
+      tarjeta.appendChild(idLinea);
+
+      var nav = document.createElement('nav');
+      nav.className = 'links-idioma';
+      linksIdioma(s).forEach(function (a) { nav.appendChild(a); });
+      tarjeta.appendChild(nav);
+
+      cont.appendChild(tarjeta);
+    });
+  }
+
+  function cargar() {
+    fetch(apiUrl).then(function (resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    }).then(render).catch(function (err) {
+      cont.textContent = '';
+      var p = document.createElement('p');
+      p.className = 'estado-error';
+      p.textContent = 'No se pudo conectar al hub (' + apiUrl + '): ' + err.message;
+      cont.appendChild(p);
+      console.error('error cargando /api/sesiones', err);
+    });
+  }
+
+  cargar();
+  setInterval(cargar, 5000);
+})();
+</script>
+</body>
+</html>

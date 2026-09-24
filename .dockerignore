@@ -1,0 +1,12 @@
+.venv
+.git
+.env
+.env.*
+!.env.example
+reportes
+qa/out
+fixtures/audio/full
+.claude
+__pycache__
+**/__pycache__
+node_modules

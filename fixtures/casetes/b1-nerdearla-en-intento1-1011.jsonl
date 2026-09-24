@@ -1,0 +1,138 @@
+{"casete": 1, "session_id": "nerdearla-en", "lang": "en", "model": "gemini-3.5-transcribe-live", "config": {"input_audio_transcription": {"language_codes": ["en"], "custom_vocabulary": ["Nerdearla", "Grady Booch"]}, "realtime_input_config": {"automatic_activity_detection": {"disabled": true}, "activity_handling": "NO_INTERRUPTION"}}, "source": {"file": "fixtures/audio/full/nerdearla-en-booch.m4a", "url": "https://www.youtube.com/watch?v=cPaqkFCqWeg", "start_s": 300.0, "dur_s": 750.0}, "title": "The Third Golden Age - Grady Booch", "generator": "worker.run", "started_at": 1790266474.117672}
+{"t": 1790266474.1245787, "dir": "client", "kind": "connect", "payload": {"session_id": "nerdearla-en", "lang": "en"}}
+{"t": 1790266477.6387181, "dir": "server", "kind": "setupComplete", "payload": {"setupComplete": {}}, "fuente": "sdk"}
+{"t": 1790266477.638826, "dir": "client", "kind": "config", "payload": {"model": "gemini-3.5-transcribe-live", "config": {"input_audio_transcription": {"language_codes": ["en"], "custom_vocabulary": ["Nerdearla", "Grady Booch"]}, "realtime_input_config": {"automatic_activity_detection": {"disabled": true}, "activity_handling": "NO_INTERRUPTION"}}}}
+{"t": 1790266477.6388607, "dir": "emit", "kind": "session_start", "payload": {"v": 1, "type": "session_start", "session_id": "nerdearla-en", "seq": 1, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266477.6388607, "replay": false, "meta": {"title": "The Third Golden Age - Grady Booch", "source": {"file": "fixtures/audio/full/nerdearla-en-booch.m4a", "url": "https://www.youtube.com/watch?v=cPaqkFCqWeg", "start_s": 300.0, "dur_s": 750.0}}}}
+{"t": 1790266477.8136249, "dir": "client", "kind": "activity_start", "payload": {"ventana": 0, "audio_start": 0.0}}
+{"t": 1790266477.9596329, "dir": "server", "kind": "serverContent+voiceActivity", "payload": {"serverContent": {}, "voiceActivity": {"type": "ACTIVITY_START", "audioOffset": "0s"}}}
+{"t": 1790266479.5847187, "dir": "server", "kind": "serverContent", "payload": {"serverContent": {"interimInputTranscription": {"text": "was the"}}}}
+{"t": 1790266479.9222896, "dir": "client", "kind": "ventana", "payload": {"ventana": 0, "bytes": 70400, "rms": 1001.2, "has_voice": true, "audio_start": 0.0, "audio_end": 2.2, "dur": 2.2, "n_chunks": 22, "burst_chunks": 0, "motivo": "valle", "umbral": 391.3}}
+{"t": 1790266479.9222896, "dir": "client", "kind": "activity_end", "payload": {"ventana": 0, "audio_end": 2.2}}
+{"t": 1790266480.2664235, "dir": "server", "kind": "serverContent", "payload": {"serverContent": {"inputTranscription": {"text": "was the function. Now, you may say"}}}}
+{"t": 1790266480.266514, "dir": "emit", "kind": "text", "payload": {"v": 1, "type": "text", "session_id": "nerdearla-en", "seq": 2, "lang": "en", "text": "was the function. Now, you may say", "translations": {}, "audio_start": 0.0, "audio_end": 2.2, "t_captured": 1790266479.9135814, "t_emit": 1790266480.266514, "replay": false, "meta": {}}, "ventana": 0}
+{"t": 1790266480.2666585, "dir": "server", "kind": "serverContent", "payload": {"serverContent": {"generationComplete": true}}}
+{"t": 1790266480.268029, "dir": "server", "kind": "serverContent+voiceActivity", "payload": {"serverContent": {}, "voiceActivity": {"type": "ACTIVITY_END", "audioOffset": "2.200s"}}}
+{"t": 1790266480.6340067, "dir": "client", "kind": "activity_start", "payload": {"ventana": 1, "audio_start": 1.8}}
+{"t": 1790266480.7775784, "dir": "server", "kind": "serverContent+voiceActivity", "payload": {"serverContent": {}, "voiceActivity": {"type": "ACTIVITY_START", "audioOffset": "2.200s"}}}
+{"t": 1790266482.3096988, "dir": "client", "kind": "ventana", "payload": {"ventana": 1, "bytes": 89600, "rms": 1428.7, "has_voice": true, "audio_start": 1.8, "audio_end": 4.6, "dur": 2.8, "n_chunks": 28, "burst_chunks": 11, "motivo": "valle", "umbral": 158.9}}
+{"t": 1790266482.3096988, "dir": "client", "kind": "activity_end", "payload": {"ventana": 1, "audio_end": 4.6}}
+{"t": 1790266482.6534731, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266482.6534731, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 5.0}}}
+{"t": 1790266483.0173793, "dir": "client", "kind": "activity_start", "payload": {"ventana": 2, "audio_start": 4.2}}
+{"t": 1790266484.815191, "dir": "client", "kind": "ventana", "payload": {"ventana": 2, "bytes": 92800, "rms": 1538.4, "has_voice": true, "audio_start": 4.2, "audio_end": 7.1, "dur": 2.9, "n_chunks": 29, "burst_chunks": 11, "motivo": "valle", "umbral": 193.1}}
+{"t": 1790266484.815191, "dir": "client", "kind": "activity_end", "payload": {"ventana": 2, "audio_end": 7.1}}
+{"t": 1790266485.5156379, "dir": "client", "kind": "activity_start", "payload": {"ventana": 3, "audio_start": 6.7}}
+{"t": 1790266486.3100843, "dir": "server", "kind": "serverContent", "payload": {"serverContent": {"interimInputTranscription": {"text": "say"}}}}
+{"t": 1790266487.1149662, "dir": "client", "kind": "ventana", "payload": {"ventana": 3, "bytes": 86400, "rms": 1594.8, "has_voice": true, "audio_start": 6.7, "audio_end": 9.4, "dur": 2.7, "n_chunks": 27, "burst_chunks": 11, "motivo": "valle", "umbral": 382.8}}
+{"t": 1790266487.1149662, "dir": "client", "kind": "activity_end", "payload": {"ventana": 3, "audio_end": 9.4}}
+{"t": 1790266487.658152, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266487.658152, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 10.6}}}
+{"t": 1790266487.8163874, "dir": "client", "kind": "activity_start", "payload": {"ventana": 4, "audio_start": 9.0}}
+{"t": 1790266488.7636197, "dir": "server", "kind": "serverContent", "payload": {"serverContent": {"interimInputTranscription": {"text": "say, well, it's"}}}}
+{"t": 1790266488.9198356, "dir": "client", "kind": "ventana", "payload": {"ventana": 4, "bytes": 70400, "rms": 911.5, "has_voice": true, "audio_start": 9.0, "audio_end": 11.2, "dur": 2.2, "n_chunks": 22, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266488.9198356, "dir": "client", "kind": "activity_end", "payload": {"ventana": 4, "audio_end": 11.2}}
+{"t": 1790266489.1208723, "dir": "server", "kind": "serverContent", "payload": {"serverContent": {"inputTranscription": {"text": "say well it's obvious. Wasn't always obvious."}}}}
+{"t": 1790266489.1209657, "dir": "emit", "kind": "text", "payload": {"v": 1, "type": "text", "session_id": "nerdearla-en", "seq": 3, "lang": "en", "text": "say well it's obvious. Wasn't always obvious.", "translations": {}, "audio_start": 1.8, "audio_end": 4.6, "t_captured": 1790266482.3085542, "t_emit": 1790266489.1209657, "replay": false, "meta": {}}, "ventana": 1}
+{"t": 1790266489.121086, "dir": "server", "kind": "serverContent", "payload": {"serverContent": {"generationComplete": true}}}
+{"t": 1790266489.121533, "dir": "server", "kind": "serverContent+voiceActivity", "payload": {"serverContent": {}, "voiceActivity": {"type": "ACTIVITY_END", "audioOffset": "5s"}}}
+{"t": 1790266489.6263015, "dir": "client", "kind": "activity_start", "payload": {"ventana": 5, "audio_start": 10.8}}
+{"t": 1790266489.7702622, "dir": "server", "kind": "serverContent+voiceActivity", "payload": {"serverContent": {}, "voiceActivity": {"type": "ACTIVITY_START", "audioOffset": "5s"}}}
+{"t": 1790266490.9094229, "dir": "client", "kind": "ventana", "payload": {"ventana": 5, "bytes": 76800, "rms": 1295.9, "has_voice": true, "audio_start": 10.8, "audio_end": 13.2, "dur": 2.4, "n_chunks": 24, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266490.9094229, "dir": "client", "kind": "activity_end", "payload": {"ventana": 5, "audio_end": 13.2}}
+{"t": 1790266491.6250167, "dir": "client", "kind": "activity_start", "payload": {"ventana": 6, "audio_start": 12.8}}
+{"t": 1790266492.6730702, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266492.6730702, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 17.3}}}
+{"t": 1790266492.8160553, "dir": "client", "kind": "ventana", "payload": {"ventana": 6, "bytes": 73600, "rms": 1212.7, "has_voice": true, "audio_start": 12.8, "audio_end": 15.1, "dur": 2.3, "n_chunks": 23, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266492.8160553, "dir": "client", "kind": "activity_end", "payload": {"ventana": 6, "audio_end": 15.1}}
+{"t": 1790266493.5209224, "dir": "client", "kind": "activity_start", "payload": {"ventana": 7, "audio_start": 14.7}}
+{"t": 1790266495.3147743, "dir": "client", "kind": "ventana", "payload": {"ventana": 7, "bytes": 92800, "rms": 1244.7, "has_voice": true, "audio_start": 14.7, "audio_end": 17.6, "dur": 2.9, "n_chunks": 29, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266495.3147743, "dir": "client", "kind": "activity_end", "payload": {"ventana": 7, "audio_end": 17.6}}
+{"t": 1790266496.0222888, "dir": "client", "kind": "activity_start", "payload": {"ventana": 8, "audio_start": 17.2}}
+{"t": 1790266497.6838775, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266497.6838775, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 23.1}}}
+{"t": 1790266497.809298, "dir": "client", "kind": "ventana", "payload": {"ventana": 8, "bytes": 92800, "rms": 1324.0, "has_voice": true, "audio_start": 17.2, "audio_end": 20.1, "dur": 2.9, "n_chunks": 29, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266497.809298, "dir": "client", "kind": "activity_end", "payload": {"ventana": 8, "audio_end": 20.1}}
+{"t": 1790266498.5158913, "dir": "client", "kind": "activity_start", "payload": {"ventana": 9, "audio_start": 19.7}}
+{"t": 1790266499.9151003, "dir": "client", "kind": "ventana", "payload": {"ventana": 9, "bytes": 80000, "rms": 1587.5, "has_voice": true, "audio_start": 19.7, "audio_end": 22.2, "dur": 2.5, "n_chunks": 25, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266499.9151003, "dir": "client", "kind": "activity_end", "payload": {"ventana": 9, "audio_end": 22.2}}
+{"t": 1790266500.627376, "dir": "client", "kind": "activity_start", "payload": {"ventana": 10, "audio_start": 21.8}}
+{"t": 1790266502.2049298, "dir": "client", "kind": "ventana", "payload": {"ventana": 10, "bytes": 86400, "rms": 1450.3, "has_voice": true, "audio_start": 21.8, "audio_end": 24.5, "dur": 2.7, "n_chunks": 27, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266502.2049298, "dir": "client", "kind": "activity_end", "payload": {"ventana": 10, "audio_end": 24.5}}
+{"t": 1790266502.6873398, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266502.6873398, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 28.5}}}
+{"t": 1790266502.9071221, "dir": "client", "kind": "activity_start", "payload": {"ventana": 11, "audio_start": 24.1}}
+{"t": 1790266504.3129652, "dir": "client", "kind": "ventana", "payload": {"ventana": 11, "bytes": 80000, "rms": 1351.8, "has_voice": true, "audio_start": 24.1, "audio_end": 26.6, "dur": 2.5, "n_chunks": 25, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266504.3129652, "dir": "client", "kind": "activity_end", "payload": {"ventana": 11, "audio_end": 26.6}}
+{"t": 1790266505.0147989, "dir": "client", "kind": "activity_start", "payload": {"ventana": 12, "audio_start": 26.2}}
+{"t": 1790266506.219172, "dir": "client", "kind": "ventana", "payload": {"ventana": 12, "bytes": 73600, "rms": 1275.2, "has_voice": true, "audio_start": 26.2, "audio_end": 28.5, "dur": 2.3, "n_chunks": 23, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266506.219172, "dir": "client", "kind": "activity_end", "payload": {"ventana": 12, "audio_end": 28.5}}
+{"t": 1790266506.9295087, "dir": "client", "kind": "activity_start", "payload": {"ventana": 13, "audio_start": 28.1}}
+{"t": 1790266507.6999092, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266507.6999092, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 35.1}}}
+{"t": 1790266508.8107696, "dir": "client", "kind": "ventana", "payload": {"ventana": 13, "bytes": 96000, "rms": 1544.0, "has_voice": true, "audio_start": 28.1, "audio_end": 31.1, "dur": 3.0, "n_chunks": 30, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266508.8107696, "dir": "client", "kind": "activity_end", "payload": {"ventana": 13, "audio_end": 31.1}}
+{"t": 1790266509.5191941, "dir": "client", "kind": "activity_start", "payload": {"ventana": 14, "audio_start": 30.7}}
+{"t": 1790266510.8137405, "dir": "client", "kind": "ventana", "payload": {"ventana": 14, "bytes": 76800, "rms": 1281.1, "has_voice": true, "audio_start": 30.7, "audio_end": 33.1, "dur": 2.4, "n_chunks": 24, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266510.8137405, "dir": "client", "kind": "activity_end", "payload": {"ventana": 14, "audio_end": 33.1}}
+{"t": 1790266511.5172298, "dir": "client", "kind": "activity_start", "payload": {"ventana": 15, "audio_start": 32.7}}
+{"t": 1790266512.7051117, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266512.7051117, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 40.9}}}
+{"t": 1790266512.9083455, "dir": "client", "kind": "ventana", "payload": {"ventana": 15, "bytes": 80000, "rms": 1301.4, "has_voice": true, "audio_start": 32.7, "audio_end": 35.2, "dur": 2.5, "n_chunks": 25, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266512.9083455, "dir": "client", "kind": "activity_end", "payload": {"ventana": 15, "audio_end": 35.2}}
+{"t": 1790266513.5153587, "dir": "server", "kind": "serverContent", "payload": {"serverContent": {"inputTranscription": {"text": "The idea of a function as an abstraction did not come about until the 1940s, 1950s, and even then it was considered to be"}}}}
+{"t": 1790266513.5154521, "dir": "emit", "kind": "text", "payload": {"v": 1, "type": "text", "session_id": "nerdearla-en", "seq": 4, "lang": "en", "text": "The idea of a function as an abstraction did not come about until the 1940s, 1950s, and even then it was considered to be", "translations": {}, "audio_start": 4.2, "audio_end": 7.1, "t_captured": 1790266484.8139818, "t_emit": 1790266513.5154521, "replay": false, "meta": {}}, "ventana": 2}
+{"t": 1790266513.516086, "dir": "server", "kind": "serverContent", "payload": {"serverContent": {"generationComplete": true}}}
+{"t": 1790266513.5162275, "dir": "server", "kind": "serverContent+voiceActivity", "payload": {"serverContent": {}, "voiceActivity": {"type": "ACTIVITY_END", "audioOffset": "15.200s"}}}
+{"t": 1790266513.624167, "dir": "client", "kind": "activity_start", "payload": {"ventana": 16, "audio_start": 34.8}}
+{"t": 1790266513.7679267, "dir": "server", "kind": "serverContent+voiceActivity", "payload": {"serverContent": {}, "voiceActivity": {"type": "ACTIVITY_START", "audioOffset": "15.200s"}}}
+{"t": 1790266515.0121977, "dir": "client", "kind": "ventana", "payload": {"ventana": 16, "bytes": 80000, "rms": 1496.7, "has_voice": true, "audio_start": 34.8, "audio_end": 37.3, "dur": 2.5, "n_chunks": 25, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266515.0121977, "dir": "client", "kind": "activity_end", "payload": {"ventana": 16, "audio_end": 37.3}}
+{"t": 1790266515.7192993, "dir": "client", "kind": "activity_start", "payload": {"ventana": 17, "audio_start": 36.9}}
+{"t": 1790266517.3132923, "dir": "client", "kind": "ventana", "payload": {"ventana": 17, "bytes": 86400, "rms": 1689.4, "has_voice": true, "audio_start": 36.9, "audio_end": 39.6, "dur": 2.7, "n_chunks": 27, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266517.3132923, "dir": "client", "kind": "activity_end", "payload": {"ventana": 17, "audio_end": 39.6}}
+{"t": 1790266517.7196486, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266517.7196486, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 46.4}}}
+{"t": 1790266518.0146806, "dir": "client", "kind": "activity_start", "payload": {"ventana": 18, "audio_start": 39.2}}
+{"t": 1790266520.2183974, "dir": "client", "kind": "ventana", "payload": {"ventana": 18, "bytes": 105600, "rms": 1420.2, "has_voice": true, "audio_start": 39.2, "audio_end": 42.5, "dur": 3.3, "n_chunks": 33, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266520.2183974, "dir": "client", "kind": "activity_end", "payload": {"ventana": 18, "audio_end": 42.5}}
+{"t": 1790266520.9289138, "dir": "client", "kind": "activity_start", "payload": {"ventana": 19, "audio_start": 42.1}}
+{"t": 1790266522.7087383, "dir": "client", "kind": "ventana", "payload": {"ventana": 19, "bytes": 92800, "rms": 989.4, "has_voice": true, "audio_start": 42.1, "audio_end": 45.0, "dur": 2.9, "n_chunks": 29, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266522.7087383, "dir": "client", "kind": "activity_end", "payload": {"ventana": 19, "audio_end": 45.0}}
+{"t": 1790266522.7236407, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266522.7236407, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 52.6}}}
+{"t": 1790266523.4093487, "dir": "client", "kind": "activity_start", "payload": {"ventana": 20, "audio_start": 44.6}}
+{"t": 1790266524.7204602, "dir": "client", "kind": "ventana", "payload": {"ventana": 20, "bytes": 76800, "rms": 774.7, "has_voice": true, "audio_start": 44.6, "audio_end": 47.0, "dur": 2.4, "n_chunks": 24, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266524.7204602, "dir": "client", "kind": "activity_end", "payload": {"ventana": 20, "audio_end": 47.0}}
+{"t": 1790266525.4343166, "dir": "client", "kind": "activity_start", "payload": {"ventana": 21, "audio_start": 46.6}}
+{"t": 1790266526.6186967, "dir": "client", "kind": "ventana", "payload": {"ventana": 21, "bytes": 73600, "rms": 1594.4, "has_voice": true, "audio_start": 46.6, "audio_end": 48.9, "dur": 2.3, "n_chunks": 23, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266526.6186967, "dir": "client", "kind": "activity_end", "payload": {"ventana": 21, "audio_end": 48.9}}
+{"t": 1790266527.329494, "dir": "client", "kind": "activity_start", "payload": {"ventana": 22, "audio_start": 48.5}}
+{"t": 1790266527.736291, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266527.736291, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 58.8}}}
+{"t": 1790266530.0104191, "dir": "client", "kind": "ventana", "payload": {"ventana": 22, "bytes": 121600, "rms": 1892.0, "has_voice": true, "audio_start": 48.5, "audio_end": 52.3, "dur": 3.8, "n_chunks": 38, "burst_chunks": 11, "motivo": "max", "umbral": 411.4}}
+{"t": 1790266530.0104191, "dir": "client", "kind": "activity_end", "payload": {"ventana": 22, "audio_end": 52.3}}
+{"t": 1790266530.7232442, "dir": "client", "kind": "activity_start", "payload": {"ventana": 23, "audio_start": 51.9}}
+{"t": 1790266531.912955, "dir": "client", "kind": "ventana", "payload": {"ventana": 23, "bytes": 73600, "rms": 1450.5, "has_voice": true, "audio_start": 51.9, "audio_end": 54.2, "dur": 2.3, "n_chunks": 23, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266531.912955, "dir": "client", "kind": "activity_end", "payload": {"ventana": 23, "audio_end": 54.2}}
+{"t": 1790266532.6162777, "dir": "client", "kind": "activity_start", "payload": {"ventana": 24, "audio_start": 53.8}}
+{"t": 1790266532.7413452, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266532.7413452, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 64.6}}}
+{"t": 1790266533.820022, "dir": "client", "kind": "ventana", "payload": {"ventana": 24, "bytes": 73600, "rms": 980.6, "has_voice": true, "audio_start": 53.8, "audio_end": 56.1, "dur": 2.3, "n_chunks": 23, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266533.820022, "dir": "client", "kind": "activity_end", "payload": {"ventana": 24, "audio_end": 56.1}}
+{"t": 1790266534.5256906, "dir": "client", "kind": "activity_start", "payload": {"ventana": 25, "audio_start": 55.7}}
+{"t": 1790266536.7057781, "dir": "client", "kind": "ventana", "payload": {"ventana": 25, "bytes": 105600, "rms": 840.8, "has_voice": true, "audio_start": 55.7, "audio_end": 59.0, "dur": 3.3, "n_chunks": 33, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266536.7057781, "dir": "client", "kind": "activity_end", "payload": {"ventana": 25, "audio_end": 59.0}}
+{"t": 1790266537.4093633, "dir": "client", "kind": "activity_start", "payload": {"ventana": 26, "audio_start": 58.6}}
+{"t": 1790266537.7519991, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266537.7519991, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 70.4}}}
+{"t": 1790266538.513217, "dir": "client", "kind": "ventana", "payload": {"ventana": 26, "bytes": 70400, "rms": 1312.0, "has_voice": true, "audio_start": 58.6, "audio_end": 60.8, "dur": 2.2, "n_chunks": 22, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266538.513217, "dir": "client", "kind": "activity_end", "payload": {"ventana": 26, "audio_end": 60.8}}
+{"t": 1790266539.2195964, "dir": "client", "kind": "activity_start", "payload": {"ventana": 27, "audio_start": 60.4}}
+{"t": 1790266540.4198637, "dir": "client", "kind": "ventana", "payload": {"ventana": 27, "bytes": 73600, "rms": 1478.3, "has_voice": true, "audio_start": 60.4, "audio_end": 62.7, "dur": 2.3, "n_chunks": 23, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266540.4198637, "dir": "client", "kind": "activity_end", "payload": {"ventana": 27, "audio_end": 62.7}}
+{"t": 1790266541.1242642, "dir": "client", "kind": "activity_start", "payload": {"ventana": 28, "audio_start": 62.3}}
+{"t": 1790266542.2110374, "dir": "client", "kind": "ventana", "payload": {"ventana": 28, "bytes": 70400, "rms": 1480.7, "has_voice": true, "audio_start": 62.3, "audio_end": 64.5, "dur": 2.2, "n_chunks": 22, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266542.2110374, "dir": "client", "kind": "activity_end", "payload": {"ventana": 28, "audio_end": 64.5}}
+{"t": 1790266542.7636034, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266542.7636034, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 75.7}}}
+{"t": 1790266542.9212513, "dir": "client", "kind": "activity_start", "payload": {"ventana": 29, "audio_start": 64.1}}
+{"t": 1790266544.1114514, "dir": "client", "kind": "ventana", "payload": {"ventana": 29, "bytes": 73600, "rms": 1887.0, "has_voice": true, "audio_start": 64.1, "audio_end": 66.4, "dur": 2.3, "n_chunks": 23, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266544.1114514, "dir": "client", "kind": "activity_end", "payload": {"ventana": 29, "audio_end": 66.4}}
+{"t": 1790266544.8137078, "dir": "client", "kind": "activity_start", "payload": {"ventana": 30, "audio_start": 66.0}}
+{"t": 1790266546.7092729, "dir": "client", "kind": "ventana", "payload": {"ventana": 30, "bytes": 96000, "rms": 1660.5, "has_voice": true, "audio_start": 66.0, "audio_end": 69.0, "dur": 3.0, "n_chunks": 30, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266546.7092729, "dir": "client", "kind": "activity_end", "payload": {"ventana": 30, "audio_end": 69.0}}
+{"t": 1790266547.4235992, "dir": "client", "kind": "activity_start", "payload": {"ventana": 31, "audio_start": 68.6}}
+{"t": 1790266547.7747128, "dir": "emit", "kind": "heartbeat", "payload": {"v": 1, "type": "heartbeat", "session_id": "nerdearla-en", "seq": null, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266547.7747128, "replay": false, "meta": {"alive": true, "audio_seconds_sent": 82.4}}}
+{"t": 1790266549.4166927, "dir": "client", "kind": "ventana", "payload": {"ventana": 31, "bytes": 99200, "rms": 1902.7, "has_voice": true, "audio_start": 68.6, "audio_end": 71.7, "dur": 3.1, "n_chunks": 31, "burst_chunks": 11, "motivo": "valle", "umbral": 411.4}}
+{"t": 1790266549.4166927, "dir": "client", "kind": "activity_end", "payload": {"ventana": 31, "audio_end": 71.7}}
+{"t": 1790266550.1223648, "dir": "client", "kind": "activity_start", "payload": {"ventana": 32, "audio_start": 71.3}}
+{"t": 1790266551.1173797, "dir": "server", "kind": "close", "payload": {"code": 1011, "reason": "Internal error encountered.", "by": "server"}}
+{"t": 1790266551.1244953, "dir": "emit", "kind": "error", "payload": {"v": 1, "type": "error", "session_id": "nerdearla-en", "seq": 5, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266551.1244953, "replay": false, "meta": {"code": 1011, "message": "server cerro la sesion: Internal error encountered."}}}
+{"t": 1790266551.1246023, "dir": "emit", "kind": "session_end", "payload": {"v": 1, "type": "session_end", "session_id": "nerdearla-en", "seq": 6, "lang": "en", "text": null, "translations": {}, "audio_start": null, "audio_end": null, "t_captured": null, "t_emit": 1790266551.1246023, "replay": false, "meta": {"reason": "server_cerro", "audio_seconds_sent": 86.0}}}

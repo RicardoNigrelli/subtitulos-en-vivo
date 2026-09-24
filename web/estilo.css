@@ -1,0 +1,274 @@
+/* estilo.css — vista de audiencia (frontend, Bloque 1)
+   Fondo #111, texto #E8E8E8, parcial/especial en gris solido >=4.5:1 (skill ui-subtitulos).
+   #999999 sobre #111 da ~6.6:1 de contraste (calculado a mano, ver reporte). */
+
+:root {
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #111111;
+  color: #E8E8E8;
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+/* ---------- página de sesión (subtítulos) ---------- */
+
+.cabecera-sesion {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #191919;
+  border-bottom: 1px solid #2a2a2a;
+  font-size: 14px;
+  z-index: 10;
+}
+
+.volver-indice {
+  color: #9CC3FF;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.titulo-sesion {
+  flex: 1;
+  color: #B0B0B0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip[hidden] {
+  /* el atributo hidden y .chip tienen la misma especificidad; sin esto, .chip
+     (display: inline-block) le gana al display:none del UA y el chip REPLAY
+     queda visible siempre, incluso antes de que llegue algún mensaje con replay:true. */
+  display: none;
+}
+
+.chip {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.chip--conectando {
+  background: #3a3a1f;
+  color: #E8D77A;
+  border-color: #5a5230;
+}
+
+.chip--conectado {
+  background: #163a20;
+  color: #7CE8A0;
+  border-color: #2a5a35;
+}
+
+.chip--reconectando {
+  background: #3a2410;
+  color: #E8A560;
+  border-color: #5a4020;
+}
+
+.chip--sin-conexion {
+  background: #3a1f1f;
+  color: #E87C7C;
+  border-color: #5a3030;
+}
+
+.chip--replay {
+  background: #2a1f3a;
+  color: #C39CFF;
+  border-color: #4a3a5a;
+}
+
+.lineas {
+  padding: 24px 20px 40vh;
+  max-width: 900px;
+  margin: 0 auto;
+  min-height: calc(100vh - 60px);
+}
+
+/* Mobile 390px: con 20px de padding de cada lado, una linea de 32 caracteres a 28px
+   (el tope de la fuente clamp) no entraba en un renglon (se cortaba "...of / 20.").
+   Con 8px sobra margen para que 32 caracteres tipicos entren en una linea. */
+@media (max-width: 480px) {
+  .lineas {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .cabecera-sesion, .cabecera-indice, .lista-sesiones {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
+
+.linea {
+  font-size: clamp(24px, 4.4vh, 28px);
+  line-height: 1.5;
+  color: #E8E8E8;
+  margin: 0 0 14px;
+  overflow-wrap: break-word;
+}
+
+/* la línea más nueva, resaltada (brief B1: "últimas líneas abajo, la más nueva resaltada").
+   Sólo color, sin font-weight: en 390px un font-weight:600 ensancha el texto lo suficiente
+   para que una línea de 32 caracteres que entraba en un renglón pase a cortarse en dos
+   (medido con resize_window, ver reportes/frontend-b1-mobile-390.txt). */
+.linea--nueva {
+  color: #FFFFFF;
+  /* glow en vez de font-weight/padding: no cambia el ancho de ningun caracter, así que
+     no puede romper el ajuste de 32 caracteres por renglón en 390px. */
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.55);
+}
+
+/* marcador de tramo perdido (hueco por seq) */
+.linea--especial {
+  color: #999999;
+  font-style: italic;
+  font-weight: 400;
+}
+
+.marca-sin-traducir {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 0.55em;
+  font-weight: 700;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: #3a2410;
+  color: #E8A560;
+}
+
+.aviso-sesion {
+  color: #999999;
+  font-size: 15px;
+}
+
+/* ---------- índice (R6) ---------- */
+
+.cabecera-indice {
+  padding: 32px 20px 8px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.cabecera-indice h1 {
+  margin: 0 0 6px;
+  font-size: clamp(22px, 4vh, 30px);
+}
+
+.ayuda {
+  color: #999999;
+  margin: 0;
+}
+
+.lista-sesiones {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 8px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.estado-carga, .estado-error {
+  color: #999999;
+}
+
+.estado-error {
+  color: #E88080;
+}
+
+.tarjeta-sesion {
+  background: #191919;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+
+.tarjeta-sesion h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.meta-sesion {
+  margin: 0 0 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.id-sesion {
+  margin: 0 0 12px;
+  color: #999999;
+  font-size: 13px;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge--live {
+  background: #163a20;
+  color: #7CE8A0;
+}
+
+.badge--idle {
+  background: #3a3a1f;
+  color: #E8D77A;
+}
+
+.badge--ended {
+  background: #2a2a2a;
+  color: #999999;
+}
+
+.badge--replay {
+  background: #2a1f3a;
+  color: #C39CFF;
+}
+
+.badge--desconocido {
+  background: #2a2a2a;
+  color: #999999;
+}
+
+.links-idioma {
+  display: flex;
+  gap: 10px;
+}
+
+.link-idioma {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: #232323;
+  color: #E8E8E8;
+  text-decoration: none;
+  font-size: 14px;
+  border: 1px solid #333333;
+}
+
+.link-idioma:hover, .link-idioma:focus {
+  background: #2d2d2d;
+  border-color: #4a4a4a;
+}

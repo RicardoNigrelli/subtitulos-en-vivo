@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subtítulos en vivo</title>
+<link rel="stylesheet" href="/estilo.css">
+</head>
+<body class="pagina-sesion">
+<header class="cabecera-sesion">
+  <a href="/" class="volver-indice">&larr; sesiones</a>
+  <span id="titulo-sesion" class="titulo-sesion"></span>
+  <span id="chip-replay" class="chip chip--replay" hidden>REPLAY</span>
+  <span id="chip-conexion" class="chip chip--conectando">conectando…</span>
+</header>
+<main id="lineas" class="lineas" aria-live="polite"></main>
+<script src="/app.js"></script>
+</body>
+</html>

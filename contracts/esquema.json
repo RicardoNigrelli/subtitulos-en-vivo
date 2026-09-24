@@ -1,0 +1,558 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:vibeathon:contrato:mensaje:v1",
+  "title": "Mensaje del contrato v1",
+  "description": "Un mensaje por frame/linea. Lo emite el worker (o el replay) hacia el hub por /ingest; el hub le agrega t_hub y lo reparte a la audiencia por /ws/<session_id>. CONGELADO: solo se AGREGAN campos (additionalProperties queda abierto a proposito). Ver contracts/README.md.",
+  "type": "object",
+  "required": [
+    "v",
+    "type",
+    "session_id",
+    "seq"
+  ],
+  "properties": {
+    "v": {
+      "const": 1,
+      "description": "Version del contrato."
+    },
+    "type": {
+      "enum": [
+        "text",
+        "rotation",
+        "watchdog",
+        "error",
+        "heartbeat",
+        "session_start",
+        "session_end"
+      ]
+    },
+    "session_id": {
+      "$ref": "#/$defs/session_id"
+    },
+    "seq": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "Monotonico POR SESION, lo emite el WORKER. El hub nunca renumera ni rebobina. null solo en heartbeat."
+    },
+    "lang": {
+      "$ref": "#/$defs/lang_origen"
+    },
+    "text": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Texto final del bloque en el idioma original. Obligatorio y no vacio en type=text; null o ausente en el resto."
+    },
+    "translations": {
+      "$ref": "#/$defs/translations"
+    },
+    "audio_start": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "Segundos desde el inicio del audio de la sesion. Obligatorio en type=text; null o ausente en el resto."
+    },
+    "audio_end": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "Segundos desde el inicio del audio de la sesion (>= audio_start). Obligatorio en type=text; null o ausente en el resto."
+    },
+    "t_captured": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/epoch"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Epoch (s) en que entro al pipeline la ultima muestra de audio del bloque. Obligatorio en type=text; null o ausente en el resto."
+    },
+    "t_emit": {
+      "$ref": "#/$defs/epoch",
+      "description": "Epoch (s) en que el worker emitio el mensaje."
+    },
+    "t_hub": {
+      "$ref": "#/$defs/epoch",
+      "description": "Epoch (s) en que el hub hizo el fan-out. Lo agrega el HUB, no el worker."
+    },
+    "replay": {
+      "type": "boolean",
+      "description": "true si viene del reproductor de casetes o de un ejemplo."
+    },
+    "meta": {
+      "type": "object",
+      "description": "Extensible. Claves obligatorias segun type (ver allOf)."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "heartbeat"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "seq": {
+            "type": "null"
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "t_emit"
+            ]
+          },
+          {
+            "required": [
+              "t_hub"
+            ]
+          }
+        ]
+      },
+      "else": {
+        "properties": {
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lang",
+          "t_emit",
+          "replay"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type",
+          "t_emit"
+        ],
+        "properties": {
+          "type": {
+            "const": "heartbeat"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "meta"
+        ],
+        "properties": {
+          "meta": {
+            "required": [
+              "alive",
+              "audio_seconds_sent"
+            ],
+            "properties": {
+              "alive": {
+                "type": "boolean"
+              },
+              "audio_seconds_sent": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "text"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "text",
+          "translations",
+          "audio_start",
+          "audio_end",
+          "t_captured"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "audio_start": {
+            "type": "number"
+          },
+          "audio_end": {
+            "type": "number"
+          },
+          "t_captured": {
+            "$ref": "#/$defs/epoch"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "rotation"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "meta"
+        ],
+        "properties": {
+          "meta": {
+            "required": [
+              "reason",
+              "old_id",
+              "new_id"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "old_id": {
+                "type": [
+                  "string",
+                  "integer",
+                  "null"
+                ]
+              },
+              "new_id": {
+                "type": [
+                  "string",
+                  "integer",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "watchdog"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "meta"
+        ],
+        "properties": {
+          "meta": {
+            "required": [
+              "silent_s",
+              "reopened"
+            ],
+            "properties": {
+              "silent_s": {
+                "type": "number",
+                "minimum": 0
+              },
+              "reopened": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "meta"
+        ],
+        "properties": {
+          "meta": {
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "session_start"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "meta"
+        ],
+        "properties": {
+          "meta": {
+            "required": [
+              "title",
+              "source"
+            ],
+            "properties": {
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source": {
+                "description": "Origen del audio: string, objeto (p. ej. {file,url,start_s,dur_s}) o null."
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "session_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+      "description": "Slug en minusculas, apto para URL (ej. sala-1)."
+    },
+    "lang_origen": {
+      "enum": [
+        "en",
+        "es"
+      ],
+      "description": "Idioma ORIGINAL de la sesion (R18: espanol o ingles)."
+    },
+    "lang_destino": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$",
+      "description": "Codigo de idioma destino de una traduccion (ej. es, en, pt-BR)."
+    },
+    "epoch": {
+      "type": "number",
+      "minimum": 1000000000,
+      "maximum": 9999999999,
+      "description": "Segundos desde epoch (float). Rango acotado para atrapar milisegundos por error."
+    },
+    "traduccion": {
+      "type": "object",
+      "required": [
+        "text",
+        "ok"
+      ],
+      "properties": {
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "if": {
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "text": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    "translations": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/lang_destino"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/traduccion"
+      },
+      "description": "Por idioma destino: {\"es\": {\"text\": \"...\", \"ok\": true}}. Fallo: {\"es\": {\"text\": null, \"ok\": false}}. {} si no hay."
+    },
+    "frame_auth": {
+      "description": "Ingesta: primer frame del productor en /ingest.",
+      "type": "object",
+      "required": [
+        "type",
+        "token"
+      ],
+      "properties": {
+        "type": {
+          "const": "auth"
+        },
+        "token": {
+          "type": "string"
+        }
+      }
+    },
+    "frame_auth_ok": {
+      "description": "Ingesta: respuesta del hub a un auth valido. last_seq: ultimo seq recibido por sesion ({} si el hub arranco de cero).",
+      "type": "object",
+      "required": [
+        "type",
+        "last_seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "auth_ok"
+        },
+        "last_seq": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "frame_rechazado": {
+      "description": "Ingesta: el hub avisa que descarto un mensaje invalido (no lo reparte).",
+      "type": "object",
+      "required": [
+        "type",
+        "errores"
+      ],
+      "properties": {
+        "type": {
+          "const": "rechazado"
+        },
+        "session_id": {},
+        "seq": {},
+        "errores": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "frame_init": {
+      "description": "Audiencia: primer frame del hub en /ws/<session_id>?lang=xx.",
+      "type": "object",
+      "required": [
+        "type",
+        "session_id",
+        "lang",
+        "last_seq",
+        "lines"
+      ],
+      "properties": {
+        "type": {
+          "const": "init"
+        },
+        "session_id": {
+          "$ref": "#/$defs/session_id"
+        },
+        "lang": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Idioma PEDIDO por el cliente (eco de ?lang=). Si no pidio, el original de la sesion o null."
+        },
+        "last_seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Ultimo seq (de cualquier type) que el hub tiene de la sesion; null si todavia no hay."
+        },
+        "lines": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#"
+          },
+          "description": "Ultimos 10 mensajes type=text, ordenados por seq, COMPLETOS (texto + traducciones)."
+        }
+      }
+    },
+    "frame_heartbeat_hub": {
+      "description": "Audiencia: latido del hub cada 1 s. Es un mensaje del contrato valido (type=heartbeat, seq=null, t_hub).",
+      "type": "object",
+      "required": [
+        "type",
+        "t_hub"
+      ],
+      "properties": {
+        "type": {
+          "const": "heartbeat"
+        },
+        "t_hub": {
+          "$ref": "#/$defs/epoch"
+        },
+        "last_seq": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

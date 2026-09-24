@@ -1,0 +1,17 @@
+# Normalización de line endings. Archivo NUEVO de B1 (ops): no se renormalizó el árbol existente
+# acá; eso lo hace el orquestador con `git add --renormalize .` al commitear (ver ESTADO.md).
+* text=auto eol=lf
+
+# Binarios: nunca tocar los bytes
+*.wav binary
+*.m4a binary
+*.mp3 binary
+*.png binary
+*.jpg binary
+
+# Casetes y JSONL: siempre LF (se leen línea por línea en worker.replay)
+*.jsonl text eol=lf
+
+# Scripts de Windows: CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf

@@ -1,0 +1,86 @@
+# ESQUELETO de B1. Se verifica de punta a punta en B7. Al cierre de B1 existen hub (`python -m hub`),
+# worker (`python -m worker.run` / `python -m worker.replay`) y web (`python web/servir.py --puerto`);
+# panel/ todavía no (B4). Lo que sí se verificó en B1: `docker build` de la imagen común y que arranca
+# Python con las libs instaladas y sin el .env adentro (reportes/ops-b1.md).
+#
+# Invocación pensada (a confirmar/fijar en B7, ver README): parado en la RAÍZ del repo,
+#   docker compose -f ops/docker-compose.yml up
+# El build `context: ..` ya asume ese parado-en-la-raíz. OJO con `env_file: - path: .env`: Compose
+# resuelve esa ruta relativa al directorio del propio docker-compose.yml (ops/), no a la raíz ni al
+# directorio desde el que se invoca el comando. Hoy tal cual está escrito buscaría `ops/.env`, que no
+# existe. Falta decidir en B7: mover/copiar el .env, usar `../.env`, o pasar `--project-directory .`
+# al invocar. Lo dejamos así (`- path: .env`) porque es el texto que pidió el brief de este bloque;
+# NO se corrió `docker compose up`/`config` en B1 para no forzar la lectura del .env real (tiene keys).
+#
+# TODO confirmar con backend/audio-pipeline/frontend: nombre exacto de los módulos/flags
+# (`python -m worker.run ...`, `web/servir.py --puerto`, `python -m panel` o el que sea) y cómo se
+# consolida todo en PUERTO_PROYECTO=8080 (proxy en el hub, en el web, o nginx aparte).
+
+services:
+  hub:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: vibeathon:dev
+    command: ["python", "-m", "hub"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HUB_PORT: ${HUB_PORT:-8100}
+      HUB_TOKEN: ${HUB_TOKEN:-dev-token}
+    ports:
+      - "${HUB_PORT:-8100}:8100"
+
+  worker:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: vibeathon:dev
+    # Sin API key real -> replay (fixtures/casetes/); con ella -> ASR real. Ver ops/entrypoint-worker.sh.
+    entrypoint: ["sh", "/app/ops/entrypoint-worker.sh"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HUB_PORT: ${HUB_PORT:-8100}
+      HUB_TOKEN: ${HUB_TOKEN:-dev-token}
+    depends_on:
+      - hub
+
+  web:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: vibeathon:dev
+    # TODO confirmar con frontend: ¿flags de web/servir.py son --puerto o --port? (brief dice --puerto).
+    command: ["python", "web/servir.py", "--puerto", "8101"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HUB_PORT: ${HUB_PORT:-8100}
+      WEB_PORT: ${WEB_PORT:-8101}
+    ports:
+      - "${WEB_PORT:-8101}:8101"
+    depends_on:
+      - hub
+
+  panel:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: vibeathon:dev
+    # TODO confirmar con monitor: módulo/entrypoint real del panel (llega en B4+); placeholder por ahora.
+    command: ["python", "-m", "panel"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HUB_PORT: ${HUB_PORT:-8100}
+      HUB_TOKEN: ${HUB_TOKEN:-dev-token}
+      PANEL_PORT: ${PANEL_PORT:-8102}
+    ports:
+      - "${PANEL_PORT:-8102}:8102"
+    depends_on:
+      - hub
