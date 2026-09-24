@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel de producción — vibeathon</title>
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+  <header class="cabecera">
+    <h1>Panel de producción</h1>
+    <span id="chip-hub" class="chip">hub: conectando…</span>
+    <span id="chip-metricas" class="chip">/api/metricas: —</span>
+    <span id="ultima-actualizacion" class="chip">sin datos aún</span>
+  </header>
+
+  <div class="leyenda">
+    Estado <code>live</code> con más de <code>15 s</code> sin un <code>type=text</code> nuevo se muestra
+    como "sin texto hace N s" (umbral documentado, brief B3). p50/p95 = <b>nearest-rank</b>, nunca promedio;
+    con menos de <code>10</code> muestras se marca "n insuficiente". "grabada" = <code>t_emit − t_captured</code>
+    tal como quedó en el casete (sesiones <code>replay:true</code>); en sesiones en vivo esa misma resta es la
+    latencia real del worker y se agrega además la <b>percibida</b> = <code>t_receive − t_captured</code> medida
+    en el WebSocket propio de este panel. "Parciales/60 s" es una ventana deslizante, no un promedio de sesión
+    completa. Segundos de audio: <b>estimación</b> (viene de <code>heartbeat.meta.audio_seconds_sent</code> del
+    worker, sólo visible vía <code>/api/metricas</code>).
+  </div>
+
+  <div id="aviso-hub" class="aviso"></div>
+
+  <div class="envoltorio-tabla">
+    <table class="panel">
+      <thead>
+        <tr>
+          <th class="col-sesion">Sesión</th>
+          <th>Idioma</th>
+          <th>Estado</th>
+          <th>Monitor (WS propio)</th>
+          <th>Último seq</th>
+          <th>Textos</th>
+          <th>Latencia worker (p50 / p95)</th>
+          <th>Latencia percibida (p50 / p95)</th>
+          <th>Rotaciones</th>
+          <th>Watchdog reaperturas</th>
+          <th>Errores</th>
+          <th>Traducciones ok:false</th>
+          <th>Parciales / 60 s</th>
+          <th>Audio enviado (estimación)</th>
+          <th>Espectadores</th>
+        </tr>
+      </thead>
+      <tbody id="cuerpo-tabla">
+        <tr id="fila-vacia"><td colspan="15">Esperando la primera respuesta de <code>/api/sesiones</code>…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="pie">
+    Fuente: <span id="pie-hub-url">—</span> · refresco de <code>/api/sesiones</code> cada 2 s ·
+    reconciliación de historial cada 2 s · re-render cada 1 s. Override de hub: agregá
+    <code>?hub=host:puerto</code> a esta URL. Consola del navegador sin errores es parte de la evidencia
+    de cierre (ver <code>reportes/monitor-b3.md</code>).
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

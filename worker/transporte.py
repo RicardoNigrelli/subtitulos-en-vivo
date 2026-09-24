@@ -31,7 +31,10 @@ class Transporte(Protocol):
     async def cerrar(self) -> None: ...
 
 
-def config_live(lang: str, vocab: list[str] | None, modo: Optional[str] = None):
+def config_live(lang: str, vocab: list[str] | None, modo: Optional[str] = None,
+                auto_vad: bool = False):
+    """auto_vad=True (A/B B3): VAD automatico del server ACTIVADO, sin activity_start/end nuestros.
+    NO_INTERRUPTION va igual en los dos modos (skill gemini-live: sin eso se pierde ~80 %)."""
     from google.genai import types
 
     atc = {"custom_vocabulary": list(vocab or [])}
@@ -42,7 +45,7 @@ def config_live(lang: str, vocab: list[str] | None, modo: Optional[str] = None):
     return types.LiveConnectConfig(
         input_audio_transcription=types.AudioTranscriptionConfig(**atc),
         realtime_input_config=types.RealtimeInputConfig(
-            automatic_activity_detection=types.AutomaticActivityDetection(disabled=True),
+            automatic_activity_detection=types.AutomaticActivityDetection(disabled=not auto_vad),
             activity_handling=types.ActivityHandling.NO_INTERRUPTION,
         ),
     )
@@ -56,12 +59,14 @@ class TransporteGemini:
     """Transporte real. Lee los frames crudos del websocket (no el objeto parseado del SDK)."""
 
     def __init__(self, modelo: str, lang: str, vocab: list[str] | None = None,
-                 nombre_key: str = "GEMINI_API_KEY", modo: Optional[str] = None):
+                 nombre_key: str = "GEMINI_API_KEY", modo: Optional[str] = None,
+                 auto_vad: bool = False):
         self.modelo = modelo
+        self.auto_vad = auto_vad
         self.lang = lang
         self.vocab = list(vocab or [])
         self.nombre_key = nombre_key
-        self.cfg = config_live(lang, self.vocab, modo)
+        self.cfg = config_live(lang, self.vocab, modo, auto_vad)
         self._cm = None
         self._session = None
         self._cerrado = False

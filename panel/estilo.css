@@ -1,0 +1,156 @@
+/* estilo.css — panel de produccion (monitor, Bloque 3, R8e)
+   Mismo lenguaje visual que web/estilo.css: fondo #111, texto #E8E8E8 (skill ui-subtitulos).
+   Estado NUNCA solo color: todo estado/contador lleva texto. p50/p95 nunca promedio. */
+
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #111111;
+  color: #E8E8E8;
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 14px;
+}
+
+.cabecera {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  row-gap: 6px;
+  padding: 10px 14px;
+  background: #191919;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.cabecera h1 {
+  font-size: 16px;
+  margin: 0;
+  margin-right: 8px;
+  font-weight: 600;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  border: 1px solid #444;
+  background: #222;
+}
+.chip--ok { border-color: #2e7d32; color: #9ce39c; }
+.chip--mal { border-color: #a33; color: #ff9c9c; }
+
+.leyenda {
+  padding: 8px 14px;
+  font-size: 12px;
+  color: #a8a8a8;
+  border-bottom: 1px solid #222;
+}
+.leyenda code { color: #cfcfcf; }
+
+.envoltorio-tabla {
+  overflow-x: auto;
+  padding: 0 0 24px 0;
+}
+
+table.panel {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 1500px;
+  font-variant-numeric: tabular-nums;
+}
+
+table.panel th, table.panel td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #232323;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+table.panel thead th {
+  position: sticky;
+  top: 41px; /* debajo de .cabecera */
+  background: #171717;
+  border-bottom: 1px solid #333;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #b7b7b7;
+  z-index: 5;
+}
+
+table.panel td.col-sesion, table.panel th.col-sesion {
+  position: sticky;
+  left: 0;
+  background: #111111;
+  z-index: 4;
+  min-width: 190px;
+  white-space: normal;
+}
+table.panel thead th.col-sesion { background: #171717; z-index: 6; }
+
+table.panel tbody tr:hover td { background: #1a1a1a; }
+table.panel tbody tr:hover td.col-sesion { background: #1a1a1a; }
+
+.sesion-id { font-weight: 600; }
+.sesion-titulo { display: block; color: #9a9a9a; font-size: 12px; white-space: normal; max-width: 240px; }
+
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 4px;
+  border: 1px solid #555;
+}
+.badge-replay { color: #ffd479; border-color: #7a6224; background: #2a2210; }
+.badge-vivo { color: #79c6ff; border-color: #244a6b; background: #0f2233; }
+
+.estado { font-weight: 600; }
+.estado::before {
+  content: "\25CF"; /* circulo: refuerzo visual, el texto de al lado es lo que cuenta */
+  margin-right: 5px;
+  font-size: 10px;
+}
+.estado--live::before { color: #4caf50; }
+.estado--idle::before { color: #d0a000; }
+.estado--ended::before { color: #777; }
+.estado--waiting::before { color: #555; }
+.estado--mudo::before { color: #e04b4b; }
+.estado-sub { display: block; font-size: 11px; color: #c98; margin-top: 1px; }
+
+.n-insuf { color: #888; font-style: italic; }
+.num { display: block; }
+.num-sub { display: block; font-size: 11px; color: #999; }
+
+.contador { font-weight: 600; }
+.contador-detalle { display: block; font-size: 11px; color: #999; white-space: normal; max-width: 220px; }
+.contador-cero { color: #666; font-weight: 400; }
+
+.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+
+.pie {
+  padding: 8px 14px 24px;
+  font-size: 12px;
+  color: #888;
+}
+
+.aviso {
+  margin: 10px 14px;
+  padding: 8px 10px;
+  border: 1px solid #7a3b3b;
+  background: #2a1414;
+  color: #ffb3b3;
+  border-radius: 4px;
+  font-size: 12px;
+  display: none;
+}
+.aviso.visible { display: block; }

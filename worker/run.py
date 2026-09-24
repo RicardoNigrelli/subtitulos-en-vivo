@@ -3,7 +3,14 @@
     python -m worker.run --archivo fixtures/audio/clips/x.wav --sesion demo-en --lang en \
         [--inicio 0] [--duracion 60] [--hub ws://localhost:8100/ingest] \
         [--casete fixtures/casetes/x.jsonl] [--titulo ...] [--vocab "Nerdearla,Nombre"] \
-        [--url https://...] [--tope-envio-s N]
+        [--url https://...] [--tope-envio-s N] [--vad-auto] [--sin-reabrir]
+        [--transporte gemini | casete:<archivo.jsonl>[:mudo=S]]
+
+B3: reabrir con solape ACTIVO por defecto (worker/session.py: cierre/atasco/preventiva/goaway).
+--vad-auto: VAD automatico del server (sin activity_start/end nuestros), NO_INTERRUPTION igual.
+--transporte casete:...: TRANSPORTE DE TEST rotulado (worker/transporte_casete.py): NO habla con
+Gemini, reproduce las lineas server de un casete real sincronizadas con el audio enviado; no gasta
+cuota ni la registra. Lo usa qa para el e2e del watchdog sobre el bus real.
 
 Gasta cuota: antes de arrancar mira reportes/cuota-audio.log y no pasa del presupuesto del bloque.
 Al terminar apende la linea de cuota (fecha-hora | sesion | segundos_enviados | archivo_fuente).
@@ -47,19 +54,39 @@ def _args(argv=None):
     ap.add_argument("--gap-s", type=float, default=None, help="gap end->start (default 0,7)")
     ap.add_argument("--drenaje-s", type=float, default=30.0, help="espera de turnos al fin de la fuente")
     ap.add_argument("--traducir-a", default="auto", help="es|en|none (auto: en->es, es->en)")
-    ap.add_argument("--timeout-trad-s", type=float, default=3.0)
+    ap.add_argument("--timeout-trad-s", type=float, default=15.0,
+                    help="timeout por llamada del traductor (B3: 15 s + 1 reintento)")
+    ap.add_argument("--vad-auto", action="store_true",
+                    help="VAD automatico del server ACTIVADO (sin turnos manuales)")
+    ap.add_argument("--sin-reabrir", action="store_true", help="desactiva reabrir con solape")
+    ap.add_argument("--transporte", default="gemini",
+                    help="gemini | casete:<archivo.jsonl>[:mudo=S] (test, rotulado, sin API)")
     return ap.parse_args(argv)
 
 
 async def correr(a) -> int:
-    restante = cuota.restante_s()
+    es_casete = a.transporte.startswith("casete:")
+    restante = float("inf") if es_casete else cuota.restante_s()
     if restante <= 0:
         print(f"[run] SIN PRESUPUESTO: gastado {cuota.gastado_s():.1f} s de "
               f"{cuota.PRESUPUESTO_S:.0f} s en el bloque. No se corre.", file=sys.stderr)
         return 4
-    tope = restante if a.tope_envio_s is None else min(a.tope_envio_s, restante)
+    tope = (None if a.tope_envio_s is None else a.tope_envio_s) if es_casete else (
+        restante if a.tope_envio_s is None else min(a.tope_envio_s, restante))
     vocab = [v.strip() for v in a.vocab.split(",") if v.strip()]
-    tr = TransporteGemini(a.modelo, a.lang, vocab, nombre_key=a.key)
+    if es_casete:
+        from worker.transporte_casete import FabricaCasete
+        fab_casete = FabricaCasete.desde_spec(a.transporte)
+        fab_casete.turnos = not a.vad_auto
+        tr = fab_casete(0.0)
+
+        def fabrica(corte_s: float):
+            return fab_casete(corte_s)
+    else:
+        tr = TransporteGemini(a.modelo, a.lang, vocab, nombre_key=a.key, auto_vad=a.vad_auto)
+
+        def fabrica(corte_s: float):
+            return TransporteGemini(a.modelo, a.lang, vocab, nombre_key=a.key, auto_vad=a.vad_auto)
     casete = a.casete or f"fixtures/casetes/{a.sesion}-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
     source = {"file": a.archivo, "url": a.url, "start_s": a.inicio, "dur_s": a.duracion}
     titulo = a.titulo or Path(a.archivo).stem
@@ -69,7 +96,12 @@ async def correr(a) -> int:
     gap_s = a.gap_s if a.gap_s is not None else V.GAP_S
     cortador = {"ventana_s": ventana_s, "tolerancia_s": V.TOLERANCIA_S, "solape_s": V.SOLAPE_S,
                 "gap_s": gap_s, "percentil": V.PERCENTIL, "calibracion_s": V.CALIBRACION_S,
-                "chunk_s": 0.1, "chunk_bytes": 3200, "drenaje_s": a.drenaje_s}
+                "chunk_s": 0.1, "chunk_bytes": 3200, "drenaje_s": a.drenaje_s,
+                "turnos": "vad_auto" if a.vad_auto else "manuales",
+                "reabrir": not a.sin_reabrir}
+    from worker.session import ConfigReabrir
+    cfg_reabrir = ConfigReabrir.desde_env()
+    cortador["cfg_reabrir"] = vars(cfg_reabrir)
     destino = a.traducir_a
     if destino == "auto":
         destino = "es" if a.lang == "en" else "en"
@@ -79,7 +111,9 @@ async def correr(a) -> int:
         traductor = Traductor(a.lang, destino, timeout_s=a.timeout_trad_s)
     rec = Grabador(casete, {"session_id": a.sesion, "lang": a.lang, "model": a.modelo,
                             "config": tr.config_enviada()["config"], "source": source,
-                            "title": titulo, "generator": "worker.run", "cortador": cortador,
+                            "title": titulo, "cortador": cortador,
+                            "generator": "worker.run" + (" transporte=" + a.transporte if es_casete else ""),
+                            "replay_test": es_casete,
                             "sdk": f"google-genai {genai_version}", "started_at": time.time()})
     emisor = Emisor(a.hub) if a.hub else None
     seq0 = 0
@@ -96,14 +130,20 @@ async def correr(a) -> int:
                       source=source, tope_envio_s=tope, espera_final_s=a.drenaje_s, gap_s=gap_s,
                       cortador=V.Cortador(ventana_s=ventana_s, gap_s=gap_s),
                       traductor=traductor, seq_inicial=seq0,
-                      log=lambda s: print(s, file=sys.stderr, flush=True))
+                      log=lambda s: print(s, file=sys.stderr, flush=True),
+                      fabrica=None if a.sin_reabrir else fabrica, reabrir=cfg_reabrir,
+                      turnos_manuales=not a.vad_auto)
     res = None
     try:
         res = await w.correr()
     finally:
         seg = w.res.segundos_enviados
-        linea = cuota.registrar(a.sesion, seg, a.archivo)
-        print(f"[run] cuota: {linea}", file=sys.stderr)
+        if es_casete:
+            print(f"[run] transporte de casete (test): {seg} s NO van a Gemini, no se registran",
+                  file=sys.stderr)
+        else:
+            linea = cuota.registrar(a.sesion, seg, a.archivo)
+            print(f"[run] cuota: {linea}", file=sys.stderr)
         if emisor:
             ok = await emisor.vaciar(3.0)
             print(f"[run] hub: enviados={emisor.n_enviados} backlog_pendiente={emisor.pendientes()} "
@@ -115,7 +155,9 @@ async def correr(a) -> int:
                "goaway": res.goaway, "cierre": res.cierre, "motivo_fin": res.motivo_fin,
                "seq_final": res.seq_final, "duracion_s": round(res.t_fin - res.t_inicio, 1),
                "errores": res.errores, "seq_inicial": seq0, "parciales": w.n_parciales,
-               "drenaje": w.drenaje,
+               "drenaje": w.drenaje, "rotaciones": res.rotaciones,
+               "descartados_vieja": res.descartados_vieja, "reenviados_s": round(res.reenviados_s, 1),
+               "turnos": "vad_auto" if a.vad_auto else "manuales", "transporte": a.transporte,
                "traduccion": None if traductor is None else {
                    "a": traductor.a, "llamadas": traductor.n_llamadas, "lotes": traductor.n_lotes,
                    "lotes_ok_false": traductor.n_ok_false, "por_modelo": traductor.por_modelo}}

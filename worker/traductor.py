@@ -10,7 +10,12 @@ Diseno B2 (ESTADO.md, Decisiones):
   del free tier) y chequeo cruzado entre procesos contra reportes/cuota-texto.log (<=12 en 60 s).
 - Rotacion entre GEMINI_TEXT_MODEL y GEMINI_TEXT_MODEL_ALT. Tope diario por modelo (RPD_TOPE,
   500 RPD en free tier; se corta antes). Reset del tope: 04:00 AR.
-- Timeout 3 s por llamada. 429/timeout/error => backoff exponencial por modelo hasta 30 s.
+- Timeout 15 s por llamada + 1 reintento (B3; el de 3 s vencia casi todo en vivo: 5 de 37 a tiempo).
+  429/timeout/error => backoff exponencial por modelo hasta 30 s.
+- Thinking (B3, medido con worker/medir_thinking.py -> reportes/audio-pipeline-b3-thinking*.log):
+  en gemini-3.5-flash-lite NO se puede apagar: ThinkingConfig(thinking_budget=0) -> 400
+  INVALID_ARGUMENT (10/10). Se deja thinking_level="minimal" (el mas bajo que acepta): p50 4694 ms
+  vs 8311 ms sin thinking_config (n=10 c/u, intercalados); p95 ~24 s en ambos. p50 NO baja de 3 s.
 - Contador: una linea por llamada en reportes/cuota-texto.log: hora | modelo | items | estado | ms
 
     python -m worker.traductor --listar                        # ids exactos (models.list)
@@ -34,7 +39,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 LOG_TEXTO = Path(os.environ.get("CUOTA_TEXTO_LOG", RAIZ / "reportes" / "cuota-texto.log"))
 LOTE_MAX = 3
 LOTE_S = 8.0
-TIMEOUT_S = 3.0
+TIMEOUT_S = 15.0
 RPM = 12
 CAPACIDAD = 2
 RPD_TOPE = int(os.environ.get("TRADUCTOR_RPD_TOPE", 480))

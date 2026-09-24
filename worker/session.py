@@ -1,16 +1,44 @@
 """SessionWorker: una sesion de ASR por sala, desacoplada del transporte (worker/transporte.py).
 
-B1: camino feliz de UNA sesion. Sin rotacion (B4) ni watchdog (B3): al GoAway se registra
-`goaway_seen`, se sigue mandando audio hasta que el server cierra, se registra el cierre y se termina.
-
 - Emite el `seq` (monotonico por sesion; heartbeat = null). Historial canonico: el Emisor.
 - Todo queda en el casete: server crudo, client (turnos y ventanas), emit (mensajes del contrato).
 - Solape y gap salen en rafaga SIN dormir; la unica espera del emisor de audio es la del gap
   (>= 0,7 s de reloj de pared entre activity_end y activity_start), y solo si hace falta.
+
+B3 - REABRIR CON SOLAPE (watchdog + rotacion en UN mecanismo; ESTADO.md, Decisiones).
+Disparadores (meta.reason del evento `rotation`):
+  (i)   "cierre":     el server cerro el websocket (1000/1006/1011/cualquiera) -> reabrir YA.
+  (ii)  "atasco":     dos senales, evaluadas con TIMER EXTERNO (cada 0,5 s) y en cada chunk enviado:
+        - atraso: audio_enviado_a_la_conexion - audioOffset_del_server > ATASCO_UMBRAL_S sostenido
+          durante ATASCO_SOSTENIDO_S (meta.detalle="atraso").
+        - mudo:   ventanas con voz enviadas y NINGUN texto del server (ni final ni parcial) durante
+          MUDO_S (meta.detalle="mudo"; skill gemini-live: sesiones que dejan de emitir sin error).
+  (iii) "preventiva": ROTACION_PREVENTIVA_S de audio enviado a la conexion (tope observado ~283 s).
+  (iv)  "goaway":     llego GoAway.
+Criterio de los defaults (medido sobre casetes reales; reportes/audio-pipeline-b3.md):
+  la larga ES (b1-nerdearla-es-intento2-cancelled) tuvo cobertura 1,0 en 0-210 s PERO con un
+  episodio de atraso de hasta 25,9 s (offset trabado en 35,7 s entre t~35 y t~56, latencia 19 s) y
+  ~20 s sin final. Con UMBRAL 6 / SOSTENIDO 4 (el pedido original) ese episodio dispara (~t 42).
+  Defaults: UMBRAL 22 / SOSTENIDO 8. Medido en escala de audio enviado: en el episodio ES de t~37 el
+  atraso supera 22 s durante 3,9 s seguidos como maximo (con 20 s son 9,5 s: disparaba). Asi la ES no
+  dispara en 0-200 s, la preventiva (240 s de audio enviado) llega primero y el atasco de la muerte
+  (offset trabado en 255,4 s) dispara en la conexion nueva antes de los 250 s (test_reabrir.py). Con
+  VAD automatico del server el criterio de atraso NO sirve (turnos de 30+ s: dispara solo). Lo que se pierde con esta eleccion: el episodio EN de los
+  ~5 s (offset trabado ~19 s, con perdida) NO dispara por atraso; en tiempo real es indistinguible
+  del episodio ES de los ~37 s (que se recupero solo). "mudo" (sin ningun texto MUDO_S=10 s con voz
+  enviada) no confunde a ninguno de los dos: los parciales siguieron llegando.
+Mecanica: la conexion nueva se abre ANTES de soltar la vieja, en el borde de ventana (o ya, si la
+vieja murio). Mientras conecta, el audio queda en la fuente (tiempo real: sale en rafaga al
+conectar; nada se pierde). En atasco/cierre se REENVIAN a la nueva las ventanas que la vieja no
+cubrio (hasta REENVIO_MAX_S). La vieja recibe activity_end si tenia turno abierto y queda hasta
+DRENAJE_VIEJA_S drenando; de ella se aceptan solo textos con audio_end <= corte + solape. `seq`
+sigue continuo y la session_id publica NO cambia (old_id/new_id son ids internos de conexion).
+Dedup fina de costuras por caracteres: B4.
 """
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -22,7 +50,36 @@ from worker.emisor import Emisor
 from worker.ingesta import CHUNK_S, Chunk
 from worker.mapeo import InfoVentana, Mapeador, segundos as _segundos_mapeo
 from worker.transporte import Transporte
-from worker.ventanas import GAP_S, Accion, Cortador, Ventana
+from worker.ventanas import GAP_S, SOLAPE_S, Accion, Cortador, Ventana
+
+
+def _env_f(nombre: str, defecto: float) -> float:
+    try:
+        return float(os.environ.get(nombre, defecto))
+    except ValueError:
+        return defecto
+
+
+@dataclass
+class ConfigReabrir:
+    """Todos configurables por variable de entorno (criterio de los defaults: docstring del modulo)."""
+    atasco_umbral_s: float = 22.0
+    atasco_sostenido_s: float = 8.0
+    mudo_s: float = 10.0
+    preventiva_s: float = 240.0
+    drenaje_vieja_s: float = 20.0
+    reenvio_max_s: float = 15.0
+    intentos_conectar: int = 3
+    tick_s: float = 0.5
+
+    @classmethod
+    def desde_env(cls) -> "ConfigReabrir":
+        return cls(atasco_umbral_s=_env_f("ATASCO_UMBRAL_S", 22.0),
+                   atasco_sostenido_s=_env_f("ATASCO_SOSTENIDO_S", 8.0),
+                   mudo_s=_env_f("MUDO_S", 10.0),
+                   preventiva_s=_env_f("ROTACION_PREVENTIVA_S", 240.0),
+                   drenaje_vieja_s=_env_f("DRENAJE_VIEJA_S", 20.0),
+                   reenvio_max_s=_env_f("REENVIO_MAX_S", 15.0))
 
 
 @dataclass
@@ -39,6 +96,9 @@ class Resultado:
     t_inicio: float = 0.0
     t_fin: float = 0.0
     errores: list = field(default_factory=list)
+    rotaciones: list = field(default_factory=list)
+    descartados_vieja: int = 0
+    reenviados_s: float = 0.0
 
     @property
     def segundos_enviados(self) -> float:
@@ -61,6 +121,41 @@ def extraer_texto(msg: dict) -> Optional[str]:
     return tx if tx else None
 
 
+class _Conexion:
+    """Una sesion de Gemini (o de casete) dentro de la sala. La sala (session_id) no cambia."""
+
+    def __init__(self, n: int, tr: Transporte, corte_s: float):
+        self.n = n
+        self.id = f"c{n}"
+        self.tr = tr
+        self.corte_s = corte_s           # posicion de audio de la fuente donde arranca
+        self.mapa = Mapeador()
+        self.chunks = 0                  # audio enviado A ESTA conexion (incluye solape/reenvio)
+        self.offset_s = 0.0              # ultimo audioOffset del server
+        self.cerrada = asyncio.Event()
+        self.cierre: Optional[dict] = None
+        self.rx: Optional[asyncio.Task] = None
+        self.t_ultimo_end: Optional[float] = None
+        self.turno_abierto = False
+        self.limite_audio_end: Optional[float] = None   # vieja: solo textos con audio_end <= esto
+        self.corte_nueva: Optional[float] = None        # vieja: desde aca cubre la conexion nueva
+        self.atraso_desde: Optional[float] = None
+        self.voz_sin_texto_desde: Optional[float] = None
+        self.max_atraso = 0.0
+        self.gracia_s = 0.0              # audio reenviado en rafaga al abrir: no cuenta como atraso
+        self.finales = 0
+
+    @property
+    def acc_s(self) -> float:
+        return round(self.chunks * CHUNK_S, 3)
+
+    @property
+    def atraso_s(self) -> float:
+        # la rafaga de reenvio (gracia) no es atraso mientras el server no la termino de procesar
+        g = self.gracia_s if self.offset_s < self.gracia_s else 0.0
+        return round(max(0.0, self.acc_s - self.offset_s - g), 3)
+
+
 class SessionWorker:
     def __init__(self, session_id: str, lang: str, transporte: Transporte,
                  fuente: AsyncIterator[Chunk], grabador: Optional[Grabador] = None,
@@ -70,7 +165,10 @@ class SessionWorker:
                  traductor=None, seq_inicial: int = 0,
                  reloj: Callable[[], float] = time.time,
                  dormir: Callable[[float], Awaitable[None]] = asyncio.sleep,
-                 log: Callable[[str], None] = print):
+                 log: Callable[[str], None] = print,
+                 fabrica: Optional[Callable[[float], Transporte]] = None,
+                 reabrir: Optional[ConfigReabrir] = None,
+                 turnos_manuales: bool = True):
         self.sid = session_id
         self.lang = lang
         self.tr = transporte
@@ -89,16 +187,30 @@ class SessionWorker:
         self.log = log
         self.seq = int(seq_inicial or 0)     # sigue desde auth_ok.last_seq (el hub no rebobina)
         self.traductor = traductor           # worker/traductor.py (R19), o None
+        self.fabrica = fabrica               # None => sin reabrir (una sola conexion, como B1/B2)
+        self.cfg = reabrir or ConfigReabrir.desde_env()
+        self.turnos_manuales = turnos_manuales   # False => VAD automatico del server (A/B B3)
         self.n_parciales = 0
         self.drenaje: dict = {}
         self.res = Resultado(session_id)
-        self.mapa = Mapeador()                       # textos -> ventanas (worker/mapeo.py)
+        self.con: Optional[_Conexion] = None
+        self.viejas: list[_Conexion] = []
+        self._retiros: list[asyncio.Task] = []
+        self._n_con = 0
+        self._pedido: Optional[dict] = None
+        self._atascos_seguidos = 0                   # backoff: atascos sin un final de la nueva
+        self._historial: deque = deque(maxlen=16)   # ventanas cerradas con sus chunks (reenvio)
+        self._en_curso: Optional[dict] = None        # ventana abierta: {"v": Ventana, "chunks": [...]}
         self.abierta: Optional[Ventana] = None
         self.ultima: Optional[Ventana] = None
-        self._t_ultimo_end: Optional[float] = None
-        self._server_cerro = asyncio.Event()
+        self.pos_s = 0.0                              # posicion de audio de la fuente (ultimo chunk)
+        self._fin_sala = asyncio.Event()
         self._envio_terminado = asyncio.Event()
         self._vivo = False
+
+    @property
+    def mapa(self) -> Mapeador:
+        return self.con.mapa if self.con else Mapeador()
 
     # ---- emision ----------------------------------------------------------
     def emitir(self, tipo: str, **campos) -> dict:
@@ -116,39 +228,246 @@ class SessionWorker:
         self.res.seq_final = self.seq
         return msg
 
+    # ---- conexiones ---------------------------------------------------------
+    async def _abrir(self, tr: Transporte, corte_s: float) -> _Conexion:
+        self._n_con += 1
+        con = _Conexion(self._n_con, tr, corte_s)
+        if self.rec:
+            self.rec.client("connect", {"session_id": self.sid, "lang": self.lang, "conexion": con.id,
+                                        "corte_s": corte_s})
+        setup = await tr.conectar()
+        if self.rec:
+            self.rec.server(kind_server(setup), setup, fuente="sdk", conexion=con.id)
+            cfg = getattr(tr, "config_enviada", None)
+            if callable(cfg):
+                self.rec.client("config", cfg(), conexion=con.id)
+        con.rx = asyncio.create_task(self._recibir(con))
+        return con
+
+    def pedir_reapertura(self, motivo: str, **detalle) -> None:
+        """Lo llaman el timer externo, el receptor (cierre/goaway) y el chequeo por chunk."""
+        if self.fabrica is None or self._pedido is not None or self._fin_sala.is_set():
+            return
+        con = self.con
+        self._pedido = {"reason": motivo, "t": self.reloj(), "pos_s": round(self.pos_s, 2),
+                        "old_id": con.id if con else None,
+                        "audio_s": con.acc_s if con else None,
+                        "atraso_s": con.atraso_s if con else None, **detalle}
+        if self.rec:
+            self.rec.client("reabrir_pedido", self._pedido)
+        self.log(f"[{self.sid}] reabrir pedido: {self._pedido}")
+
+    def _chequear(self) -> None:
+        con = self.con
+        if con is None or self.fabrica is None or self._pedido is not None:
+            return
+        ahora = self.reloj()
+        if con.cerrada.is_set():
+            self.pedir_reapertura("cierre", code=(con.cierre or {}).get("code"))
+            return
+        if con.acc_s >= self.cfg.preventiva_s:
+            self.pedir_reapertura("preventiva")
+            return
+        at = con.atraso_s
+        con.max_atraso = max(con.max_atraso, at)
+        # backoff: si la conexion anterior se reabrio por atasco y esta todavia no dio un final,
+        # el sostenido se duplica (8, 16, 32 ... hasta 120 s): evita tormentas de reaperturas
+        sost = min(120.0, self.cfg.atasco_sostenido_s * (2 ** self._atascos_seguidos))
+        if at > self.cfg.atasco_umbral_s:
+            if con.atraso_desde is None:
+                con.atraso_desde = ahora
+            elif ahora - con.atraso_desde >= sost:
+                self.pedir_reapertura("atasco", detalle="atraso",
+                                      sostenido_s=round(ahora - con.atraso_desde, 2))
+                return
+        else:
+            con.atraso_desde = None
+        mudo = min(120.0, self.cfg.mudo_s * (2 ** self._atascos_seguidos))
+        if (con.voz_sin_texto_desde is not None
+                and ahora - con.voz_sin_texto_desde >= mudo):
+            self.pedir_reapertura("atasco", detalle="mudo",
+                                  sin_texto_s=round(ahora - con.voz_sin_texto_desde, 2))
+
+    async def _vigia(self) -> None:
+        """Timer EXTERNO (no depende de recibir mensajes ni de que el envio avance)."""
+        while True:
+            await asyncio.sleep(self.cfg.tick_s)
+            self._chequear()
+
+    async def _conectar_nueva(self, corte_s: float) -> Optional[_Conexion]:
+        ultimo = None
+        for intento in range(self.cfg.intentos_conectar):
+            try:
+                return await self._abrir(self.fabrica(corte_s), corte_s)
+            except Exception as e:
+                ultimo = f"{type(e).__name__}: {e}"
+                self.res.errores.append(f"reconnect: {ultimo}")
+                if self.rec:
+                    self.rec.client("connect_error", {"error": ultimo, "intento": intento + 1})
+                await asyncio.sleep(1.0 * (intento + 1))
+        self.emitir("error", meta={"code": "reconnect", "message": ultimo})
+        return None
+
+    async def _rotar(self, siguiente: Optional[Ventana]) -> bool:
+        """Cambia de conexion en un borde de ventana (o con turno abierto si la vieja murio)."""
+        p = self._pedido
+        vieja = self.con
+        motivo = p["reason"]
+        reenviar: list[dict] = []
+        if motivo in ("atasco", "cierre"):
+            pend = {i.idx for i in vieja.mapa.pend}
+            desde = self.pos_s - self.cfg.reenvio_max_s
+            reenviar = [h for h in self._historial
+                        if h["v"].idx in pend and h["v"].audio_start >= desde]
+        abierta = self._en_curso
+        if reenviar:
+            corte = reenviar[0]["v"].audio_start
+        elif abierta is not None:
+            corte = abierta["v"].audio_start
+        elif siguiente is not None:
+            corte = siguiente.audio_start
+        else:
+            corte = self.pos_s
+        # el filtro de la vieja rige desde YA (no despues de conectar: en vivo B3 la vieja emitio
+        # un texto durante los 1,95 s de connect que la regla tenia que filtrar)
+        vieja.limite_audio_end = round(corte + SOLAPE_S + 0.05, 3)
+        vieja.corte_nueva = corte
+        t0 = time.monotonic()
+        nueva = await self._conectar_nueva(corte)
+        conectar_s = round(time.monotonic() - t0, 2)
+        if nueva is None:
+            vieja.limite_audio_end = vieja.corte_nueva = None
+            self._pedido = None
+            return False
+        # la vieja: cerrar su turno si quedo abierto y dejarla drenar
+        if vieja.turno_abierto and not vieja.cerrada.is_set():
+            try:
+                if self.turnos_manuales:
+                    await vieja.tr.activity_end()
+            except Exception:
+                pass
+            vieja.turno_abierto = False
+        self.viejas.append(vieja)
+        self._retiros.append(asyncio.create_task(self._retirar(vieja)))
+        self.con = nueva
+        info = {**p, "new_id": nueva.id, "corte_s": round(corte, 2), "conectar_s": conectar_s,
+                "reenvio_ventanas": [h["v"].idx for h in reenviar],
+                "reenvio_s": round(sum(len(h["chunks"]) for h in reenviar) * CHUNK_S, 1)}
+        info.pop("t", None)
+        nueva.gracia_s = info["reenvio_s"]
+        self._atascos_seguidos = self._atascos_seguidos + 1 if motivo == "atasco" else 0
+        info["atascos_seguidos"] = self._atascos_seguidos
+        self.res.rotaciones.append(info)
+        self.res.reenviados_s += info["reenvio_s"]
+        self.emitir("rotation", meta=info)
+        self._pedido = None
+        # reenvio en rafaga de lo que la vieja no cubrio (sin dormir salvo el gap entre turnos)
+        for h in reenviar:
+            await self._turno_start(h["v"])
+            for data in h["chunks"]:
+                await self._audio(data)
+            await self._turno_end(h["v"], reenvio=True)
+        if abierta is not None:
+            # la vieja murio con turno abierto: se reabre el turno en la nueva con lo que ya habia
+            await self._turno_start(abierta["v"])
+            for data in abierta["chunks"]:
+                await self._audio(data)
+        return True
+
+    async def _retirar(self, vieja: _Conexion) -> None:
+        t0 = time.monotonic()
+        while (vieja.mapa.pend and not vieja.cerrada.is_set()
+               and time.monotonic() - t0 < self.cfg.drenaje_vieja_s):
+            await asyncio.sleep(0.1)
+        if self.rec:
+            self.rec.client("retiro", {"conexion": vieja.id, "pendientes": len(vieja.mapa.pend),
+                                       "espero_s": round(time.monotonic() - t0, 2)})
+        if not vieja.cerrada.is_set():
+            try:
+                await vieja.tr.cerrar()
+            except Exception:
+                pass
+        if vieja.rx is not None:
+            try:
+                await asyncio.wait_for(vieja.rx, 5)
+            except (asyncio.TimeoutError, Exception):
+                vieja.rx.cancel()
+        self._emitir_asignaciones(vieja.mapa.vaciar(), vieja)
+
     # ---- envio de audio ---------------------------------------------------
-    async def _ejecutar(self, a: Accion) -> None:
-        if a.kind == "start":
-            if self._t_ultimo_end is not None:
-                falta = self._t_ultimo_end + self.gap_s - self.reloj()
+    async def _turno_start(self, v: Ventana) -> None:
+        con = self.con
+        if self.turnos_manuales:
+            if con.t_ultimo_end is not None:
+                falta = con.t_ultimo_end + self.gap_s - self.reloj()
                 if falta > 0:
                     await self.dormir(falta)   # la unica espera: el gap, no el audio
-            await self.tr.activity_start()
+            await con.tr.activity_start()
+        con.turno_abierto = True
+        if self.rec:
+            self.rec.client("activity_start", {"ventana": v.idx, "audio_start": v.audio_start},
+                            conexion=con.id)
+
+    async def _audio(self, data: bytes) -> None:
+        con = self.con
+        await con.tr.enviar_audio(data)
+        con.chunks += 1
+        self.res.chunks_enviados += 1
+
+    async def _turno_end(self, v: Ventana, reenvio: bool = False) -> None:
+        con = self.con
+        if self.turnos_manuales:
+            await con.tr.activity_end()
+        con.turno_abierto = False
+        con.t_ultimo_end = self.reloj()
+        con.mapa.ventana_cerrada(InfoVentana(v.idx, v.audio_start, v.audio_end, v.t_captured,
+                                             con.acc_s))
+        if v.has_voice and con.voz_sin_texto_desde is None:
+            con.voz_sin_texto_desde = con.t_ultimo_end
+        if self.rec:
+            r = v.resumen()
+            if reenvio:
+                r["reenvio"] = True
+            self.rec.client("ventana", r, t=con.t_ultimo_end, conexion=con.id)
+            self.rec.client("activity_end", {"ventana": v.idx, "audio_end": v.audio_end},
+                            t=con.t_ultimo_end, conexion=con.id)
+
+    async def _ejecutar(self, a: Accion) -> None:
+        if self._pedido is not None and self.fabrica is not None:
+            vieja_muerta = self.con.cerrada.is_set()
+            if a.kind == "start" or (vieja_muerta and a.kind in ("audio", "end")):
+                if not await self._rotar(a.ventana if a.kind == "start" else None):
+                    if self.con.cerrada.is_set():
+                        raise ConnectionError("no se pudo reabrir y la conexion murio")
+        if a.kind == "start":
+            await self._turno_start(a.ventana)
             self.abierta = a.ventana
-            if self.rec:
-                self.rec.client("activity_start", {"ventana": a.ventana.idx,
-                                                   "audio_start": a.ventana.audio_start})
+            self._en_curso = {"v": a.ventana, "chunks": []}
         elif a.kind == "audio":
-            await self.tr.enviar_audio(a.chunk.data)
-            self.res.chunks_enviados += 1
+            # VAD automatico: el audio va UNA vez (sin la rafaga de solape, que duplicaria voz)
+            if self.turnos_manuales or not getattr(a, "burst", False):
+                await self._audio(a.chunk.data)
+                if self._en_curso is not None:
+                    self._en_curso["chunks"].append(a.chunk.data)
+            self.pos_s = max(self.pos_s, a.chunk.audio_end)
+            self._chequear()
         elif a.kind == "end":
-            await self.tr.activity_end()
-            self._t_ultimo_end = self.reloj()
             v = a.ventana
-            self.mapa.ventana_cerrada(InfoVentana(v.idx, v.audio_start, v.audio_end, v.t_captured,
-                                                  round(self.res.chunks_enviados * CHUNK_S, 3)))
+            await self._turno_end(v)
+            if self._en_curso is not None:
+                self._historial.append(self._en_curso)
+            self._en_curso = None
             self.ultima = v
             self.abierta = None
             self.res.ventanas += 1
-            if self.rec:
-                self.rec.client("ventana", v.resumen(), t=self._t_ultimo_end)
-                self.rec.client("activity_end", {"ventana": v.idx, "audio_end": v.audio_end},
-                                t=self._t_ultimo_end)
 
     async def _enviar(self) -> None:
         try:
             async for c in self.fuente:
-                if self._server_cerro.is_set():
+                if self._fin_sala.is_set():
+                    self.res.motivo_fin = self.res.motivo_fin or "server_cerro"
+                    break
+                if self.fabrica is None and self.con.cerrada.is_set():
                     self.res.motivo_fin = self.res.motivo_fin or "server_cerro"
                     break
                 if self.tope_chunks is not None and self.res.chunks_enviados >= self.tope_chunks:
@@ -160,15 +479,15 @@ class SessionWorker:
                     await self._ejecutar(a)
             else:
                 self.res.motivo_fin = self.res.motivo_fin or "fin_fuente"
-            if not self._server_cerro.is_set():
+            if not self.con.cerrada.is_set():
                 for a in self.cortador.cerrar():
                     await self._ejecutar(a)
         except Exception as e:
             self.res.errores.append(f"envio: {type(e).__name__}: {e}")
             if self.rec:
                 self.rec.client("send_error", {"error": f"{type(e).__name__}: {e}",
-                                               "server_ya_cerro": self._server_cerro.is_set()})
-            if not self._server_cerro.is_set():
+                                               "server_ya_cerro": self.con.cerrada.is_set()})
+            if not self.con.cerrada.is_set():
                 self.log(f"[{self.sid}] error enviando: {type(e).__name__}: {e}")
             self.res.motivo_fin = self.res.motivo_fin or "error_envio"
         finally:
@@ -181,12 +500,34 @@ class SessionWorker:
             self._envio_terminado.set()
 
     # ---- recepcion ------------------------------------------------------------
-    def _emitir_asignaciones(self, asignaciones) -> None:
+    def _emitir_asignaciones(self, asignaciones, con: Optional[_Conexion] = None) -> None:
         for a in asignaciones:
+            lim = con.limite_audio_end if con is not None else None
+            corte = con.corte_nueva if con is not None else None
+            # de la vieja se descarta lo que cae ENTERO despues del corte (lo cubre la nueva). Un texto
+            # FUSIONADO que empieza antes del corte trae audio que la nueva no recibio (reenvio con
+            # tope REENVIO_MAX_S): se acepta y se marca; su cola duplicada es la costura (dedup B4).
+            if (lim is not None and a.audio_end is not None and a.audio_end > lim
+                    and (a.audio_start is None or corte is None or a.audio_start >= corte - 0.05)):
+                self.res.descartados_vieja += 1
+                if self.rec:
+                    self.rec.client("descartado_vieja", {"conexion": con.id, "text": a.text,
+                                                         "audio_start": a.audio_start,
+                                                         "audio_end": a.audio_end, "limite": lim})
+                continue
+            if a.audio_start is None or a.audio_end is None:
+                # texto sin ventana asignable (no deberia pasar en vivo): se ancla a la posicion actual
+                # para que el mensaje cumpla el contrato (audio_* numericos)
+                a.audio_start = self.abierta.audio_start if self.abierta else round(self.pos_s, 3)
+                a.audio_end = round(max(self.pos_s, a.audio_start), 3)
+                a.t_captured = a.t_captured if a.t_captured is not None else self.reloj()
             self.res.textos += 1
             # el original sale YA con translations {}; la traduccion llega despues como `translation`
+            extra = {"ventanas": a.ventanas, "conexion": con.id if con is not None else None}
+            if lim is not None and a.audio_end is not None and a.audio_end > lim:
+                extra["cruza_corte"] = {"corte_s": corte, "limite": lim}
             msg = self.emitir("text", text=a.text, audio_start=a.audio_start, audio_end=a.audio_end,
-                              t_captured=a.t_captured, _casete={"ventanas": a.ventanas})
+                              t_captured=a.t_captured, _casete=extra)
             if self.traductor is not None:
                 self.traductor.agregar(msg["seq"], a.text, msg["t_emit"])
 
@@ -195,10 +536,10 @@ class SessionWorker:
         self.emitir("translation", items=res.items,
                     meta=meta_traduccion(res, self.traductor.a, {"vivo": True, "intentos": res.intentos}))
 
-    def _emitir_parcial(self, texto: str) -> None:
+    def _emitir_parcial(self, texto: str, con: _Conexion) -> None:
         # turno en curso = ventana mas vieja sin ACTIVITY_END del server; si no hay, la abierta
-        if self.mapa.pend:
-            a0 = self.mapa.pend[0].audio_start
+        if con.mapa.pend:
+            a0 = con.mapa.pend[0].audio_start
         else:
             a0 = self.abierta.audio_start if self.abierta else None
         tc = self.ultima.t_captured if self.ultima is not None else None
@@ -209,50 +550,70 @@ class SessionWorker:
         # fallback: texto sin ACTIVITY_END en ESPERA_MAX_S -> se emite igual
         while True:
             await asyncio.sleep(0.1)
-            self._emitir_asignaciones(self.mapa.vencidos(self.reloj()))
+            for con in [self.con] + self.viejas:
+                if con is not None:
+                    self._emitir_asignaciones(con.mapa.vencidos(self.reloj()), con)
 
-    async def _recibir(self) -> None:
-        async for m in self.tr.recibir():
+    async def _recibir(self, con: _Conexion) -> None:
+        async for m in con.tr.recibir():
             t = self.reloj()
             if "_close" in m:
+                con.cierre = m["_close"]
                 self.res.cierre = m["_close"]
                 if self.rec:
-                    self.rec.server("close", m["_close"], t=t)
-                self._server_cerro.set()
+                    self.rec.server("close", m["_close"], t=t, conexion=con.id)
+                con.cerrada.set()
+                if con is self.con:
+                    if self.fabrica is None:
+                        self._fin_sala.set()
+                    elif m["_close"].get("by") != "client":     # el cierre propio no reabre
+                        self.pedir_reapertura("cierre", code=m["_close"].get("code"))
                 break
             self.res.mensajes_server += 1
             if self.rec:
-                self.rec.server(kind_server(m), m, t=t)
+                self.rec.server(kind_server(m), m, t=t, conexion=con.id)
             if "goAway" in m:
-                self.res.goaway = {"t": t, **(m.get("goAway") or {})}
+                self.res.goaway = {"t": t, "conexion": con.id, **(m.get("goAway") or {})}
                 if self.rec:
-                    self.rec.client("goaway_seen", {"goAway": m.get("goAway"),
-                                                    "audio_enviado_s": self.res.segundos_enviados}, t=t)
+                    self.rec.client("goaway_seen", {"goAway": m.get("goAway"), "conexion": con.id,
+                                                    "audio_enviado_s": con.acc_s}, t=t)
                 self.log(f"[{self.sid}] GoAway recibido: {m.get('goAway')}")
+                if con is self.con:
+                    self.pedir_reapertura("goaway", time_left=(m.get("goAway") or {}).get("timeLeft"))
             tx = extraer_texto(m)
-            if tx:
-                self.mapa.texto(t, tx)
             itx = ((m.get("serverContent") or {}).get("interimInputTranscription") or {}).get("text")
-            if itx:
-                self._emitir_parcial(itx)
-            # ver worker/mapeo.py: el texto se asigna al ACTIVITY_END que le sigue (mismo ms)
+            if tx or itx:
+                con.voz_sin_texto_desde = None
+            if tx:
+                con.mapa.texto(t, tx)
+                con.finales += 1
+                if con is self.con:
+                    self._atascos_seguidos = 0
+            if itx and con is self.con:
+                self._emitir_parcial(itx, con)
             va = m.get("voiceActivity") or {}
+            off = _segundos_mapeo(va.get("audioOffset"))
+            if off is not None:
+                con.offset_s = max(con.offset_s, off)
+            # ver worker/mapeo.py: el texto se asigna al ACTIVITY_END que le sigue (mismo ms)
             if va.get("type") == "ACTIVITY_END":
-                self._emitir_asignaciones(self.mapa.activity_end(_segundos_mapeo(va.get("audioOffset"))))
+                self._emitir_asignaciones(con.mapa.activity_end(off), con)
 
     async def _latido(self) -> None:
         while True:
             await asyncio.sleep(self.heartbeat_s)
+            con = self.con
             self.emitir("heartbeat", meta={"alive": self._vivo,
-                                           "audio_seconds_sent": self.res.segundos_enviados})
+                                           "audio_seconds_sent": self.res.segundos_enviados,
+                                           "conexion": con.id if con else None,
+                                           "atraso_s": con.atraso_s if con else None,
+                                           "rotaciones": len(self.res.rotaciones)})
 
     # ---- ciclo completo ---------------------------------------------------------
     async def correr(self) -> Resultado:
         self.res.t_inicio = self.reloj()
-        if self.rec:
-            self.rec.client("connect", {"session_id": self.sid, "lang": self.lang})
         try:
-            setup = await self.tr.conectar()
+            self.con = await self._abrir(self.tr, 0.0)
         except Exception as e:
             self.res.errores.append(f"connect: {type(e).__name__}: {e}")
             if self.rec:
@@ -262,59 +623,64 @@ class SessionWorker:
             self.res.t_fin = self.reloj()
             return self.res
         self._vivo = True
-        if self.rec:
-            self.rec.server(kind_server(setup), setup, fuente="sdk")
-            cfg = getattr(self.tr, "config_enviada", None)
-            if callable(cfg):
-                self.rec.client("config", cfg())
         self.emitir("session_start", meta={"title": self.titulo, "source": self.source})
         if self.traductor is not None:
             self.traductor.on_resultado = self._on_traduccion
             self.traductor.iniciar()
-        rx = asyncio.create_task(self._recibir())
         hb = asyncio.create_task(self._latido())
         vt = asyncio.create_task(self._vigilar_textos())
+        vg = asyncio.create_task(self._vigia()) if self.fabrica is not None else None
         tx = asyncio.create_task(self._enviar())
         await self._envio_terminado.wait()
+        if vg is not None:
+            vg.cancel()
         # DRENAJE: esperar hasta espera_final_s (30 s) los turnos pendientes (o el cierre del server)
+        con = self.con
         t0 = time.monotonic()   # reloj real del loop: el inyectable puede estar congelado en tests
-        pend0 = len(self.mapa.pend)
-        while (self.mapa.pend and not self._server_cerro.is_set()
+        pend0 = len(con.mapa.pend)
+        while (con.mapa.pend and not con.cerrada.is_set()
                and time.monotonic() - t0 < self.espera_final_s):
             await asyncio.sleep(0.1)
-        self.drenaje = {"pendientes_al_fin_fuente": pend0, "pendientes_tras_drenaje": len(self.mapa.pend),
+        self.drenaje = {"pendientes_al_fin_fuente": pend0, "pendientes_tras_drenaje": len(con.mapa.pend),
                         "espero_s": round(time.monotonic() - t0, 2), "tope_s": self.espera_final_s}
         if self.rec:
             self.rec.client("drenaje", self.drenaje)
-        if not self._server_cerro.is_set():
+        if not con.cerrada.is_set():
             # colchon corto por si llega texto tardio de la ultima ventana
             try:
-                await asyncio.wait_for(self._server_cerro.wait(), 1.5)
+                await asyncio.wait_for(con.cerrada.wait(), 1.5)
             except asyncio.TimeoutError:
                 pass
-        if not self._server_cerro.is_set():
+        if not con.cerrada.is_set():
             if self.rec:
-                self.rec.client("close", {"motivo": self.res.motivo_fin,
-                                          "pendientes_sin_texto": len(self.mapa.pend)})
-            await self.tr.cerrar()
+                self.rec.client("close", {"motivo": self.res.motivo_fin, "conexion": con.id,
+                                          "pendientes_sin_texto": len(con.mapa.pend)})
+            await con.tr.cerrar()
         try:
-            await asyncio.wait_for(rx, 5)
+            await asyncio.wait_for(con.rx, 5)
         except (asyncio.TimeoutError, Exception):
-            rx.cancel()
+            con.rx.cancel()
         await tx
+        for r in self._retiros:          # viejas drenando (tope DRENAJE_VIEJA_S cada una)
+            try:
+                await asyncio.wait_for(r, self.cfg.drenaje_vieja_s + 6)
+            except (asyncio.TimeoutError, Exception):
+                r.cancel()
+        self._fin_sala.set()
         hb.cancel()
         vt.cancel()
-        self._emitir_asignaciones(self.mapa.vaciar())
+        self._emitir_asignaciones(con.mapa.vaciar(), con)
         if self.traductor is not None:
             await self.traductor.cerrar(15.0)   # ultimo lote + traducciones en vuelo
         self._vivo = False
-        cierre = self.res.cierre or {}
+        cierre = con.cierre or {}
         if cierre.get("by") in ("server", "red") and cierre.get("code") not in (1000, None):
             self.emitir("error", meta={"code": cierre.get("code"),
                                        "message": f"server cerro la sesion: {cierre.get('reason')}"})
         if cierre.get("by") in ("server", "red") and not self.res.motivo_fin.startswith("tope"):
             self.res.motivo_fin = "server_cerro" + ("_tras_goaway" if self.res.goaway else "")
         self.emitir("session_end", meta={"reason": self.res.motivo_fin,
-                                         "audio_seconds_sent": self.res.segundos_enviados})
+                                         "audio_seconds_sent": self.res.segundos_enviados,
+                                         "rotaciones": len(self.res.rotaciones)})
         self.res.t_fin = self.reloj()
         return self.res

@@ -21,9 +21,12 @@ def cmd_replay(casete, sid, port, velocidad=1.0):
             "--sesion", sid, "--velocidad", str(velocidad)]
 
 
-def cmd_real(clip, sid, lang, dur, casete_salida, port):
-    return [PY, "-m", "worker.run", "--archivo", str(clip), "--sesion", sid, "--lang", lang,
-            "--duracion", str(dur), "--casete", str(casete_salida), "--hub", f"ws://localhost:{port}/ingest"]
+def cmd_real(clip, sid, lang, dur, casete_salida, port, tope_envio_s=None):
+    c = [PY, "-m", "worker.run", "--archivo", str(clip), "--sesion", sid, "--lang", lang,
+         "--duracion", str(dur), "--casete", str(casete_salida), "--hub", f"ws://localhost:{port}/ingest"]
+    if tope_envio_s:  # tope DURO de audio enviado a la API por sesión (flag de worker.run)
+        c += ["--tope-envio-s", str(tope_envio_s)]
+    return c
 
 
 async def correr(productores: list[dict], port: int, tag: str, timeout_s: float, log=print) -> list[dict]:
@@ -122,6 +125,53 @@ def analizar_bus(bus_path, umbral_tramo: float = 10.0, esperar_replay: bool | No
             lat["entrega_hub_cliente"].append(tr - f["t_hub"])
         if isinstance(f.get("t_captured"), (int, float)):
             lat["percibida"].append(tr - f["t_captured"])
+    # percibida desde la PRIMERA ventana del bloque (lo que esperó la primera palabra): sólo en corridas REALES,
+    # con el casete que grabó ESTA corrida (en replay el casete es de otra hora y no aplica)
+    cc0 = meta.get("casete_cobertura")
+    if "worker.run" in " ".join(meta.get("cmd") or []) and cc0 and Path(cc0).is_file():
+        from qa.comun import leer_casete
+        _, RR = leer_casete(cc0)
+        venc = {r["payload"]["ventana"]: r["payload"].get("t_captured") for r in RR
+                if r.get("dir") == "client" and r.get("kind") == "ventana"}
+        prim = {}
+        for r in RR:
+            if r.get("dir") == "emit" and r.get("kind") == "text" and isinstance(r.get("ventanas"), list):
+                ts = [venc.get(v) for v in r["ventanas"] if isinstance(venc.get(v), (int, float))]
+                if ts:
+                    prim[r["payload"].get("seq")] = min(ts)
+        lat["percibida_primera_ventana"] = [e["t_receive"] - prim[e["frame"].get("seq")] for e in textos
+                                            if e["frame"].get("seq") in prim]
+    # rotaciones (B3: un mecanismo "reabrir con solape", meta.reason = motivo) y watchdog, tal como llegan al cliente
+    rotaciones = [{"seq": e["frame"].get("seq"), "reason": (e["frame"].get("meta") or {}).get("reason"),
+                   "meta": e["frame"].get("meta"), "t_receive": e["t_receive"]}
+                  for e in msgs if e["frame"].get("type") == "rotation"]
+    watchdogs = [{"seq": e["frame"].get("seq"), "meta": e["frame"].get("meta"), "t_receive": e["t_receive"]}
+                 for e in msgs if e["frame"].get("type") == "watchdog"]
+    # traducción EN VIVO (R19): evento `translation` con items {seq, text, ok}. Demora percibida de la traducción
+    # = t_receive(translation) - t_captured(text del mismo seq). Sólo items ok:true entran al percentil.
+    tcap = {e["frame"].get("seq"): e["frame"].get("t_captured") for e in textos}
+    trecv_text = {e["frame"].get("seq"): e["t_receive"] for e in textos}
+    n_ev = n_ok = n_nok = 0
+    con_item, perc_tr, desde_text = set(), [], []
+    for e in msgs:
+        f = e["frame"]
+        if f.get("type") != "translation":
+            continue
+        n_ev += 1
+        for it in f.get("items") or []:
+            s_ = it.get("seq")
+            con_item.add(s_)
+            if it.get("ok"):
+                n_ok += 1
+                if isinstance(tcap.get(s_), (int, float)):
+                    perc_tr.append(e["t_receive"] - tcap[s_])
+                if s_ in trecv_text:
+                    desde_text.append(e["t_receive"] - trecv_text[s_])
+            else:
+                n_nok += 1
+    traduccion = {"eventos": n_ev, "items_ok": n_ok, "items_ok_false": n_nok,
+                  "textos_sin_ningun_item": sorted(s_ for s_ in tcap if s_ not in con_item),
+                  "percibida_traduccion_s": resumen(perc_tr), "text_a_translation_s": resumen(desde_text)}
     # hueco en el eje de audio entre textos recibidos (informativo)
     rng = sorted((e["frame"]["audio_start"], e["frame"]["audio_end"]) for e in textos
                  if isinstance(e["frame"].get("audio_start"), (int, float)))
@@ -140,6 +190,7 @@ def analizar_bus(bus_path, umbral_tramo: float = 10.0, esperar_replay: bool | No
             "init_last_seq": base, "init_state": init.get("state"), "mensajes": len(msgs), "textos": len(textos),
             "seq": [seqs[0], seqs[-1]] if seqs else None, "huecos_seq": huecos,
             "latencia_s": {k: resumen(v) for k, v in lat.items()},
+            "rotaciones": rotaciones, "watchdogs": watchdogs, "traduccion": traduccion,
             "max_hueco_audio_entre_textos_s": round(gap_audio, 2),
             "cobertura": None if cob is None else {k: cob[k] for k in ("casete", "ventanas_con_voz", "ventanas_voz_con_texto",
                                                                          "fraccion_ventanas", "tramo_sin_texto_max_s")},

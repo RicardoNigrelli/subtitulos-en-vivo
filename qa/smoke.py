@@ -52,6 +52,8 @@ def main(argv=None) -> int:
     ap.add_argument("--hub-externo", action="store_true")
     ap.add_argument("--umbral-tramo", type=float, default=10.0)
     ap.add_argument("--api", action="store_true", help="obligatorio para el modo real (gasta cuota de Gemini)")
+    ap.add_argument("--tope-envio-s", type=float, default=None,
+                    help="sólo real: tope duro de audio enviado por sesión (se pasa a worker.run --tope-envio-s)")
     ap.add_argument("--recalcular", action="store_true")
     a = ap.parse_args(argv)
     modo = "replay" if a.replay else "real"
@@ -98,7 +100,7 @@ def main(argv=None) -> int:
                 lang = langs[i % len(langs)] if langs else _lang(c)
                 cas = OUT / f"smoke-{tag}-{sid}.casete.jsonl"
                 prods.append({"sid": sid, "lang": lang, "casete_cobertura": str(cas),
-                              "cmd": cmd_real(c, sid, lang, a.duracion, cas, a.puerto)})
+                              "cmd": cmd_real(c, sid, lang, a.duracion, cas, a.puerto, a.tope_envio_s)})
             timeout = a.duracion + 120
             log(f"AUDIO A GASTAR (aprox): {a.sesiones} x {a.duracion:.0f} s = {a.sesiones * a.duracion / 60:.2f} min "
                 f"(el contador oficial es `python -m worker.cuota`)")
@@ -135,8 +137,30 @@ def main(argv=None) -> int:
             f"init.last_seq={r['init_last_seq']} exit_productor={r['exit_productor']} "
             f"percibida p50={lp['p50']} p95={lp['p95']} (n={lp['n']}) hub+red p50={hr['p50']} p95={hr['p95']} "
             f"tramo_sin_texto_max={tmax} s")
+        pv = r["latencia_s"].get("percibida_primera_ventana")
+        if pv:
+            log(f"      percibida desde la PRIMERA ventana del bloque p50={pv['p50']} p95={pv['p95']} max={pv['max']} (n={pv['n']})")
+        cob = r["cobertura"] or {}
+        log(f"      cobertura (qa/cobertura.py sobre {cob.get('casete')}): ventanas con voz={cob.get('ventanas_con_voz')} "
+            f"con texto={cob.get('ventanas_voz_con_texto')} fraccion={cob.get('fraccion_ventanas')}")
+        log(f"      rotaciones={len(r['rotaciones'])} {[(x['seq'], x['reason']) for x in r['rotaciones']]} "
+            f"watchdog={len(r['watchdogs'])}")
+        tr = r["traduccion"]
+        log(f"      traduccion: eventos={tr['eventos']} items ok={tr['items_ok']} ok:false={tr['items_ok_false']} "
+            f"textos sin item={tr['textos_sin_ningun_item']} | percibida traducción p50={tr['percibida_traduccion_s']['p50']} "
+            f"p95={tr['percibida_traduccion_s']['p95']} (n={tr['percibida_traduccion_s']['n']}) | text->translation "
+            f"p50={tr['text_a_translation_s']['p50']} p95={tr['text_a_translation_s']['p95']}")
         for f in r["fallas"]:
             log(f"      - {f}")
+    if modo == "real":  # minutos de audio que el worker registró para ESTAS sesiones (reportes/cuota-audio.log)
+        sids = {r["sid"] for r in res}
+        cl = Path(__file__).resolve().parent.parent / "reportes" / "cuota-audio.log"
+        filas = [ln for ln in (cl.read_text(encoding="utf-8").splitlines() if cl.is_file() else [])
+                 if len(ln.split("|")) >= 4 and ln.split("|")[1].strip() in sids]
+        tot = sum(float(ln.split("|")[2]) for ln in filas)
+        for ln in filas:
+            log(f"      cuota-audio.log: {ln}")
+        log(f"AUDIO REGISTRADO para {sorted(sids)}: {tot:.1f} s = {tot / 60:.2f} min ({len(filas)} líneas)")
     ok = bool(res) and all(r["ok"] for r in res) and (a.recalcular or len(res) >= a.sesiones)
     rc = 0 if ok else 1
     if modo == "replay":

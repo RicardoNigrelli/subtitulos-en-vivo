@@ -18,6 +18,7 @@ El idioma se confirmó con `yt-dlp -F`: la pista marcada "original (default)" tr
 |---|---|---|
 | `nerdearla-en-booch-300s-60s.wav` | 05:00–06:00 de cPaqkFCqWeg | corrida real de 60 s EN (casete `fixtures/casetes/b1-en-60s.jsonl`) |
 | `nerdearla-es-paez-300s-60s.wav` | 05:00–06:00 de V2YxvP-XXEc | corrida real de 60 s ES |
+| `nerdearla-en-booch-400s-90s.wav` | 06:40–08:10 de cPaqkFCqWeg | A/B de turnos B3 (manuales vs VAD del server), 90 s EN |
 
 ## Tramos usados para los casetes largos (desde el archivo completo, no se commitea)
 
