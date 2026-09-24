@@ -1,0 +1,25 @@
+# Config local de Claude Code (skills, agentes, hooks, settings): no es parte de la solución
+.claude/
+
+# Secretos
+.env
+.env.*
+!.env.example
+
+# Estado de trabajo y reportes de agentes (no son parte de la entrega)
+ESTADO.md
+reportes/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+
+# Salidas locales
+qa/out/
+*.log
