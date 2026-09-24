@@ -43,6 +43,13 @@ B4:
   que NO se reenvia (tope REENVIO_MAX_S): ESTIMACION del hueco que deja la reapertura (cota superior:
   si la vieja drena, se recupera).
 - session_start.meta.translations_langs: idiomas destino del traductor desde el arranque.
+B7 (intento corto de B5, fixtures/casetes/b5-qa-b5-en-cierre1006.jsonl; test_cierre_red.py):
+- La reapertura solo se ejecuta en el lazo de envio. Si un envio a la conexion falla (1006 que aparece
+  como ConnectionClosedError en send) o se TRABA mas de ENVIO_TIMEOUT_S (5 s), la conexion se da por
+  muerta y se reabre con meta.reason "cierre" (meta.por="envio" si nadie la cerro): antes la excepcion
+  salia de _enviar y la sala terminaba con server_cerro.
+- Un pedido pendiente (atasco/preventiva/goaway) que no llego a ejecutarse cuando la conexion muere
+  pasa a "cierre" (meta.pedido_previo guarda el motivo anterior).
 """
 from __future__ import annotations
 
@@ -81,6 +88,7 @@ class ConfigReabrir:
     reenvio_max_s: float = 15.0
     intentos_conectar: int = 3
     tick_s: float = 0.5
+    envio_timeout_s: float = 5.0      # B7: un envio trabado mas que esto = conexion muerta
 
     @classmethod
     def desde_env(cls) -> "ConfigReabrir":
@@ -89,7 +97,16 @@ class ConfigReabrir:
                    mudo_s=_env_f("MUDO_S", 10.0),
                    preventiva_s=_env_f("ROTACION_PREVENTIVA_S", 240.0),
                    drenaje_vieja_s=_env_f("DRENAJE_VIEJA_S", 20.0),
-                   reenvio_max_s=_env_f("REENVIO_MAX_S", 15.0))
+                   reenvio_max_s=_env_f("REENVIO_MAX_S", 15.0),
+                   envio_timeout_s=_env_f("ENVIO_TIMEOUT_S", 5.0))
+
+
+class _SinReabrir(ConnectionError):
+    """No se pudo abrir la conexion nueva y la vieja esta muerta: la sala termina."""
+
+
+class _EnvioTrabado(TimeoutError):
+    """Un envio a la conexion no volvio en ENVIO_TIMEOUT_S."""
 
 
 @dataclass
@@ -299,7 +316,16 @@ class SessionWorker:
 
     def pedir_reapertura(self, motivo: str, **detalle) -> None:
         """Lo llaman el timer externo, el receptor (cierre/goaway) y el chequeo por chunk."""
-        if self.fabrica is None or self._pedido is not None or self._fin_sala.is_set():
+        if self.fabrica is None or self._fin_sala.is_set():
+            return
+        if self._pedido is not None:
+            if motivo == "cierre" and self._pedido.get("reason") != "cierre":
+                # la conexion murio antes de que el pedido anterior se ejecutara: el motivo real es
+                # el cierre (B5: pedido atasco/mudo con el envio trabado, despues 1006)
+                previo = self._pedido.get("reason")
+                self._pedido = {**self._pedido, "reason": "cierre", "pedido_previo": previo, **detalle}
+                if self.rec:
+                    self.rec.client("reabrir_pedido", {**self._pedido, "actualizado": True})
             return
         con = self.con
         self._pedido = {"reason": motivo, "t": self.reloj(), "pos_s": round(self.pos_s, 2),
@@ -396,7 +422,7 @@ class SessionWorker:
         if vieja.turno_abierto and not vieja.cerrada.is_set():
             try:
                 if self.turnos_manuales:
-                    await vieja.tr.activity_end()
+                    await self._tx(vieja.tr.activity_end())
             except Exception:
                 pass
             vieja.turno_abierto = False
@@ -436,10 +462,10 @@ class SessionWorker:
         if self.rec:
             self.rec.client("retiro", {"conexion": vieja.id, "pendientes": len(vieja.mapa.pend),
                                        "espero_s": round(time.monotonic() - t0, 2)})
-        if not vieja.cerrada.is_set():
+        if not vieja.cerrada.is_set() or (vieja.cierre or {}).get("by") == "envio":
             try:
-                await vieja.tr.cerrar()
-            except Exception:
+                await asyncio.wait_for(vieja.tr.cerrar(), 5)
+            except (asyncio.TimeoutError, Exception):
                 pass
         if vieja.rx is not None:
             try:
@@ -449,6 +475,32 @@ class SessionWorker:
         self._emitir_asignaciones(vieja.mapa.vaciar(), vieja)
 
     # ---- envio de audio ---------------------------------------------------
+    async def _tx(self, aw) -> None:
+        """Todo envio a una conexion: con reapertura habilitada, tope ENVIO_TIMEOUT_S (B7)."""
+        t = self.cfg.envio_timeout_s
+        if self.fabrica is None or not t or t <= 0:
+            await aw
+            return
+        try:
+            await asyncio.wait_for(aw, t)
+        except asyncio.TimeoutError:
+            raise _EnvioTrabado(f"envio trabado mas de {t} s") from None
+
+    def _caida(self, con: _Conexion, e: BaseException) -> None:
+        """Un envio fallo o se trabo: la conexion se da por muerta y se pide reabrir por cierre."""
+        err = f"{type(e).__name__}: {e}"
+        self.res.errores.append(f"envio: {err}")
+        ya = con.cerrada.is_set()
+        if self.rec:
+            self.rec.client("send_error", {"error": err, "server_ya_cerro": ya, "conexion": con.id,
+                                           "reabre": True})
+        self.log(f"[{self.sid}] envio fallo en {con.id} ({err}): se reabre")
+        if not ya:
+            con.cierre = {"code": None, "reason": f"envio: {err}", "by": "envio"}
+            con.cerrada.set()
+        self.pedir_reapertura("cierre", code=(con.cierre or {}).get("code"),
+                              **({} if ya else {"por": "envio"}))
+
     async def _turno_start(self, v: Ventana) -> None:
         con = self.con
         if self.turnos_manuales:
@@ -456,7 +508,7 @@ class SessionWorker:
                 falta = con.t_ultimo_end + self.gap_s - self.reloj()
                 if falta > 0:
                     await self.dormir(falta)   # la unica espera: el gap, no el audio
-            await con.tr.activity_start()
+            await self._tx(con.tr.activity_start())
         con.turno_abierto = True
         if self.rec:
             self.rec.client("activity_start", {"ventana": v.idx, "audio_start": v.audio_start},
@@ -464,14 +516,14 @@ class SessionWorker:
 
     async def _audio(self, data: bytes) -> None:
         con = self.con
-        await con.tr.enviar_audio(data)
+        await self._tx(con.tr.enviar_audio(data))
         con.chunks += 1
         self.res.chunks_enviados += 1
 
     async def _turno_end(self, v: Ventana, reenvio: bool = False) -> None:
         con = self.con
         if self.turnos_manuales:
-            await con.tr.activity_end()
+            await self._tx(con.tr.activity_end())
         con.turno_abierto = False
         con.t_ultimo_end = self.reloj()
         con.mapa.ventana_cerrada(InfoVentana(v.idx, v.audio_start, v.audio_end, v.t_captured,
@@ -487,12 +539,27 @@ class SessionWorker:
                             t=con.t_ultimo_end, conexion=con.id)
 
     async def _ejecutar(self, a: Accion) -> None:
+        # B7: si el envio falla o se traba, la conexion se da por muerta, se reabre (cierre) y la
+        # MISMA accion se repite en la nueva (el chunk que fallo no se conto ni se guardo)
+        for intento in range(self.cfg.intentos_conectar + 1):
+            try:
+                await self._ejecutar1(a)
+                return
+            except _SinReabrir:
+                raise
+            except Exception as e:
+                if (self.fabrica is None or self._fin_sala.is_set()
+                        or intento >= self.cfg.intentos_conectar):
+                    raise
+                self._caida(self.con, e)
+
+    async def _ejecutar1(self, a: Accion) -> None:
         if self._pedido is not None and self.fabrica is not None:
             vieja_muerta = self.con.cerrada.is_set()
             if a.kind == "start" or (vieja_muerta and a.kind in ("audio", "end")):
                 if not await self._rotar(a.ventana if a.kind == "start" else None):
                     if self.con.cerrada.is_set():
-                        raise ConnectionError("no se pudo reabrir y la conexion murio")
+                        raise _SinReabrir("no se pudo reabrir y la conexion murio")
         if a.kind == "start":
             await self._turno_start(a.ventana)
             self.abierta = a.ventana

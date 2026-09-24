@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import html
 import json
 import os
 import re
@@ -173,7 +174,20 @@ def parsear(raw: str, n: int) -> Optional[list[str]]:
         return None
     if not isinstance(arr, list) or len(arr) != n or not all(isinstance(x, str) for x in arr):
         return None
-    return arr
+    return [limpiar(x) for x in arr]
+
+
+# B7 (adversario B5): 4 traducciones EN->ES de la corrida larga llegaron del modelo con entidades HTML
+# ("trav&eacute;s") y caracteres de control (U+0010 dos veces antes de "Qu&eacute;"), y la vista las
+# mostraba tal cual.
+_CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")
+
+
+def limpiar(texto: str) -> str:
+    """Desescapa entidades HTML (una pasada) y DESPUES quita los caracteres de control salvo el salto
+    de linea (asi "&#16;" tampoco sobrevive). No toca espacios ni corrige otras roturas del modelo
+    (p.ej. "abstracci3n")."""
+    return _CONTROL.sub("", html.unescape(texto))
 
 
 # ---- limitador -----------------------------------------------------------------------------

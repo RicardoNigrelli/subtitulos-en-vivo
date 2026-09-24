@@ -15,6 +15,12 @@ el SessionWorker va ENVIANDO, para probar "reabrir con solape" (worker/session.p
   deja de entregar TODO (sesion muda: sin textos, sin voiceActivity, sin error). Las conexiones que se
   abran despues funcionan (simula que la sesion nueva anda).
 - La linea server `close` del casete se entrega como {"_close": ...} (dispara la reapertura por cierre).
+- B7 `red_caida=S` (misma escala que mudo_desde): la conexion activa al cruzar S simula la caida de red
+  del intento corto de B5 (fixtures/casetes/b5-qa-b5-en-cierre1006.jsonl): el envio queda TRABADO
+  `red_bloqueo_s` segundos reales y despues el receptor ve `red_close` (1006 "sin frame de cierre",
+  by "red") y ESE MISMO envio falla con ConnectionError (como ConnectionClosedError del SDK); los
+  envios siguientes a esa conexion fallan. Con red_bloqueo_s=None el envio queda colgado para siempre
+  (solo lo destraba el tope de envio del SessionWorker). Las conexiones que se abran despues andan.
 
 CLI (via worker.run): --transporte casete:<archivo.jsonl>[:mudo=S]
 ROTULO (B4): todo mensaje que sale al bus lleva replay:true y meta.source="transporte-casete", y el
@@ -106,6 +112,7 @@ class TransporteCasete:
         self.muda = False
         self.entregadas = 0
         self.descartadas_mudo = 0
+        self.caida = False            # B7: esta conexion "perdio la red" (red_caida)
 
     def config_enviada(self) -> dict:
         return {"model": self.ROTULO,
@@ -152,9 +159,26 @@ class TransporteCasete:
             else:
                 self.q.put_nowait(self._reescribir(linea.payload))
 
+    async def _red(self) -> None:
+        """B7: caida de red simulada (ver docstring del modulo)."""
+        f = self.fab
+        if self.caida:
+            raise ConnectionError("no close frame received or sent (transporte_casete: red caida)")
+        if f.red_caida is None or f.red_usada or self.ref + self.acc < f.red_caida:
+            return
+        f.red_usada = True
+        self.caida = True
+        if f.red_bloqueo_s is None:
+            await asyncio.Event().wait()          # colgado: nunca vuelve (solo lo cancela un tope)
+        await asyncio.sleep(f.red_bloqueo_s)
+        self.q.put_nowait({"_close": {**f.red_close, "casete": True, "simulado": True}})
+        await asyncio.sleep(0)       # B5: el receptor registro el close 0,6 ms ANTES del send_error
+        raise ConnectionError("no close frame received or sent (transporte_casete: red caida)")
+
     async def enviar_audio(self, data: bytes) -> None:
         if self.cerrado:
             raise ConnectionError("transporte_casete cerrado")
+        await self._red()
         self.acc = round(self.acc + len(data) / BYTES_POR_S, 4)
         self._entregar()
         await asyncio.sleep(0)       # deja correr al receptor (tests sin tiempo real)
@@ -162,10 +186,12 @@ class TransporteCasete:
     async def activity_start(self) -> None:
         if self.cerrado:
             raise ConnectionError("transporte_casete cerrado")
+        await self._red()
 
     async def activity_end(self) -> None:
         if self.cerrado:
             raise ConnectionError("transporte_casete cerrado")
+        await self._red()
         self.acc_end = self.acc
         self._entregar()
         await asyncio.sleep(0)
@@ -187,10 +213,16 @@ class TransporteCasete:
 class FabricaCasete:
     """fabrica(corte_s) -> TransporteCasete. La primera conexion arranca en 0."""
 
-    def __init__(self, casete: str, mudo_desde: Optional[float] = None):
+    def __init__(self, casete: str, mudo_desde: Optional[float] = None,
+                 red_caida: Optional[float] = None, red_bloqueo_s: Optional[float] = 0.0,
+                 red_close: Optional[dict] = None):
         self.guion = Guion(casete)
         self.mudo_desde = mudo_desde
         self.mudo_usado = False
+        self.red_caida = red_caida
+        self.red_bloqueo_s = red_bloqueo_s
+        self.red_close = red_close or {"code": 1006, "reason": "sin frame de cierre", "by": "red"}
+        self.red_usada = False
         self.close_entregado = False
         self.turnos = True          # False si el worker corre con VAD automatico (sin activity_end)
         self.n = 0

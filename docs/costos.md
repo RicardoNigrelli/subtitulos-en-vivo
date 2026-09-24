@@ -4,7 +4,7 @@
 de forma confiable durante una transcripción normal: en toda la vibeathon apareció UNA sola vez,
 justo en el mensaje de cierre de una sesión que se quedó sin cupo (ver abajo). No hay un endpoint de
 facturación consultado en este proyecto. Todo lo que sigue combina ese único dato real observado con
-los precios públicos de Gemini (a completar, marcador `<PRECIO...>`): es una **estimación** para
+los precios públicos de Gemini (sección "Precios", consultados el 24/09/2026): es una **estimación** para
 presupuestar, no una factura reproducida.
 
 ## Dato real: tokens de audio por segundo (n=1)
@@ -35,17 +35,18 @@ grep -o '"responseTokenCount": [0-9]*' fixtures/casetes/b1-nerdearla-en-intento2
 ```
 tokens_audio_por_minuto = 60 s/min × 25 tokens/s  =  1500 tokens de audio por minuto (ESTIMACIÓN)
 
-costo_estimado_por_minuto  =  1500 × <PRECIO_INPUT_AUDIO_POR_TOKEN>            # USD, ESTIMACIÓN
-costo_estimado_por_sesion  =  1500 × <PRECIO_INPUT_AUDIO_POR_TOKEN> × minutos_de_la_charla
+costo_estimado_por_minuto  =  1500 × 3,50 USD / 1 000 000  ≈ 0,00525 USD        # ESTIMACIÓN (la página lo redondea a 0,005 USD/min)
+costo_estimado_por_sesion  =  0,00525 USD × minutos_de_la_charla  (+ salida de texto ≈ 0,004 USD/min)
 ```
 
 Ejemplo numérico, una charla de 30 minutos (del orden de las citadas en
-`fixtures/audio/FUENTES.md`), con el precio todavía sin completar:
+`fixtures/audio/FUENTES.md`):
 
 ```
 1500 tokens/min × 30 min = 45 000 tokens de audio por sesión
 
-costo_estimado_por_sesion ≈ 45 000 × <PRECIO_INPUT_AUDIO_POR_TOKEN>   # USD, ESTIMACIÓN
+costo_estimado_por_sesion ≈ 45 000 × 3,50 / 1 000 000 ≈ 0,16 USD de audio de entrada
+                             + 30 × 0,004 ≈ 0,12 USD de texto de salida  ⇒ ≈ 0,28 USD por charla   # ESTIMACIÓN
 ```
 
 Con **dos sesiones simultáneas** (el mínimo de R21): duplicar el resultado anterior. El costo NO
@@ -74,7 +75,8 @@ de `<TOKENS_LOTE>` tokens de entrada+salida por llamada (a completar según el l
 bloques traducidos):
 
 ```
-costo_estimado_traduccion_por_minuto  ≈  12 × <TOKENS_LOTE> × <PRECIO_TEXTO_POR_TOKEN>   # USD, ESTIMACIÓN
+costo_estimado_traduccion_por_minuto  ≈  12 lotes × (150 tokens entrada × 0,30 + 60 tokens salida × 2,50) / 1 000 000
+                                      ≈  0,0023 USD por minuto  (≈ 0,07 USD por charla de 30 min)   # ESTIMACIÓN, flash-lite 3.5
 ```
 
 Con traducción en las dos direcciones (EN→ES y ES→EN, `--traducir-a auto`) el estimado de arriba se
@@ -83,7 +85,7 @@ duplica.
 ## Precios (completar antes de publicar un número final)
 
 Esta estimación depende de precios que cambian y que este documento NO fija de memoria. Completar
-`<PRECIO_INPUT_AUDIO_POR_TOKEN>`, `<PRECIO_OUTPUT_AUDIO_POR_TOKEN>` y `<PRECIO_TEXTO_POR_TOKEN>` con
+los precios de la sección "Precios" con
 los valores vigentes de la página pública de precios de Gemini:
 
 <https://ai.google.dev/gemini-api/docs/pricing>
@@ -102,3 +104,22 @@ Modelos usados (ver `.env.example`): `gemini-3.5-transcribe-live` (transcripció
 - Durante la vibeathon se usó el nivel gratuito (sin cargo); esta fórmula sirve para presupuestar
   cuando el proyecto pasa a un nivel pago o a más sesiones de las que entran en ese nivel gratuito
   (ver "Cómo escalar a más sesiones" en el [`README.md`](../README.md), R21/C3).
+
+## Precios (consultados el 24/09/2026 en https://ai.google.dev/gemini-api/docs/pricing, nivel pago)
+
+| Modelo | Entrada | Salida |
+|---|---|---|
+| Gemini 3.5 Transcribe Live | 3,50 USD por 1M tokens de audio, o 0,005 USD por minuto de audio | 21,00 USD por 1M tokens de texto, o 0,004 USD por minuto |
+| Gemini 3.5 Flash-Lite (texto) | 0,30 USD por 1M tokens | 2,50 USD por 1M tokens |
+| Gemini 3.1 Flash-Lite (texto) | 0,25 USD por 1M tokens | 1,50 USD por 1M tokens |
+
+La misma página indica que el audio se cuenta a **25 tokens por segundo**, lo que coincide con el único
+`usageMetadata` observado (7072 tokens / 282,8 s). El nivel gratuito figura como "Free of charge" con los
+límites de frecuencia citados en `README.md` (15 RPM / 500 RPD por modelo de texto; TPM 20K en transcripción).
+Los precios pueden cambiar: volver a consultar la página antes de presupuestar un evento.
+
+**Orden de magnitud para un evento (estimación), cuenta reproducible en una línea:**
+`python -c "m=5*8*60; print(round(m*0.00525,1), round(m*0.004,1), round(m*0.0023,1), round(m*(0.00525+0.004+0.0023),1))"`
+→ `12.6 9.6 5.5 28.2`. Es decir: 5 salas × 8 horas = 2400 minutos de audio ⇒ ≈ 12,6 USD de
+transcripción (entrada) + ≈ 9,6 USD de salida de texto + ≈ 5,5 USD de traducción ⇒ **≈ 28 USD por día de
+conferencia** con dos idiomas por sala, sin contar la infraestructura del hub (un contenedor).

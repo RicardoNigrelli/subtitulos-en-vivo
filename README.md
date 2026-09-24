@@ -121,6 +121,7 @@ fan-out) sin credenciales ni costo (eje 3 de escalabilidad, ver más abajo).
 ### Manual, con venv
 
 ```bash
+python -m venv .venv                                       # una vez (Python 3.11+; en Linux/macOS: .venv/bin/python en lo que sigue)
 .venv/Scripts/python -m pip install -r requirements.txt   # una vez
 
 # hub + vista de audiencia + panel, los tres en el puerto 8080
@@ -218,6 +219,7 @@ estado por sesión, p50/p95 de latencia, rotaciones con motivo (cierre / atasco 
 - [`PROMPTS.md`](PROMPTS.md) — cómo se construyó este proyecto con agentes durante la vibeathon,
   qué se investigó antes (permitido, R12) y qué se escribió durante (obligatorio, R11a/R11b); es la
   respuesta preparada a X2.
+- [`worker/README.md`](worker/README.md) — CLI completa del worker (`worker.run`, `worker.replay`, importador, cuota, medición de traducción), variables de entorno y formato del casete de tres capas.
 - [`docs/costos.md`](docs/costos.md) — estimación de costo por minuto de audio y por sesión.
 - [`hub/README.md`](hub/README.md) y [`contracts/README.md`](contracts/README.md) — protocolo y
   contrato de mensajes entre worker, hub y la vista.

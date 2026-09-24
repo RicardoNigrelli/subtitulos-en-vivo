@@ -66,6 +66,9 @@ def medir(path: str) -> dict:
 
 def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] in ("-h", "--help"):     # B7: antes '--help' se leia como archivo
+        print(__doc__)
+        return 0 if args else 2
     rc, filas = 0, []
     for c in args:
         r = medir(c)

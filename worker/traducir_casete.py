@@ -4,7 +4,7 @@
     python -m worker.traducir_casete fixtures/casetes/b1-es-60s.jsonl --a en
 
 - Lee las lineas `emit` de tipo `text`, arma los lotes con la MISMA regla que el worker en vivo
-  (worker.traductor.Lotes: hasta 3 textos u 8 s desde el primero pendiente) y hace UNA llamada real
+  (worker.traductor.Lotes: LOTE_MAX textos o LOTE_S s desde el primero pendiente; ver worker/traductor.py) y hace UNA llamada real
   por lote (worker.traductor.Traductor: limitador 12 RPM por modelo, rotacion, contador en
   reportes/cuota-texto.log).
 - Casete nuevo = el original (server/client/emit sin cambios) + eventos `translation` intercalados
