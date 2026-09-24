@@ -6,7 +6,7 @@ Fuente de cada cifra usada: `ESTADO.md` (fila citada entre paréntesis) o un rep
 como si fuera absoluta, generalizar cada cuántos segundos aparece un subtítulo, o cualquier número
 sin comando). Verificación de esto último: `reportes/demo-b4.md` §2 (`grep` sobre este archivo).
 
-Reemplazar antes de enviar: `<REPO_URL>` (repo público, lo crea ops/Ricardo, B6-B7) y
+Reemplazar antes de enviar: `https://github.com/RicardoNigrelli/subtitulos-en-vivo` (repo público, lo crea ops/Ricardo, B6-B7) y
 `<YOUTUBE_URL>` (video subido por Ricardo, B6/B10).
 
 ---
@@ -23,7 +23,7 @@ Reemplazar antes de enviar: `<REPO_URL>` (repo público, lo crea ops/Ricardo, B6
 
 ## Links
 
-- Repo: `<REPO_URL>`
+- Repo: `https://github.com/RicardoNigrelli/subtitulos-en-vivo`
 - Video: `<YOUTUBE_URL>`
 
 ## Built With
