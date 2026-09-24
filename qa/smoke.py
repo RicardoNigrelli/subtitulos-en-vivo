@@ -55,12 +55,23 @@ def main(argv=None) -> int:
     ap.add_argument("--tope-envio-s", type=float, default=None,
                     help="sólo real: tope duro de audio enviado por sesión (se pasa a worker.run --tope-envio-s)")
     ap.add_argument("--recalcular", action="store_true")
+    ap.add_argument("--sids", default="", help="session_id por sesión, separados por coma (default qa-<tag>-<i>)")
+    ap.add_argument("--inicio", type=float, default=0.0, help="sólo real: segundo de inicio en la fuente (worker.run --inicio)")
     a = ap.parse_args(argv)
     modo = "replay" if a.replay else "real"
     tag = a.tag or ("b2-replay" if modo == "replay" else "real")
     tag = re.sub(r"[^a-z0-9_-]", "-", tag.lower())
     suf = ".recalculo" if a.recalcular else ""  # el recálculo no pisa el log de la corrida
     log_path, json_path = OUT / f"smoke-{tag}{suf}.log", OUT / f"smoke-{tag}{suf}.json"
+    sids = [x for x in a.sids.split(",") if x]
+
+    def sid_de(i):
+        return sids[i] if i < len(sids) else f"qa-{tag}-{i + 1}"[:64]
+
+    def buses_de_disco():
+        if sids:
+            return [str(OUT / f"smoke-{tag}-{s_}.bus.jsonl") for s_ in sids if (OUT / f"smoke-{tag}-{s_}.bus.jsonl").is_file()]
+        return sorted(glob.glob(str(OUT / f"smoke-{tag}-qa-{tag}-[0-9]*.bus.jsonl")))
     OUT.mkdir(parents=True, exist_ok=True)
     lineas: list[str] = []
 
@@ -80,7 +91,7 @@ def main(argv=None) -> int:
             fuentes = [x for x in a.replay.split(",") if x]
             for i in range(a.sesiones):
                 c = fuentes[i % len(fuentes)]
-                sid = f"qa-{tag}-{i + 1}"[:64]
+                sid = sid_de(i)
                 cab = json.loads(Path(c).read_text(encoding="utf-8").splitlines()[0])
                 prods.append({"sid": sid, "lang": _lang(c, cab.get("lang")), "casete_cobertura": c,
                               "cmd": cmd_replay(c, sid, a.puerto, a.velocidad)})
@@ -96,11 +107,11 @@ def main(argv=None) -> int:
                 return cerrar(2)
             for i in range(a.sesiones):
                 c = clips[i % len(clips)]
-                sid = f"qa-{tag}-{i + 1}"[:64]
+                sid = sid_de(i)
                 lang = langs[i % len(langs)] if langs else _lang(c)
                 cas = OUT / f"smoke-{tag}-{sid}.casete.jsonl"
                 prods.append({"sid": sid, "lang": lang, "casete_cobertura": str(cas),
-                              "cmd": cmd_real(c, sid, lang, a.duracion, cas, a.puerto, a.tope_envio_s)})
+                              "cmd": cmd_real(c, sid, lang, a.duracion, cas, a.puerto, a.tope_envio_s, a.inicio)})
             timeout = a.duracion + 120
             log(f"AUDIO A GASTAR (aprox): {a.sesiones} x {a.duracion:.0f} s = {a.sesiones * a.duracion / 60:.2f} min "
                 f"(el contador oficial es `python -m worker.cuota`)")
@@ -117,14 +128,14 @@ def main(argv=None) -> int:
             hub = levantar_hub(a.puerto, OUT / f"smoke-{tag}.hub.log")
             log(f"hub PROPIO pid={hub.pid} en {a.puerto} (log qa/out/smoke-{tag}.hub.log)")
         try:
-            for p in glob.glob(str(OUT / f"smoke-{tag}-qa-{tag}-[0-9]*.bus.jsonl")):
+            for p in buses_de_disco():
                 Path(p).unlink()
             asyncio.run(correr(prods, a.puerto, f"smoke-{tag}", timeout, log=log))
         finally:
             if hub is not None:
                 matar(hub)
                 log(f"hub propio detenido (pid={hub.pid})")
-    buses = sorted(glob.glob(str(OUT / f"smoke-{tag}-qa-{tag}-[0-9]*.bus.jsonl")))
+    buses = buses_de_disco()
     if not buses:
         log("no hay archivos .bus.jsonl para este tag. exit 1")
         return cerrar(1)

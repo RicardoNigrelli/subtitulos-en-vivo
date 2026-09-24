@@ -1,8 +1,9 @@
-// app.js — panel de producción (monitor, Bloque 3, R8e)
+// app.js — panel de producción (monitor, Bloque 3, R8e; same-origin + Bearer client-side: B5)
 //
 // Fuentes de datos (contracts/README.md, hub/README.md; skill ui-subtitulos "Panel de producción"):
 //   - GET /api/sesiones cada 2 s: session_id, lang, title, replay, last_seq, last_t_emit, last_t_hub,
-//     state (live/idle/ended), translations_langs, viewers, viewers_por_idioma. Público, sin token.
+//     state (live/idle/ended), translations_langs, source, test, viewers, viewers_por_idioma. Público,
+//     sin token (source/test: B4, rótulo de sesiones de prueba, ver más abajo).
 //   - GET /api/sesiones/<id>/historial?desde=<seq>&tipos=todos cada 2 s: backfill de TODO lo que el
 //     hub todavía tiene en memoria (text, rotation, watchdog, error, session_start, session_end).
 //     `translation` y `partial` son EFÍMEROS (contracts: TIPOS_EFIMEROS): el hub NUNCA los guarda,
@@ -10,9 +11,24 @@
 //   - WS público /ws/<session_id> (sin token, igual que cualquier espectador): stream en vivo de
 //     TODOS los tipos salvo el heartbeat del worker (el hub no lo reenvía a audiencia). Es la única
 //     fuente para `partial`, `translation` y para la latencia PERCIBIDA (t_receive - t_captured).
-//   - GET /panel-api/metricas (servido por panel/servir.py, que agrega el Bearer del lado del server:
-//     el token nunca llega al navegador) = espejo de GET /api/metricas del hub (Authorization: Bearer),
-//     con los segundos de audio estimados (heartbeat.meta.audio_seconds_sent) por sesión.
+//   - GET /api/metricas (B5: DIRECTO al hub, ya no vía proxy `/panel-api/`; CORS abierto para GET y
+//     permite el header `Authorization`, ver hub/app.py `cors`): requiere `Authorization: Bearer
+//     <HUB_TOKEN>`. El token lo tipea el operador UNA vez en el campo de la cabecera y queda en
+//     `sessionStorage` (NUNCA en la query string ni en la URL: skill ui-subtitulos "Token"); sin
+//     token no se llama a este endpoint y las celdas que dependen de él (audio estimado) lo dicen
+//     ("sin token"). El resto del panel (rotaciones, watchdog, errores, ok:false, parciales/min,
+//     viewers) sale de /api/sesiones y del WS público y no necesita token.
+//
+// B5: resolución de origen del hub — MISMO PATRÓN que web/app.js (frontend), mismo razonamiento: la
+// única señal confiable del lado cliente es el puerto. `panel/servir.py` (dev, este agente) siempre
+// corre en 8102; cualquier otro origen (el hub sirviendo `--panel panel` en su propio puerto, p. ej.
+// 8080 o uno de prueba) se interpreta como "me sirve el hub" y habla a `location.host` directo.
+// `?hub=host:puerto` pisa esto siempre. [SUPUESTO: monitor, siguiendo la convención ya usada por
+// frontend en B4] no hay forma de saberlo con certeza sin una vuelta previa.
+//
+// B5: sesiones `test:true` (fixtures `contracts/ejemplos/`, transporte de casete sin API — NO son
+// ASR en vivo) llevan el rótulo TEST y están ocultas por defecto; toggle "mostrar pruebas".
+// B5: `rotation.meta.audio_lost_s`, cuando viene, se acumula por sesión (columna Rotaciones).
 //
 // Reglas de la skill ui-subtitulos ("Panel de producción"): p50/p95 SIEMPRE (nearest-rank), NUNCA
 // promedio; estado nunca sólo por color; rotaciones/reaperturas/errores como contadores con
@@ -23,16 +39,36 @@
   // ---------------------------------------------------------------- configuración
   var params = new URLSearchParams(location.search);
   var hubParam = params.get('hub');
-  var hubHost = hubParam || (location.hostname + ':8100');
-  var HTTP_BASE = 'http://' + hubHost;
-  var WS_BASE = 'ws://' + hubHost;
 
-  var POLL_MS = 2000;           // /api/sesiones, historial de reconciliación y /panel-api/metricas
+  var PUERTO_DEV_PANEL = '8102';
+  var mismoOrigen = !hubParam && location.protocol !== 'file:' && location.port !== PUERTO_DEV_PANEL;
+  var httpScheme = (mismoOrigen && location.protocol === 'https:') ? 'https' : 'http';
+  var wsScheme = (mismoOrigen && location.protocol === 'https:') ? 'wss' : 'ws';
+  var hubHost = hubParam || (mismoOrigen ? location.host : (location.hostname + ':8100'));
+  var HTTP_BASE = httpScheme + '://' + hubHost;
+  var WS_BASE = wsScheme + '://' + hubHost;
+
+  var TOKEN_KEY = 'panelHubToken'; // sessionStorage; NUNCA query string (skill ui-subtitulos "Token")
+
+  var POLL_MS = 2000;           // /api/sesiones, historial de reconciliación y /api/metricas
   var TICK_MS = 1000;           // re-render (para que "sin texto hace N s" y parciales/60s avancen)
   var SIN_TEXTO_S = 15;         // umbral documentado (brief B3): live + > 15 s sin `text` => "sin texto"
   var MIN_N_PERCENTIL = 10;     // por debajo: "n insuficiente" (brief B3), nunca se inventa un p95
   var VENTANA_PARCIALES_S = 60; // ventana deslizante de "parciales / 60 s" (no es promedio de sesión)
   var WS_BACKOFF_MAX_MS = 10000;
+
+  // ---------------------------------------------------------------- token (Bearer, client-side, B5)
+  function leerToken() {
+    try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+  }
+  function guardarToken(valor) {
+    try {
+      if (valor) sessionStorage.setItem(TOKEN_KEY, valor);
+      else sessionStorage.removeItem(TOKEN_KEY);
+    } catch (e) {
+      console.warn('panel: sessionStorage no disponible, el token sólo dura mientras esté escrito en el campo', e);
+    }
+  }
 
   // ---------------------------------------------------------------- utilidades
   function esc(s) {
@@ -85,7 +121,7 @@
   function nuevaSesion(id) {
     return {
       id: id,
-      lang: null, title: null, replay: null,
+      lang: null, title: null, replay: null, test: null,
       translationsLangs: [],
       hubState: 'waiting', lastSeqHub: null, lastTEmitHub: null,
       viewers: 0, viewersPorIdioma: {},
@@ -100,7 +136,7 @@
       latGrabada: [],          // t_emit - t_captured (todas las sesiones; contrato: "latencia del worker")
       latPercibida: [],        // t_receive - t_captured (sólo mensajes EN VIVO de sesiones no-replay)
 
-      rotaciones: 0, rotacionesPorMotivo: {}, ultimaRotacionEn: null,
+      rotaciones: 0, rotacionesPorMotivo: {}, ultimaRotacionEn: null, audioLostS: 0,
       watchdogEventos: 0, watchdogReaperturas: 0, ultimoWatchdogEn: null,
       errores: 0, ultimoErrorEn: null, ultimoErrorDetalle: null,
       traduccionesOkFalse: 0, traduccionesOkTrue: 0, ultimaTraduccionEn: null,
@@ -151,6 +187,12 @@
         s.ultimaRotacionEn = tHubMs;
         var motivo = (msg.meta && msg.meta.reason) || 'sin motivo';
         s.rotacionesPorMotivo[motivo] = (s.rotacionesPorMotivo[motivo] || 0) + 1;
+        // B5: rotation.meta.audio_lost_s (audio que la conexión vieja no cubrió y la nueva no
+        // reenvió del todo; sólo motivos atasco/cierre lo traen > 0, ver worker/session.py). Se
+        // ACUMULA por sesión, no se reemplaza: cada rotación puede sumar audio perdido distinto.
+        if (msg.meta && typeof msg.meta.audio_lost_s === 'number') {
+          s.audioLostS += msg.meta.audio_lost_s;
+        }
         break;
       }
       case 'watchdog':
@@ -220,6 +262,7 @@
         if (msg.title) s.title = msg.title;
         if (msg.session_lang) s.lang = msg.session_lang;
         if (msg.replay !== undefined && msg.replay !== null) s.replay = msg.replay;
+        if (msg.test !== undefined && msg.test !== null) s.test = msg.test === true; // B4/B5
         if (Array.isArray(msg.translations_langs)) s.translationsLangs = msg.translations_langs;
         (msg.lines || []).forEach(function (linea) { aplicarMensaje(s, linea, 'historial'); });
         return;

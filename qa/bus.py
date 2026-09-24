@@ -21,9 +21,11 @@ def cmd_replay(casete, sid, port, velocidad=1.0):
             "--sesion", sid, "--velocidad", str(velocidad)]
 
 
-def cmd_real(clip, sid, lang, dur, casete_salida, port, tope_envio_s=None):
+def cmd_real(clip, sid, lang, dur, casete_salida, port, tope_envio_s=None, inicio=0.0):
     c = [PY, "-m", "worker.run", "--archivo", str(clip), "--sesion", sid, "--lang", lang,
          "--duracion", str(dur), "--casete", str(casete_salida), "--hub", f"ws://localhost:{port}/ingest"]
+    if inicio:  # segundo de inicio en la fuente (flag de worker.run; B5: charla completa desde 300 s)
+        c += ["--inicio", str(inicio)]
     if tope_envio_s:  # tope DURO de audio enviado a la API por sesión (flag de worker.run)
         c += ["--tope-envio-s", str(tope_envio_s)]
     return c
@@ -108,6 +110,14 @@ def analizar_bus(bus_path, umbral_tramo: float = 10.0, esperar_replay: bool | No
         fallas.append(f"seq no continuo: {huecos[:10]}")
     if not any(e["frame"].get("type") == "session_end" for e in msgs):
         fallas.append("no llegó session_end")
+    if esperar_replay is False:  # B5: en corridas REALES la sesión tiene que terminar por fin de fuente, sin `error`
+        errs = [e["frame"] for e in msgs if e["frame"].get("type") == "error"]
+        if errs:
+            fallas.append(f"{len(errs)} frame(s) error: " + "; ".join(
+                f"seq {x.get('seq')} {(x.get('meta') or {}).get('code')} {(x.get('meta') or {}).get('message')}" for x in errs))
+        fin = [(e["frame"].get("meta") or {}).get("reason") for e in msgs if e["frame"].get("type") == "session_end"]
+        if fin and fin[-1] != "fin_fuente":
+            fallas.append(f"session_end.reason={fin[-1]} (se esperaba fin_fuente)")
     if meta.get("exit_productor") != 0:
         fallas.append(f"productor exit={meta.get('exit_productor')}")
     if esperar_replay is not None:

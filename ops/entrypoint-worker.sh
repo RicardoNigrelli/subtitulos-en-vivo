@@ -1,22 +1,89 @@
 #!/bin/sh
-# Elige ASR real o modo replay segun si GEMINI_API_KEY esta presente (skill contexto, eje 3 de C3:
-# el pipeline entero corre en modo replay sin cuota; skill cuota-gemini: un solo agente -audio-
+# Elige ASR real o modo replay segun MODO y GEMINI_API_KEY (skill contexto, eje 3 de C3: el
+# pipeline entero corre en modo replay sin cuota; skill cuota-gemini: un solo agente -audio-
 # pipeline- gasta cuota real, todo lo demas usa casetes grabados).
 #
-# TODO confirmar con audio-pipeline: flags reales de `worker.run` (sesion, idioma, fuente de audio).
-# CASETE_REPLAY apunta al unico casete real que existe al cierre de B1 (fixtures/casetes/b1-en-60s.jsonl,
-# corrida de 60s citada en reportes/ops-b1.md); es un default de ops, no confirmado por audio-pipeline.
-# Van a aparecer mas casetes (2 completos con GoAway, ~10 min, EN y ES) en bloques siguientes: cuando
-# eso pase, actualizar este default o pasar CASETE_REPLAY por variable de entorno.
+# Regla (B5, pedido del bloque):
+#   - MODO=replay, O NO hay GEMINI_API_KEY  => REPLAY (rotulado; NO satisface R17a/R21 por si solo).
+#   - MODO=real Y hay GEMINI_API_KEY        => ASR REAL con worker.run.
+#   - MODO=real pero SIN GEMINI_API_KEY     => cae a REPLAY con aviso (nunca intenta la API sin key).
+# MODO=replay es un override DURO: aunque el .env tenga una key real, fuerza replay (asi
+# `MODO=replay docker compose up` nunca gasta cuota aunque el env_file cargue la key real).
+#
+# REPLAY: reproduce en BUCLE, uno por proceso en paralelo, todos los casetes *-trad*.jsonl de
+# fixtures/casetes/ (traduccion ya incluida) contra el hub. Cada archivo es una "sesion" propia
+# (session_id = nombre del archivo), asi se ven varias sesiones en simultaneo sin gastar cuota.
+#
+# REAL: worker/README.md (que audio-pipeline escribe este bloque) todavia no existia al escribir
+# este script (ver reportes/ops-b5.md); se usan los flags de reportes/audio-pipeline-b4.md y
+# docs/guion-video.md: un clip de 60 s por idioma, citado en fixtures/audio/FUENTES.md. Corre UNA
+# vez (no hace bucle) para no gastar cuota sin limite; es el camino que verifica qa en B7 con key.
 set -eu
 
-HUB_PORT="${HUB_PORT:-8100}"
-CASETE_REPLAY="${CASETE_REPLAY:-fixtures/casetes/b1-en-60s.jsonl}"
+HUB_PORT="${HUB_PORT:-8080}"
+HUB_URL="ws://hub:${HUB_PORT}/ingest"
+MODO="${MODO:-replay}"
 
-if [ -n "${GEMINI_API_KEY:-}" ]; then
-    echo "[entrypoint-worker] GEMINI_API_KEY presente -> modo ASR real"
-    exec python -m worker.run "$@"
+replay_en_bucle() {
+    echo "[entrypoint-worker] MODO REPLAY (rotulado; no cumple R17a/R21 por si solo) -> $HUB_URL"
+    encontrados=0
+    if [ -n "${CASETE_REPLAY:-}" ]; then
+        # Override manual (documentado en .env.example): UN solo casete en bucle, en vez del
+        # descubrimiento automatico de abajo. Util para fijar una sola sesion de demo.
+        set -- "$CASETE_REPLAY"
+    else
+        set -- fixtures/casetes/*-trad*.jsonl
+    fi
+    for casete in "$@"; do
+        [ -e "$casete" ] || continue
+        encontrados=1
+        sesion=$(basename "$casete" .jsonl)
+        (
+            while true; do
+                echo "[entrypoint-worker] replay $casete -> sesion $sesion"
+                python -m worker.replay "$casete" --hub "$HUB_URL" --sesion "$sesion" || true
+                sleep 3
+            done
+        ) &
+    done
+    if [ "$encontrados" = "0" ]; then
+        echo "[entrypoint-worker] no hay casetes para reproducir (CASETE_REPLAY o fixtures/casetes/*-trad*.jsonl)" >&2
+        exit 2
+    fi
+    wait
+}
+
+asr_real() {
+    echo "[entrypoint-worker] MODO=real y GEMINI_API_KEY presente -> ASR real (worker.run), 2 sesiones (R21)"
+    python -m worker.run \
+        --archivo fixtures/audio/clips/nerdearla-en-booch-300s-60s.wav \
+        --sesion docker-en --lang en --duracion 60 \
+        --casete /tmp/docker-en.jsonl --hub "$HUB_URL" \
+        --titulo "The Third Golden Age - Grady Booch (clip 300s)" \
+        --url "https://www.youtube.com/watch?v=cPaqkFCqWeg" \
+        --vocab "Nerdearla,Grady Booch" &
+    python -m worker.run \
+        --archivo fixtures/audio/clips/nerdearla-es-paez-300s-60s.wav \
+        --sesion docker-es --lang es --duracion 60 \
+        --casete /tmp/docker-es.jsonl --hub "$HUB_URL" \
+        --titulo "Brownfield Engineering - Nicolas Paez (clip 300s)" \
+        --url "https://www.youtube.com/watch?v=V2YxvP-XXEc" \
+        --vocab "Nerdearla,Nicolas Paez,brownfield" &
+    wait
+}
+
+if [ "$MODO" = "replay" ]; then
+    replay_en_bucle
+elif [ "$MODO" = "real" ]; then
+    if [ -n "${GEMINI_API_KEY:-}" ]; then
+        asr_real
+    else
+        echo "[entrypoint-worker] MODO=real pero falta GEMINI_API_KEY: cae a REPLAY" >&2
+        replay_en_bucle
+    fi
 else
-    echo "[entrypoint-worker] SIN GEMINI_API_KEY -> modo REPLAY (rotulado; no cumple R17a/R21 por si solo)"
-    exec python -m worker.replay "$CASETE_REPLAY" --hub "ws://hub:${HUB_PORT}/ingest" "$@"
+    if [ -n "${GEMINI_API_KEY:-}" ]; then
+        echo "[entrypoint-worker] MODO='$MODO' no reconocido con GEMINI_API_KEY presente: se pide MODO=real explicito -> REPLAY" >&2
+    fi
+    replay_en_bucle
 fi

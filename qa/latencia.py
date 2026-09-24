@@ -102,7 +102,8 @@ def main(argv=None) -> int:
     # (c) PERCIBIDA EN VIVO: t_receive (cliente /ws) - t_captured (worker), sobre corridas REALES de qa/smoke.py.
     V = {}
     for i, tag in enumerate([t for t in a.vivo_tags.split(",") if t], 1):
-        files = sorted(glob.glob(str(OUT / f"smoke-{tag}-qa-{tag}-[0-9]*.bus.jsonl")))
+        # B5: session_id con nombre (qa-b5-en, qa-b5-es) además de los numerados (qa-b3-1)
+        files = sorted(glob.glob(str(OUT / f"smoke-{tag}-qa-{tag}-*.bus.jsonl")))
         if not files:
             print(f"(c) corrida {i} tag={tag}: SIN archivos qa/out/smoke-{tag}-qa-{tag}-*.bus.jsonl")
             rc = 1

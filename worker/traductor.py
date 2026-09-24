@@ -25,6 +25,22 @@ lotes se despachaban EN SERIE y uno lento bloqueaba la cola):
 - Timeout TIMEOUT_S=20 s; al vencer, ok:false SIN reintento (el reintento duplica carga). Reintento
   SOLO ante 429/5xx, con backoff del modelo (el reintento prefiere el otro modelo). Respuesta con
   cantidad distinta o error de otro tipo: ok:false sin reintento.
+B5 (R19 en vivo 32/41; gemini-3.1-flash-lite fallo 8 de 11 con 5xx/timeout; ESTADO.md, Decisiones):
+- CORTACIRCUITO POR MODELO: FALLAS_CORTE=3 fallas SEGUIDAS (5xx, timeout, 429) sacan al modelo de la
+  rotacion CORTE_S=60 s (TRADUCTOR_CORTE_S). Cada corte sucesivo sin una llamada ok en el medio
+  duplica la duracion, hasta CORTE_MAX_S=480 s (8 min, TRADUCTOR_CORTE_MAX_S). Al vencer, el modelo
+  REINGRESA A PRUEBA: su contador no se reinicia, asi que UNA falla mas lo vuelve a cortar (con el
+  doble). Una llamada ok reinicia contador y duplicacion (y levanta el corte si llega de una llamada
+  que estaba en vuelo). "cantidad" y otros errores no cuentan ni reinician. Estado POR PROCESO.
+- UN SOLO MODELO SANO: lote de LOTE_MAX_SOLO=3 textos u LOTE_S_SOLO=8 s, limitador RPM_SOLO=14 con
+  capacidad 1 (peor caso 15 en 60 s). Siempre: tope DURO de TOPE_RPM=15 llamadas por modelo en
+  cualquier ventana de 60 s (dentro del proceso).
+- NINGUN MODELO SANO: el lote sale ok:false YA, sin llamar, con translation.meta.reason "sin_modelo".
+- Cada corte / reingreso / recuperacion deja una linea ROTULADA en reportes/cuota-texto.log que
+  empieza con "# cortacircuito" (leer_log la saltea: NO cuenta como llamada; contar llamadas con
+  grep -vc '^#' reportes/cuota-texto.log).
+- translation.meta.reason (campo AGREGADO, el esquema lo admite): en los ok:false, el estado del
+  ultimo intento (sin_modelo | sin_cupo | timeout | 5xx | 429 | cantidad | cierre | error:X).
 
     python -m worker.traductor --listar                        # ids exactos (models.list)
     python -m worker.traductor --probar "Hello world" --a es   # UNA llamada real (gasta 1 RPD)
@@ -38,6 +54,7 @@ import os
 import re
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -56,6 +73,26 @@ BACKOFF_MIN = 1.0
 BACKOFF_MAX = 30.0
 FMT = "%Y-%m-%d %H:%M:%S"
 IDIOMAS = {"en": "English", "es": "Spanish"}
+
+
+def _env_num(nombre: str, defecto: float) -> float:
+    try:
+        return float(os.environ.get(nombre, defecto))
+    except ValueError:
+        return float(defecto)
+
+
+# B5: cortacircuito por modelo (ver docstring)
+FALLAS_CORTE = int(_env_num("TRADUCTOR_FALLAS_CORTE", 3))
+CORTE_S = _env_num("TRADUCTOR_CORTE_S", 60.0)
+CORTE_MAX_S = _env_num("TRADUCTOR_CORTE_MAX_S", 480.0)
+CUENTAN_PARA_CORTE = ("5xx", "timeout", "429")
+RPM_SOLO = 14
+CAPACIDAD_SOLO = 1
+TOPE_RPM = 15            # free tier: 15 RPM por modelo -> nunca mas de 15 llamadas en 60 s
+LOTE_MAX_SOLO = 3
+LOTE_S_SOLO = 8.0
+MARCA_EVENTO = "# cortacircuito"
 
 
 def modelos_por_defecto() -> list[str]:
@@ -170,15 +207,27 @@ class EstadoModelo:
     backoff_s: float = 0.0
     bloqueado_hasta: float = 0.0
     hoy: int = 0
+    fallas_seguidas: int = 0         # 5xx/timeout/429 seguidas; SOLO una llamada ok lo reinicia
+    cortes: int = 0                  # cortes desde la ultima llamada ok (duplica la duracion)
+    cortado_hasta: float = 0.0
+    en_corte: bool = False           # para anotar el reingreso una sola vez
+    ultimas: list = field(default_factory=list)       # ultimos estados que contaron (log)
+    llamadas: deque = field(default_factory=deque)    # t de cada token tomado (tope duro 60 s)
 
 
 class Limitador:
-    """Token bucket por modelo (rpm/min, capacidad `capacidad`) + backoff + tope diario."""
+    """Token bucket por modelo (rpm/min, capacidad `capacidad`) + backoff + tope diario.
+    B5: cortacircuito por modelo; con UN solo modelo activo, rpm_solo/capacidad_solo; y un tope DURO
+    de `tope_rpm` tokens por modelo en cualquier ventana de 60 s."""
 
     def __init__(self, modelos: list[str], rpm: float = RPM, capacidad: float = CAPACIDAD,
                  rpd_tope: int = RPD_TOPE, log: Optional[Path] = LOG_TEXTO,
                  reloj: Callable[[], float] = time.monotonic,
-                 dormir: Callable[[float], Awaitable[None]] = asyncio.sleep):
+                 dormir: Callable[[float], Awaitable[None]] = asyncio.sleep,
+                 fallas_corte: int = FALLAS_CORTE, corte_s: float = CORTE_S,
+                 corte_max_s: float = CORTE_MAX_S, rpm_solo: float = RPM_SOLO,
+                 capacidad_solo: float = CAPACIDAD_SOLO, tope_rpm: int = TOPE_RPM,
+                 on_evento: Optional[Callable[[str], None]] = None):
         self.rpm = rpm
         self.rate = rpm / 60.0
         self.cap = capacidad
@@ -186,6 +235,14 @@ class Limitador:
         self.log = log
         self.reloj = reloj
         self.dormir = dormir
+        self.fallas_corte = fallas_corte
+        self.corte_s = corte_s
+        self.corte_max_s = corte_max_s
+        self.rpm_solo = rpm_solo
+        self.cap_solo = capacidad_solo
+        self.tope_rpm = tope_rpm
+        self.on_evento = on_evento
+        self.eventos: list[dict] = []    # cortes / reingresos / recuperaciones (resumen de la corrida)
         t = reloj()
         self.m = {n: EstadoModelo(n, capacidad, t) for n in modelos}
         self.orden = list(modelos)
@@ -196,8 +253,51 @@ class Limitador:
                 if dt >= d0 and mod in self.m:
                     self.m[mod].hoy += 1
 
-    def _recargar(self, e: EstadoModelo, t: float) -> None:
-        e.tokens = min(self.cap, e.tokens + (t - e.t_ref) * self.rate)
+    # -- cortacircuito --
+    def sanos(self) -> list[str]:
+        """Modelos en la rotacion (sin corte vigente). Un corte vencido REINGRESA a prueba."""
+        t = self.reloj()
+        out = []
+        for n in self.orden:
+            e = self.m[n]
+            if e.cortado_hasta > t:
+                continue
+            if e.en_corte:
+                e.en_corte = False
+                self._evento(n, "reingreso", f"corte vencido, a prueba: fallas seguidas "
+                             f"{e.fallas_seguidas}, una mas lo vuelve a cortar")
+            out.append(n)
+        return out
+
+    def activos(self) -> list[str]:
+        """Sanos y con tope diario disponible."""
+        return [n for n in self.sanos() if self.m[n].hoy < self.rpd_tope]
+
+    def modo(self) -> tuple[float, float]:
+        """(rpm, capacidad). Con UN solo modelo activo: rpm_solo / capacidad_solo."""
+        if len(self.activos()) == 1:
+            return self.rpm_solo, self.cap_solo
+        return self.rpm, self.cap
+
+    def _evento(self, modelo: str, tipo: str, detalle: str) -> None:
+        t = self.reloj()
+        sanos = [n for n in self.orden if self.m[n].cortado_hasta <= t]
+        linea = (f"{MARCA_EVENTO} | {datetime.now().strftime(FMT)} | {modelo} | {tipo} | {detalle} | "
+                 f"sanos: {','.join(sanos) or 'ninguno'}")
+        self.eventos.append({"t": t, "modelo": modelo, "tipo": tipo, "detalle": detalle,
+                             "sanos": sanos})
+        if self.on_evento is not None:
+            try:
+                self.on_evento(linea)
+            except Exception:
+                pass
+
+    # -- token bucket --
+    def _recargar(self, e: EstadoModelo, t: float, rpm: Optional[float] = None,
+                  cap: Optional[float] = None) -> None:
+        if rpm is None or cap is None:
+            rpm, cap = self.modo()
+        e.tokens = min(cap, e.tokens + (t - e.t_ref) * rpm / 60.0)
         e.t_ref = t
 
     def _recientes_en_log(self, modelo: str) -> int:
@@ -212,40 +312,83 @@ class Limitador:
         if e.hoy >= self.rpd_tope:
             return float("inf")
         t = self.reloj()
-        self._recargar(e, t)
-        w = max(0.0, e.bloqueado_hasta - t)
-        if e.tokens < 1:
-            w = max(w, (1 - e.tokens) / self.rate)
+        rpm, cap = self.modo()
+        self._recargar(e, t, rpm, cap)
+        w = max(0.0, e.bloqueado_hasta - t, e.cortado_hasta - t)
+        if e.tokens < 1 - 1e-9:
+            w = max(w, (1 - e.tokens) / (rpm / 60.0))
+        while e.llamadas and t - e.llamadas[0] >= 60.0:
+            e.llamadas.popleft()
+        if len(e.llamadas) >= self.tope_rpm:           # tope duro: nunca > tope_rpm en 60 s
+            w = max(w, e.llamadas[-self.tope_rpm] + 60.0 - t)
         return w
 
-    async def tomar(self, evitar: Optional[str] = None, espera_max: float = 60.0) -> Optional[str]:
-        """Modelo a usar (consume un token) o None si ninguno queda libre dentro de espera_max."""
+    async def elegir(self, evitar: Optional[str] = None,
+                     espera_max: float = 60.0) -> tuple[Optional[str], str]:
+        """(modelo, "ok") consumiendo un token. (None, "sin_modelo") si NINGUN modelo esta sano: de
+        inmediato, sin esperar. (None, "sin_cupo") si no hay token dentro de espera_max o se agoto el
+        tope diario."""
         t_lim = self.reloj() + espera_max
         while True:
-            rot = self.orden[self._rr:] + self.orden[:self._rr]
+            sanos = self.sanos()
+            if not sanos:
+                return None, "sin_modelo"
+            rpm, _cap = self.modo()
+            rot = [n for n in self.orden[self._rr:] + self.orden[:self._rr] if n in sanos]
             cands = [n for n in rot if n != evitar] + [n for n in rot if n == evitar]
             esperas = [(self.espera(n), i, n) for i, n in enumerate(cands)]
             w, _, n = min(esperas)
             if w == float("inf"):
-                return None
-            if w <= 0 and self._recientes_en_log(n) < self.rpm:
+                return None, "sin_cupo"
+            if w <= 0 and self._recientes_en_log(n) < rpm:
                 e = self.m[n]
                 e.tokens -= 1
                 e.hoy += 1
+                e.llamadas.append(self.reloj())
                 self._rr = (self.orden.index(n) + 1) % len(self.orden)
-                return n
+                return n, "ok"
+            t = self.reloj()
+            vence = [self.m[x].cortado_hasta - t for x in self.orden if x not in sanos]
+            if vence:                    # un corte que vence antes: reevaluar ahi (reingreso)
+                w = min(w, max(min(vence), 0.0))
             w = max(w, 0.5)
-            if self.reloj() + w > t_lim:
-                return None
+            if t + w > t_lim:
+                return None, "sin_cupo"
             await self.dormir(w)
 
-    def exito(self, modelo: str) -> None:
-        self.m[modelo].backoff_s = 0.0
+    async def tomar(self, evitar: Optional[str] = None, espera_max: float = 60.0) -> Optional[str]:
+        """Modelo a usar (consume un token) o None si ninguno queda libre dentro de espera_max."""
+        n, _motivo = await self.elegir(evitar, espera_max)
+        return n
 
-    def fallo(self, modelo: str) -> float:
+    def exito(self, modelo: str) -> None:
+        e = self.m[modelo]
+        e.backoff_s = 0.0
+        if e.cortes or e.en_corte or e.cortado_hasta > self.reloj():
+            e.cortado_hasta = 0.0
+            e.en_corte = False
+            self._evento(modelo, "recuperacion", f"llamada ok tras {e.cortes} corte(s): contador y "
+                         f"duplicacion reiniciados")
+        e.fallas_seguidas = 0
+        e.cortes = 0
+        e.ultimas = []
+
+    def fallo(self, modelo: str, estado: str = "error") -> float:
+        """Backoff exponencial (1..30 s) y, si `estado` es 5xx/timeout/429, cortacircuito."""
         e = self.m[modelo]
         e.backoff_s = min(BACKOFF_MAX, max(BACKOFF_MIN, e.backoff_s * 2))
-        e.bloqueado_hasta = self.reloj() + e.backoff_s
+        t = self.reloj()
+        e.bloqueado_hasta = t + e.backoff_s
+        if estado in CUENTAN_PARA_CORTE:
+            e.fallas_seguidas += 1
+            e.ultimas = (e.ultimas + [estado])[-5:]
+            if e.fallas_seguidas >= self.fallas_corte and e.cortado_hasta <= t:
+                dur = min(self.corte_max_s, self.corte_s * (2 ** e.cortes))
+                e.cortes += 1
+                e.cortado_hasta = t + dur
+                e.en_corte = True
+                self._evento(modelo, "corte", f"{dur:g} s (corte {e.cortes} desde la ultima ok); "
+                             f"fallas seguidas {e.fallas_seguidas}: {','.join(e.ultimas)}")
         return e.backoff_s
 
 
@@ -284,6 +427,10 @@ class Lotes:
         return out
 
     def vencido(self, ahora: float) -> Optional[Lote]:
+        if self.pend and len(self.pend) >= self.maximo:       # B5: el maximo cambia con los modelos sanos
+            lote = Lote(self.pend, ahora, "lleno")
+            self.pend = []
+            return lote
         if self.pend and ahora - self.pend[0].t >= self.ventana_s:
             lote = Lote(self.pend, self.pend[0].t + self.ventana_s, "tiempo")
             self.pend = []
@@ -310,6 +457,13 @@ class ResultadoLote:
     def ok(self) -> bool:
         return all(i["ok"] for i in self.items)
 
+    @property
+    def reason(self) -> Optional[str]:
+        """B5: en un lote ok:false, el estado del ultimo intento (p.ej. "sin_modelo")."""
+        if self.ok or not self.intentos:
+            return None
+        return self.intentos[-1].get("estado")
+
 
 class Traductor:
     def __init__(self, de: str, a: str, transporte: Optional[TransporteTexto] = None,
@@ -317,6 +471,7 @@ class Traductor:
                  log: Optional[Path] = LOG_TEXTO, timeout_s: float = TIMEOUT_S,
                  lotes: Optional[Lotes] = None, espera_cupo_s: float = ESPERA_CUPO_S,
                  reintentos: int = 1,
+                 lote_solo: tuple[int, float] = (LOTE_MAX_SOLO, LOTE_S_SOLO),
                  on_resultado: Optional[Callable[[ResultadoLote], None]] = None,
                  logger: Callable[[str], None] = lambda s: print(s, file=sys.stderr, flush=True)):
         self.de, self.a = de, a
@@ -325,7 +480,13 @@ class Traductor:
         self.lim = limitador or Limitador(self.modelos, log=log)
         self.log = log
         self.timeout_s = timeout_s
+        self._lotes_adaptativos = lotes is None      # B5: con un lote propio no se toca
         self.lotes = lotes or Lotes()
+        self._lote_normal = (self.lotes.maximo, self.lotes.ventana_s)
+        self._lote_solo = lote_solo
+        self.lote_solo = False
+        if self.lim.on_evento is None:
+            self.lim.on_evento = self._anotar_evento
         self.espera_cupo_s = espera_cupo_s
         self.reintentos = reintentos
         self.on_resultado = on_resultado
@@ -339,6 +500,7 @@ class Traductor:
         self.max_en_vuelo = 0
         self.n_timeout = 0
         self.n_reintentos = 0
+        self.n_sin_modelo = 0
 
     def _anotar(self, modelo: str, n: int, estado: str, ms: int) -> None:
         self.n_llamadas += 1
@@ -349,6 +511,19 @@ class Traductor:
         with open(self.log, "a", encoding="utf-8") as f:
             f.write(f"{datetime.now().strftime(FMT)} | {modelo} | {n} | {estado} | {ms}\n")
 
+    def _anotar_evento(self, linea: str) -> None:
+        """Linea ROTULADA del cortacircuito en el mismo log de cuota (leer_log la saltea)."""
+        self.logger(f"[traductor] {linea}")
+        if self.log is None:
+            return
+        self.log.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.log, "a", encoding="utf-8") as f:
+            f.write(linea + "\n")
+
+    @property
+    def cortes(self) -> int:
+        return sum(1 for e in self.lim.eventos if e["tipo"] == "corte")
+
     async def traducir(self, textos: list[str], seqs: Optional[list[int]] = None) -> ResultadoLote:
         """UNA llamada por lote (+1 reintento SOLO ante 429/5xx). Nunca levanta excepcion."""
         seqs = seqs if seqs is not None else list(range(len(textos)))
@@ -357,9 +532,11 @@ class Traductor:
         t_lote = time.monotonic()
         previo = None
         for _ in range(1 + self.reintentos):
-            modelo = await self.lim.tomar(evitar=previo, espera_max=self.espera_cupo_s)
-            if modelo is None:
-                intentos.append({"modelo": None, "estado": "sin_cupo", "ms": 0})
+            modelo, motivo = await self.lim.elegir(evitar=previo, espera_max=self.espera_cupo_s)
+            if modelo is None:            # "sin_modelo" (ninguno sano: sin llamar) o "sin_cupo"
+                intentos.append({"modelo": None, "estado": motivo, "ms": 0})
+                if motivo == "sin_modelo":
+                    self.n_sin_modelo += 1
                 break
             t0 = time.monotonic()
             try:
@@ -383,7 +560,7 @@ class Traductor:
             except Exception as e:
                 ms, estado = int((time.monotonic() - t0) * 1000), f"error:{type(e).__name__}"
             self._anotar(modelo, len(textos), estado, ms)
-            espera = self.lim.fallo(modelo) if estado != "cantidad" else 0.0
+            espera = self.lim.fallo(modelo, estado) if estado != "cantidad" else 0.0
             intentos.append({"modelo": modelo, "estado": estado, "ms": ms, "backoff_s": espera})
             self.logger(f"[traductor] {modelo} {estado} en {ms} ms (lote de {len(textos)})")
             previo = modelo
@@ -396,7 +573,20 @@ class Traductor:
                              int((time.monotonic() - t_lote) * 1000), intentos)
 
     # -- modo vivo (SessionWorker) --
+    def _ajustar_lotes(self) -> None:
+        """B5: con UN solo modelo sano, lotes de 3 textos u 8 s (menos llamadas para el mismo texto)."""
+        if not self._lotes_adaptativos:
+            return
+        activos = self.lim.activos()
+        solo = len(activos) == 1
+        if solo != self.lote_solo:
+            self.lote_solo = solo
+            self.lotes.maximo, self.lotes.ventana_s = self._lote_solo if solo else self._lote_normal
+            self.logger(f"[traductor] lotes: {self.lotes.maximo} textos / {self.lotes.ventana_s:g} s "
+                        f"(modelos activos: {','.join(activos) or 'ninguno'})")
+
     def agregar(self, seq: int, text: str, t: float) -> None:
+        self._ajustar_lotes()
         for lote in self.lotes.agregar(seq, text, t):
             self._poner(lote)
 
@@ -427,6 +617,7 @@ class Traductor:
     async def _vigilar(self) -> None:
         while True:
             await asyncio.sleep(0.2)
+            self._ajustar_lotes()
             lote = self.lotes.vencido(time.time())
             if lote:
                 self._poner(lote)
@@ -469,6 +660,8 @@ class Traductor:
 def meta_traduccion(res: ResultadoLote, lang_to: str, source=None) -> dict:
     # el contrato exige model string: sin llamada exitosa ni intento (sin cupo, cierre) va "ninguno"
     m = {"lang_to": lang_to, "model": res.modelo or "ninguno", "batch_ms": int(res.ms)}
+    if res.reason:                     # B5 (campo agregado): p.ej. "sin_modelo"
+        m["reason"] = res.reason
     if source is not None:
         m["source"] = source
     return m

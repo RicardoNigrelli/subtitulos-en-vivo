@@ -10,8 +10,18 @@
   <header class="cabecera">
     <h1>Panel de producción</h1>
     <span id="chip-hub" class="chip">hub: conectando…</span>
-    <span id="chip-metricas" class="chip">/api/metricas: —</span>
+    <span id="chip-metricas" class="chip">métricas: sin token</span>
     <span id="ultima-actualizacion" class="chip">sin datos aún</span>
+    <span class="token-caja">
+      <label for="input-token">token <code>/api/metricas</code></label>
+      <input type="password" id="input-token" placeholder="HUB_TOKEN" autocomplete="off" spellcheck="false">
+      <button type="button" id="btn-token-guardar">guardar</button>
+      <button type="button" id="btn-token-borrar">borrar</button>
+    </span>
+    <label class="toggle-pruebas" for="toggle-pruebas">
+      <input type="checkbox" id="toggle-pruebas"> mostrar pruebas
+    </label>
+    <span id="chip-pruebas-ocultas" class="chip">sin sesiones TEST</span>
   </header>
 
   <div class="leyenda">
@@ -22,7 +32,13 @@
     latencia real del worker y se agrega además la <b>percibida</b> = <code>t_receive − t_captured</code> medida
     en el WebSocket propio de este panel. "Parciales/60 s" es una ventana deslizante, no un promedio de sesión
     completa. Segundos de audio: <b>estimación</b> (viene de <code>heartbeat.meta.audio_seconds_sent</code> del
-    worker, sólo visible vía <code>/api/metricas</code>).
+    worker, sólo visible con token vía <code>Authorization: Bearer</code> a <code>/api/metricas</code>; sin
+    token esa columna dice "sin token" y el resto de la fila sigue funcionando). El token se pega UNA vez acá
+    arriba, se guarda en <code>sessionStorage</code> (nunca en la URL ni en la query string) y viaja sólo en la
+    cabecera de la petición. Sesiones con <code>test:true</code> (fixtures/transporte de casete, no ASR en
+    vivo) llevan el rótulo <b>TEST</b> y están OCULTAS por defecto: "mostrar pruebas" las trae de vuelta.
+    <code>rotation.meta.audio_lost_s</code>, cuando el worker lo manda, se acumula por sesión y aparece junto
+    a "Rotaciones".
   </div>
 
   <div id="aviso-hub" class="aviso"></div>
