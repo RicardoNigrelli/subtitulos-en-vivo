@@ -1,0 +1,11 @@
+[00:00:00,000] era la función. Ahora, puede que digan
+[00:00:01,800] digamos, bueno, es obvio. No siempre fue obvio.
+[00:00:04,200] La idea de una función como un
+[00:00:06,700] como abstracción no surgió hasta
+[00:00:09,000] los años 40 50
+[00:00:10,800] Y aun así se consideraba
+[00:00:12,800] ser una idea sorpresivamente
+[00:00:14,700] polémica. ¿Por qué es ese el caso?
+[00:00:17,200] el caso porque cada vez que haces una llamada a función
+[00:00:19,700] todo lo que requiere son dos o tres más
+[00:00:21,800] Y esos eran en los días de la computación de entonces extremadamente caros. Así que teníamos este este compromiso entre construimos cosas que

@@ -82,16 +82,19 @@ html, body {
   border: 1px solid transparent;
 }
 
-.chip--conectando {
-  background: #3a3a1f;
-  color: #E8D77A;
-  border-color: #5a5230;
-}
-
-.chip--conectado {
+/* B4: chip de 4 estados (siempre con texto, nunca sólo color, skill ui-subtitulos):
+   en vivo (verde) · sin texto hace N s (amarillo, heartbeat sano pero sin texto reciente) ·
+   reconectando… (naranja) · desconectado (rojo). */
+.chip--en-vivo {
   background: #163a20;
   color: #7CE8A0;
   border-color: #2a5a35;
+}
+
+.chip--sin-texto {
+  background: #3a3a1f;
+  color: #E8D77A;
+  border-color: #5a5230;
 }
 
 .chip--reconectando {
@@ -100,7 +103,7 @@ html, body {
   border-color: #5a4020;
 }
 
-.chip--sin-conexion {
+.chip--desconectado {
   background: #3a1f1f;
   color: #E87C7C;
   border-color: #5a3030;
@@ -186,6 +189,33 @@ html, body {
 .aviso-sesion {
   color: #999999;
   font-size: 15px;
+}
+
+/* B4: scroll que se rinde apenas el usuario sube (skill ui-subtitulos) */
+.boton-volver-vivo {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 9px 18px;
+  border-radius: 999px;
+  background: #2d4a3a;
+  color: #FFFFFF;
+  border: 1px solid #3f6b52;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  z-index: 20;
+}
+
+.boton-volver-vivo:hover,
+.boton-volver-vivo:focus {
+  background: #3a5c48;
+}
+
+.boton-volver-vivo[hidden] {
+  display: none;
 }
 
 /* ---------- índice (R6) ---------- */

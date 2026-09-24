@@ -1,0 +1,44 @@
+1
+00:00:00,000 --> 00:00:02,200
+was the function. Now, you may say
+
+2
+00:00:01,800 --> 00:00:04,600
+say well it's obvious. Wasn't always obvious.
+
+3
+00:00:04,200 --> 00:00:07,100
+The idea of a function as an
+
+4
+00:00:06,700 --> 00:00:09,400
+as an abstraction did not come about until the
+
+5
+00:00:09,000 --> 00:00:11,200
+the 1940s 1950s
+
+6
+00:00:10,800 --> 00:00:13,200
+And even then it was considered to be
+
+7
+00:00:12,800 --> 00:00:15,100
+be an astonishingly
+
+8
+00:00:14,700 --> 00:00:17,600
+controversial idea. Why is that the case?
+
+9
+00:00:17,200 --> 00:00:20,100
+case because every time you do a function call it
+
+10
+00:00:19,700 --> 00:00:22,200
+all it requires two or three more
+
+11
+00:00:21,800 --> 00:00:31,100
+And those were in the days of computing back then extremely expensive. So we had this this tradeoff between do we build things that
+

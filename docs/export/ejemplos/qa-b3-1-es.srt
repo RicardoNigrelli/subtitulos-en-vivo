@@ -1,0 +1,104 @@
+1
+00:00:00,000 --> 00:00:02,200
+[sin traducir] was the function. Now, you may say
+
+2
+00:00:01,800 --> 00:00:04,600
+[sin traducir] say well it's obvious wasn't always obvious.
+
+3
+00:00:04,200 --> 00:00:07,100
+[sin traducir] obvious. The idea of a function of a as an
+
+4
+00:00:06,700 --> 00:00:11,200
+como abstracción no surgió hasta las décadas de 1940 y 1950
+
+5
+00:00:10,800 --> 00:00:13,200
+E incluso entonces se consideraba
+
+6
+00:00:12,800 --> 00:00:15,100
+ser algo asombroso
+
+7
+00:00:14,700 --> 00:00:17,600
+idea controvertida. ¿Por qué es ese el caso?
+
+8
+00:00:17,200 --> 00:00:20,100
+caso porque cada vez que haces una llamada a función
+
+9
+00:00:19,700 --> 00:00:22,200
+Todo requiere dos o tres más
+
+10
+00:00:21,800 --> 00:00:24,500
+[sin traducir] instructions and those were in the days of
+
+11
+00:00:24,100 --> 00:00:26,600
+[sin traducir] of computing back then, extremely
+
+12
+00:00:26,200 --> 00:00:28,500
+[sin traducir] expensive. So we had this this
+
+13
+00:00:28,100 --> 00:00:31,100
+[sin traducir] This tradeoff between do we build things
+
+14
+00:00:30,700 --> 00:00:33,100
+[sin traducir] that serve our machines do we build
+
+15
+00:00:32,700 --> 00:00:35,200
+[sin traducir] build things that serve the needs of our humans.
+
+16
+00:00:34,800 --> 00:00:37,300
+[sin traducir] I was at this battle, but in those
+
+17
+00:00:36,900 --> 00:00:39,600
+[sin traducir] In those days, the machines were far more
+
+18
+00:00:39,200 --> 00:00:42,500
+[sin traducir] more expensive than our humans, and so a lot of what we happen in
+
+19
+00:00:42,100 --> 00:00:45,000
+[sin traducir] happened in software engineering was to optimize the needs for the
+
+20
+00:00:44,600 --> 00:00:47,000
+[sin traducir] for the machine, not the humans themselves.
+
+21
+00:00:46,600 --> 00:00:48,900
+[sin traducir] yourselves. Well, with
+
+22
+00:00:48,500 --> 00:00:52,300
+[sin traducir] With the advent of micro-miniaturization, we had from the mainframe
+
+23
+00:00:51,900 --> 00:00:54,200
+[sin traducir] mainframes, we suddenly had many
+
+24
+00:00:53,800 --> 00:00:56,100
+[sin traducir] minicomputers like the PDP-11
+
+25
+00:00:55,700 --> 00:00:59,000
+[sin traducir] oven uh 60 series uh we had
+
+26
+00:00:58,600 --> 00:01:00,000
+[sin traducir] microcomputers as well
+

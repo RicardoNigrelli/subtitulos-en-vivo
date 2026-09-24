@@ -7,6 +7,13 @@ nivel `items`, campo nuevo `translations_langs` en `GET /api/sesiones` y en `ini
 renombrado ni quitado; todo mensaje que validaba antes sigue validando (ver "Traducción diferida" y
 "Texto provisorio" más abajo).
 
+AMPLIADO 24/09 B4 (aditivo): clave opcional `session_start.meta.translations_langs` (lista de códigos
+de idioma destino, p. ej. `["es"]`) que el hub suma a `translations_langs` apenas llega; campos nuevos
+`source` y `test` en `GET /api/sesiones` y en `init`; rótulo de sesiones de prueba por `meta.source`
+(`transporte-casete`, `ejemplo-contrato`; constantes `FUENTES_TEST` en `contracts/__init__.py`). El
+esquema no cambió: ningún mensaje que validaba deja de validar (ver "Índice de sesiones: idiomas y
+rótulo de prueba" más abajo).
+
 Cambios desde el congelamiento (todos ENSANCHAN: lo que era válido sigue siéndolo):
 - 13:14 AR (dentro de los 15 min; lo impuso el primer mensaje real del worker): `text`, `audio_start`,
   `audio_end`, `t_captured` aceptan `null` fuera de `type=text` (en `text` siguen obligatorios y no
@@ -61,7 +68,7 @@ Tiempos en **segundos** (float), no milisegundos: el esquema rechaza epochs > 99
 | `rotation` | `{reason, old_id, new_id}` — rotación de la conexión con el modelo (GoAway) |
 | `watchdog` | `{silent_s, reopened}` — voz enviada sin texto durante `silent_s` |
 | `error` | `{code, message}` |
-| `session_start` | `{title, source}` (`title`: string o `null`; `source`: string, objeto o `null`) |
+| `session_start` | `{title, source}` (`title`: string o `null`; `source`: string, objeto o `null`) + `translations_langs` opcional (B4): lista de idiomas destino que la sesión va a traducir, p. ej. `["es"]` |
 | `session_end` | libre |
 | `heartbeat` (del worker, con `t_emit`) | `{alive, audio_seconds_sent}` |
 | `translation` | `{lang_to, model, batch_ms}` + `source` opcional. `lang_to`: idioma destino (`es`, `en`, …); `model`: modelo que tradujo; `batch_ms`: ms del lote (número ≥ 0; se recomienda entero) |
@@ -144,7 +151,9 @@ exista: recibe `init` vacío y después los mensajes cuando arranque.
    - `last_seq`: último `seq` (de cualquier tipo) que tiene el hub; `null` si todavía no hay.
    - `lang`: el idioma PEDIDO (eco de `?lang=`); si no se pidió, el original de la sesión o `null`.
      `session_lang`: idioma original de la sesión.
-   - `translations_langs` (B2): idiomas destino vistos en la sesión, p. ej. `["es"]`.
+   - `translations_langs` (B2): idiomas destino vistos en la sesión, p. ej. `["es"]`; desde B4 también
+     los declarados en `session_start.meta.translations_langs`.
+   - `source`, `test` (B4): los mismos que en `GET /api/sesiones` (ver "Índice de sesiones").
 2. Hub → cada mensaje del contrato de ESA sesión (`text`, `rotation`, `watchdog`, `error`,
    `session_start`, `session_end`, y desde B2 `translation` y `partial`) COMPLETO, con `t_hub`. El cliente elige el idioma: `text` si
    `lang` coincide con el pedido; si no `translations[<pedido>]` (si `ok: false`, está marcado como fallido).
@@ -166,8 +175,28 @@ Códigos de cierre del hub: `4401` auth inválida (sólo ingesta) · `1013` clie
 |---|---|---|
 | `GET /health` | no | `200 {"ok":true,...}` |
 | `GET /api/sesiones` | no | lista `[{session_id, lang, title, replay, last_seq, last_t_emit, state, translations_langs, ...}]`; `state`: `live` (el hub recibió algo de la sesión en los últimos 30 s) · `idle` · `ended` (llegó `session_end`); `translations_langs` (B2): idiomas destino vistos, p. ej. `["es"]` |
-| `GET /api/sesiones/<id>/historial?desde=<seq>` | no | lista de mensajes `type=text` con `seq > desde`, ordenados por `seq`, con las traducciones YA MERGEADAS (404 si la sesión no existe) |
+| `GET /api/sesiones/<id>/historial?desde=<seq>` | no | lista de mensajes `type=text` con `seq > desde`, ordenados por `seq`, con las traducciones YA MERGEADAS (404 si la sesión no existe). Con `&tipos=todos`: todos los tipos guardados (no `partial` ni `translation`, que no se guardan) |
 | `GET /api/metricas` | `Authorization: Bearer <HUB_TOKEN>` | contadores del hub por sesión (clientes, descartes, duplicados) |
+| `GET /api` | no | (B4) lista de rutas activas |
+
+B4: `GET /api/sesiones` agrega `source` y `test` a cada sesión (ver abajo). Si el hub se levanta con
+`--web`/`--panel` también sirve la vista (`/`, `/s/<id>`) y el panel (`/panel/`) en el mismo puerto:
+ver `hub/README.md`.
+
+## Índice de sesiones: idiomas y rótulo de prueba (B4, aditivo)
+
+- `translations_langs` (en `GET /api/sesiones` e `init`) = idiomas de
+  `session_start.meta.translations_langs` (apenas llega el `session_start`, antes de la primera
+  traducción) ∪ `meta.lang_to` de los `translation` ∪ claves de `translations` de los `text`. Un valor
+  que no es un código de idioma (`^[a-z]{2}(-[A-Z]{2})?$`) se ignora (WARNING en el log del hub); el
+  mensaje NO se rechaza.
+- `source` = `session_start.meta.source`; si no vino (o vino `null`), el primer `meta.source` de un
+  mensaje de la sesión que no sea `translation` (en `translation`, `meta.source` describe la
+  traducción, no la sesión). String u objeto, tal cual llegó.
+- `test` (bool) = `true` si ALGÚN mensaje de la sesión trae `meta.source` igual a
+  `"transporte-casete"` (worker con `--transporte casete:`, respuestas grabadas, sin API) o
+  `"ejemplo-contrato"` (`contracts/ejemplos/`). Una sesión `test` NO es ASR en vivo. Es independiente
+  de `replay` (casete reproducido por `worker.replay` / `hub.inyectar`).
 
 ## Ejemplos (`ejemplos/`)
 

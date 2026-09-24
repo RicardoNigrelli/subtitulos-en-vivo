@@ -54,8 +54,8 @@ def _args(argv=None):
     ap.add_argument("--gap-s", type=float, default=None, help="gap end->start (default 0,7)")
     ap.add_argument("--drenaje-s", type=float, default=30.0, help="espera de turnos al fin de la fuente")
     ap.add_argument("--traducir-a", default="auto", help="es|en|none (auto: en->es, es->en)")
-    ap.add_argument("--timeout-trad-s", type=float, default=15.0,
-                    help="timeout por llamada del traductor (B3: 15 s + 1 reintento)")
+    ap.add_argument("--timeout-trad-s", type=float, default=20.0,
+                    help="timeout por llamada del traductor (B4: 20 s, sin reintento por timeout)")
     ap.add_argument("--vad-auto", action="store_true",
                     help="VAD automatico del server ACTIVADO (sin turnos manuales)")
     ap.add_argument("--sin-reabrir", action="store_true", help="desactiva reabrir con solape")
@@ -160,7 +160,11 @@ async def correr(a) -> int:
                "turnos": "vad_auto" if a.vad_auto else "manuales", "transporte": a.transporte,
                "traduccion": None if traductor is None else {
                    "a": traductor.a, "llamadas": traductor.n_llamadas, "lotes": traductor.n_lotes,
-                   "lotes_ok_false": traductor.n_ok_false, "por_modelo": traductor.por_modelo}}
+                   "lotes_ok_false": traductor.n_ok_false, "por_modelo": traductor.por_modelo,
+                   "max_en_vuelo": traductor.max_en_vuelo, "timeouts": traductor.n_timeout,
+                   "reintentos": traductor.n_reintentos},
+               "dedup": {"recortados": res.dedup_recortados, "descartados": res.dedup_descartados},
+               "rotulo": w.rotulo}
     print(json.dumps(resumen, ensure_ascii=False))
     return 0 if res.textos > 0 else 3
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from worker.traductor import Error429, Limitador, Lotes, Traductor, parsear
+from worker.traductor import Error5xx, Error429, Limitador, Lotes, Traductor, parsear
 from worker.traducir_casete import traducir_casete
 
 CASETES = Path(__file__).resolve().parents[2] / "fixtures" / "casetes"
@@ -26,6 +26,8 @@ class TransporteFalsoRotulado:
         self.llamadas.append((modelo, len(entrada), modo))
         if modo == "429":
             raise Error429("429 RESOURCE_EXHAUSTED (falso)")
+        if modo == "5xx":
+            raise Error5xx("503 UNAVAILABLE (falso)")
         if modo == "error":
             raise RuntimeError("falso")
         if modo == "lento":
@@ -52,21 +54,21 @@ def lim(reloj=None, **kw):
 
 
 # ---- lotes ----
-def test_lote_lleno_a_los_3():
+def test_lote_lleno_a_las_2_ventanas():
     L = Lotes()
-    assert L.agregar(1, "a", 0.0) == [] and L.agregar(2, "b", 3.0) == []
-    out = L.agregar(3, "c", 6.0)
-    assert len(out) == 1 and [i.seq for i in out[0].items] == [1, 2, 3] and out[0].motivo == "lleno"
+    assert L.agregar(1, "a", 0.0) == []
+    out = L.agregar(2, "b", 3.0)
+    assert len(out) == 1 and [i.seq for i in out[0].items] == [1, 2] and out[0].motivo == "lleno"
 
 
-def test_lote_por_tiempo_8s_desde_el_primero():
+def test_lote_por_tiempo_5s_desde_el_primero():
     L = Lotes()
     L.agregar(1, "a", 0.0)
-    assert L.vencido(7.9) is None
-    lote = L.vencido(8.0)
-    assert [i.seq for i in lote.items] == [1] and lote.t_cierre == 8.0
+    assert L.vencido(4.9) is None
+    lote = L.vencido(5.0)
+    assert [i.seq for i in lote.items] == [1] and lote.t_cierre == 5.0
     L.agregar(2, "b", 10.0)
-    out = L.agregar(3, "c", 18.5)          # llega despues de 8 s: cierra el anterior y abre otro
+    out = L.agregar(3, "c", 15.5)          # llega despues de 5 s: cierra el anterior y abre otro
     assert [i.seq for i in out[0].items] == [2] and out[0].motivo == "tiempo"
     assert [i.seq for i in L.vaciar(20.0).items] == [3]
 
@@ -130,14 +132,27 @@ def test_traduce_un_lote_en_una_llamada(tmp_path):
     assert len(lineas) == 1 and lineas[0].split(" | ")[1:4] == ["m-a", "3", "ok"]
 
 
-def test_cantidad_distinta_reintenta_y_despues_ok_false(tmp_path):
+def test_cantidad_distinta_da_ok_false_sin_reintento(tmp_path):
+    # B4: reintento SOLO ante 429/5xx (el reintento duplica carga)
     t, tr = _trad(tmp_path, ["cantidad", "ok"])
-    assert asyncio.run(t.traducir(["a", "b"], [1, 2])).ok and len(tr.llamadas) == 2
-    t, tr = _trad(tmp_path, ["cantidad", "cantidad"])
     res = asyncio.run(t.traducir(["a", "b"], [1, 2]))
     assert not res.ok and res.items == [{"seq": 1, "text": None, "ok": False},
                                         {"seq": 2, "text": None, "ok": False}]
-    assert len(tr.llamadas) == 2 and t.n_ok_false == 1
+    assert len(tr.llamadas) == 1 and t.n_ok_false == 1
+
+
+def test_timeout_da_ok_false_sin_reintento(tmp_path):
+    t, tr = _trad(tmp_path, ["lento", "ok"], timeout_s=0.2)
+    res = asyncio.run(t.traducir(["a"], [5]))
+    assert not res.ok and [i["estado"] for i in res.intentos] == ["timeout"]
+    assert len(tr.llamadas) == 1 and t.n_timeout == 1
+
+
+def test_5xx_reintenta_con_el_otro_modelo(tmp_path):
+    t, tr = _trad(tmp_path, ["5xx", "ok"])
+    res = asyncio.run(t.traducir(["a"], [5]))
+    assert res.ok and [i["estado"] for i in res.intentos] == ["5xx", "ok"]
+    assert tr.llamadas[0][0] != tr.llamadas[1][0] and t.n_reintentos == 1
 
 
 def test_429_y_timeout_dan_ok_false_con_backoff_y_no_levantan(tmp_path):
@@ -188,18 +203,41 @@ def test_cerrar_marca_ok_false_lo_que_quedo_en_vuelo(tmp_path):
     import time
 
     async def go():
-        t, tr = _trad(tmp_path, ["lento"], timeout_s=5)
+        t, tr = _trad(tmp_path, ["lento", "lento", "lento"], timeout_s=5)
         out = []
         t.on_resultado = out.append
         t.iniciar()
-        for s, x in [(1, "a"), (2, "b"), (3, "c"), (4, "d")]:   # 1-3 lote lleno (en vuelo), 4 pendiente
+        for s, x in [(1, "a"), (2, "b"), (3, "c"), (4, "d"), (5, "e")]:  # 2 lotes en vuelo, 5 pendiente
             t.agregar(s, x, time.time())
         await asyncio.sleep(0.1)
         await t.cerrar(0.3)
         return out
     out = asyncio.run(go())
-    assert sorted(i["seq"] for r in out for i in r.items) == [1, 2, 3, 4]
+    assert sorted(i["seq"] for r in out for i in r.items) == [1, 2, 3, 4, 5]
     assert all(i["ok"] is False and i["text"] is None for r in out for i in r.items)
+
+
+def test_lotes_en_paralelo_un_lote_lento_no_bloquea_al_siguiente(tmp_path):
+    """B4: cada lote es una tarea independiente. El lote 1 (lento) sigue en vuelo cuando el lote 2
+    ya volvio traducido; la unica compuerta es el limitador."""
+    import time
+
+    async def go():
+        t, tr = _trad(tmp_path, ["lento", "ok"], timeout_s=5)
+        out = []
+        t.on_resultado = out.append
+        t.iniciar()
+        for s, x in [(1, "a"), (2, "b"), (3, "c"), (4, "d")]:
+            t.agregar(s, x, time.time())
+        await asyncio.sleep(0.3)
+        antes_de_cerrar = [(r.ok, [i["seq"] for i in r.items]) for r in out]
+        en_vuelo = len(t._vuelo)
+        await t.cerrar(0.1)
+        return antes_de_cerrar, en_vuelo, t.max_en_vuelo, out
+    antes, en_vuelo, maxv, out = asyncio.run(go())
+    assert antes == [(True, [3, 4])], antes          # el 2do lote no espero al 1ro
+    assert en_vuelo == 1 and maxv == 2
+    assert [i["ok"] for i in out[-1].items] == [False, False]   # el lento sale marcado al cerrar
 
 
 def test_translation_sin_modelo_valida_contra_el_contrato():

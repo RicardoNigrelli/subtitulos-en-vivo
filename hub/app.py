@@ -1,5 +1,7 @@
 """App aiohttp del hub: /ingest (productores, token en el primer frame), /ws/<session_id> (audiencia,
 publica), /api/sesiones, /api/sesiones/<id>/historial, /api/metricas (Bearer), /health.
+B4 (aditivo): GET /api (lista de rutas) y, si se configuraron, los estaticos de web/ (/, /s/<id>) y
+panel/ (/panel/) -> hub/estaticos.py. Sin --web, GET / sigue devolviendo la lista de rutas.
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import time
 
 from aiohttp import WSMsgType, web
 
+from . import estaticos
 from .config import Config
 from .nucleo import Hub, dumps
 
@@ -186,9 +189,15 @@ async def api_metricas(request: web.Request) -> web.Response:
 
 
 async def raiz(request: web.Request) -> web.Response:
-    return _json({"hub": "vibeathon", "v": 1, "rutas": [
-        "GET /health", "GET /api/sesiones", "GET /api/sesiones/<id>/historial?desde=<seq>",
-        "GET /api/metricas (Bearer)", "WS /ws/<session_id>?lang=<xx>", "WS /ingest (auth en el primer frame)"]})
+    cfg = request.app[HUB_KEY].config
+    rutas = ["GET /health", "GET /api", "GET /api/sesiones",
+             "GET /api/sesiones/<id>/historial?desde=<seq>[&tipos=todos]",
+             "GET /api/metricas (Bearer)", "WS /ws/<session_id>?lang=<xx>", "WS /ingest (auth en el primer frame)"]
+    if cfg.web_dir:
+        rutas += ["GET / (web/index.html)", "GET /s/<session_id> (web/sesion.html)", "GET /<archivo> (web/)"]
+    if cfg.panel_dir:
+        rutas += ["GET /panel/ (panel/index.html)", "GET /panel/<archivo> (panel/)"]
+    return _json({"hub": "vibeathon", "v": 1, "rutas": rutas})
 
 
 # ---------------------------------------------------------------------------- app
@@ -221,13 +230,17 @@ async def _al_limpiar(app: web.Application) -> None:
 def crear_app(config: Config) -> web.Application:
     app = web.Application(middlewares=[cors])
     app[HUB_KEY] = Hub(config)
-    app.router.add_get("/", raiz)
+    if not config.web_dir:
+        app.router.add_get("/", raiz)  # con --web, "/" es web/index.html (lo registra estaticos.montar)
     app.router.add_get("/health", health)
     app.router.add_get("/ingest", ws_ingest)
     app.router.add_get("/ws/{session_id}", ws_audiencia)
+    app.router.add_get("/api", raiz)
     app.router.add_get("/api/sesiones", api_sesiones)
     app.router.add_get("/api/sesiones/{session_id}/historial", api_historial)
     app.router.add_get("/api/metricas", api_metricas)
+    # B4: estaticos DESPUES de la API (el comodin de web va ultimo y no tapa /api, /ws, /ingest, /health)
+    estaticos.montar(app, config.web_dir, config.panel_dir)
     app.on_startup.append(_al_arrancar)
     app.on_shutdown.append(_al_apagar)
     app.on_cleanup.append(_al_limpiar)

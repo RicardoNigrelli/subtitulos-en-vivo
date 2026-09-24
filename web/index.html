@@ -20,8 +20,14 @@
 
   var params = new URLSearchParams(location.search);
   var hubParam = params.get('hub');
-  var hubHost = hubParam || (location.hostname + ':8100');
-  var apiUrl = 'http://' + hubHost + '/api/sesiones';
+  // B4: mismo origen si esta pagina la sirve el propio hub (hub/estaticos.py); si la sirve
+  // web/servir.py (puerto de dev 8101) el hub de dev sigue en :8100. Mismo criterio que app.js
+  // (ver su comentario "calcularOrigen"): el puerto es la unica señal confiable del lado cliente.
+  var PUERTO_DEV_WEB = '8101';
+  var mismoOrigen = !hubParam && location.protocol !== 'file:' && location.port !== PUERTO_DEV_WEB;
+  var httpScheme = (mismoOrigen && location.protocol === 'https:') ? 'https' : 'http';
+  var hubHost = hubParam || (mismoOrigen ? location.host : (location.hostname + ':8100'));
+  var apiUrl = httpScheme + '://' + hubHost + '/api/sesiones';
   var cont = document.getElementById('lista-sesiones');
 
   function nombreEstado(s) {
@@ -52,7 +58,13 @@
     });
   }
 
+  // Sesiones de prueba (test:true, del transporte de casete o ejemplos del contrato) se ocultan
+  // salvo que la URL traiga ?test=1. Agregado por el orquestador al cierre de B4.
+  var mostrarTest = new URLSearchParams(location.search).get('test') === '1';
   function render(sesiones) {
+    if (!mostrarTest && sesiones) {
+      sesiones = sesiones.filter(function (s) { return !s.test; });
+    }
     cont.textContent = '';
     if (!sesiones || sesiones.length === 0) {
       var vacio = document.createElement('p');

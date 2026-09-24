@@ -17,6 +17,8 @@ el SessionWorker va ENVIANDO, para probar "reabrir con solape" (worker/session.p
 - La linea server `close` del casete se entrega como {"_close": ...} (dispara la reapertura por cierre).
 
 CLI (via worker.run): --transporte casete:<archivo.jsonl>[:mudo=S]
+ROTULO (B4): todo mensaje que sale al bus lleva replay:true y meta.source="transporte-casete", y el
+session_start lleva "[TEST] " en meta.title (SessionWorker lee SOURCE_REPLAY del transporte).
 """
 from __future__ import annotations
 
@@ -87,6 +89,8 @@ class TransporteCasete:
     """Implementa worker.transporte.Transporte sin red. Rotulado: test/replay."""
 
     ROTULO = "transporte_casete (test, sin API)"
+    # SessionWorker lo lee: TODO mensaje sale con replay:true y meta.source="transporte-casete"
+    SOURCE_REPLAY = "transporte-casete"
 
     def __init__(self, guion: Guion, ref_env: float, fabrica: "FabricaCasete", n: int):
         self.g = guion

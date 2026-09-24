@@ -1,20 +1,31 @@
-// app.js — vista de subtítulos de una sesión (frontend, Bloque 3)
+// app.js — vista de subtítulos de una sesión (frontend, Bloque 4)
 // Contrato: v:1, type (text|rotation|watchdog|error|heartbeat|session_start|session_end|
 // translation|partial|init), session_id, seq, lang (idioma ORIGINAL), text, translations,
 // replay, meta. B2: translation (items [{seq,text,ok}], meta.lang_to, seq:null, no se guarda,
 // el hub ya mergea en el text guardado) y partial (seq:null, no se guarda).
 // B3: backfill de historial al reconectar (GET .../historial?desde=&tipos=todos, bufferizando
-// los mensajes en vivo mientras tanto); las líneas pendientes de traducción esperan indefinido
-// (ya no hay timeout de 15s: una traducción puede llegar después de session_end, ver README);
-// título real de la sesión (init.title / session_start.meta.title / GET /api/sesiones) en la
-// cabecera.
-// WS: ws://<host>:8100/ws/<session_id>?lang=<xx>
+// los mensajes en vivo mientras tanto); título real de la sesión en la cabecera.
+// B4 (adelantado de B8, ver skill ui-subtitulos):
+//  - Mismo origen: si esta página la sirve el propio hub (hub/estaticos.py, mismo puerto que
+//    /api y /ws), el front habla a location.host; si la sirve web/servir.py (puerto de dev 8101),
+//    sigue yendo al hub de dev en :8100. `?hub=` pisa todo esto (ver calcularOrigen()).
+//  - Chip de 4 estados con TEXTO ("en vivo" · "sin texto hace N s" · "reconectando…" ·
+//    "desconectado"), con un monitor de heartbeat propio (tolerancia 250ms sobre el latido de
+//    1s del hub) en vez de depender sólo de open/close del socket (ver tick()).
+//  - Scroll que se rinde apenas el usuario sube, con botón "volver al vivo".
+//  - Huecos de tiempo visibles: `rotation` con `meta.audio_lost_s > 5`, o un `text` cuyo
+//    `audio_start` se aleja > 8s del `audio_end` anterior en la MISMA vista.
+//  - Línea pendiente de traducción: tope de 120s (reloj del hub vía t_hub, no el del cliente);
+//    pasado el tope, se resuelve como "sin traducir" igual que un ok:false real.
+//  - Selector de idioma también se actualiza con un `session_start` en vivo (además de `init`).
+// WS: ws://<host>[:8100]/ws/<session_id>?lang=<xx>
 'use strict';
 
 (function () {
   // ---------- URL: sesión desde el path, idioma e (opcional) hub desde la query ----------
   function parsePath() {
-    // funciona con /s/<id> y con /s/<id>/lo-que-sea (servir.py reescribe ambos a sesion.html)
+    // funciona con /s/<id> y con /s/<id>/lo-que-sea (servir.py y hub/estaticos.py reescriben
+    // ambos a sesion.html)
     var m = location.pathname.match(/\/s\/([^/?#]+)/);
     return m ? decodeURIComponent(m[1]) : null;
   }
@@ -23,14 +34,26 @@
   var sessionId = parsePath();
   var lang = params.get('lang') || 'en';
   var hubParam = params.get('hub');
-  var hubHost = hubParam || (location.hostname + ':8100');
+
+  // ---------- B4: mismo origen si la sirve el hub, sino el hub de dev en :8100 ----------
+  // La única señal confiable del lado cliente es el PUERTO: web/servir.py (este agente, dev)
+  // siempre corre en 8101; cualquier otro puerto/origen (el :8080 de este bloque, o el que
+  // exponga producción/Docker con hub/estaticos.py sirviendo web/) se interpreta como "me sirve
+  // el hub" y habla a location.host directo. [SUPUESTO: frontend] no hay forma de saberlo con
+  // certeza sin un fetch previo (que sumaría una vuelta antes de abrir el WS); ?hub= pisa esto
+  // siempre (dev contra otro hub, p. ej. uno propio para pruebas que se puede matar).
+  var PUERTO_DEV_WEB = '8101';
+  var mismoOrigen = !hubParam && location.protocol !== 'file:' && location.port !== PUERTO_DEV_WEB;
+  var wsScheme = (mismoOrigen && location.protocol === 'https:') ? 'wss' : 'ws';
+  var httpScheme = (mismoOrigen && location.protocol === 'https:') ? 'https' : 'http';
+  var hubHost = hubParam || (mismoOrigen ? location.host : (location.hostname + ':8100'));
 
   function wsUrlFor(idioma) {
-    return 'ws://' + hubHost + '/ws/' + encodeURIComponent(sessionId || '') + '?lang=' + encodeURIComponent(idioma);
+    return wsScheme + '://' + hubHost + '/ws/' + encodeURIComponent(sessionId || '') + '?lang=' + encodeURIComponent(idioma);
   }
 
   function historialUrl(desde) {
-    return 'http://' + hubHost + '/api/sesiones/' + encodeURIComponent(sessionId || '') +
+    return httpScheme + '://' + hubHost + '/api/sesiones/' + encodeURIComponent(sessionId || '') +
       '/historial?desde=' + encodeURIComponent(desde) + '&tipos=todos';
   }
 
@@ -40,6 +63,18 @@
   var elReplay = document.getElementById('chip-replay');
   var elTitulo = document.getElementById('titulo-sesion');
   var elSelectorIdioma = document.getElementById('selector-idioma');
+  var elVolverVivo = document.getElementById('volver-vivo');
+
+  // ---------- constantes B4 (documentadas donde se usan; las de tiempo son [SUPUESTO: frontend]
+  // salvo la de 250ms/1s de latido y la de 120s de traducción pendiente, que vienen del brief) ----------
+  var HEARTBEAT_PERIODO_MS = 1000;   // contracts/README.md: el hub late cada 1s
+  var HEARTBEAT_TOLERANCIA_MS = 250; // brief B4: tolerancia sobre el latido, sin parpadeo con jitter < 250ms
+  var UMBRAL_SIN_TEXTO_S = 15;       // brief B4: "> 15 s sin text"
+  var UMBRAL_DESCONECTADO_MS = 5000; // [SUPUESTO: frontend] caído más de esto: "desconectado" en vez de "reconectando…"
+  var TOPE_PENDIENTE_S = 120;        // brief B4: tope de espera de una traducción
+  var UMBRAL_GAP_AUDIO_S = 8;        // brief B4: audio_start - audio_end anterior > 8s
+  var UMBRAL_ROTATION_AUDIO_LOST_S = 5; // brief B4: meta.audio_lost_s > 5
+  var LANG_DESTINO_RE = /^[a-z]{2}(-[A-Z]{2})?$/;
 
   // ---------- estado de la conexión / vista (se reinicia al cambiar de idioma, ver resetVista) ----------
   var lastSeq = null;      // ultimo seq CONFIRMADO (pintado o contabilizado) de CUALQUIER tipo con
@@ -49,7 +84,7 @@
   var haveInit = false;    // ya pintamos las líneas del init (sólo la primera vez POR CONEXION)
   var isReplay = false;    // sticky por SESION (no se resetea al cambiar de idioma: no es un dato de la vista)
   var sessionLang = null;  // idioma ORIGINAL de la sesion (init.session_lang)
-  var translationsLangs = []; // init.translations_langs (B2)
+  var translationsLangs = []; // init.translations_langs + session_start.meta.translations_langs en vivo (B4)
   var tituloSesionReal = null; // titulo real (init.title / session_start.meta.title / GET /api/sesiones, B3);
                                 // sticky por SESION, igual que isReplay.
   var ws = null;
@@ -58,17 +93,74 @@
   var BACKOFF_MAX = 10000;
   var reconnectTimer = null;
   var elParcial = null;    // nodo DOM de la unica linea parcial visible (o null)
-  var pendientes = {};     // seq -> {nodo, span}: lineas en idioma traducido esperando su traduccion
+  var pendientes = {};     // seq -> {nodo, span, creadoTHub}: lineas en idioma traducido esperando su traduccion
   var enBackfill = false;  // B3: hay un GET .../historial en vuelo tras una reconexion
   var bufferEnVivo = [];   // B3: mensajes en vivo (ya parseados) recibidos mientras enBackfill es true,
                             // en orden de llegada; se aplican DESPUES del historial (finalizarBackfill).
 
-  function setChip(estado) {
-    // estados minimos (texto, nunca sólo color); el chip de 4 estados con tolerancia de 250ms
-    // sobre el heartbeat es B8 (ver reportes/plan.md) — se mantiene tal cual venia de B1.
-    var textos = { conectando: 'conectando…', conectado: 'conectado', reconectando: 'reconectando…' };
-    elChip.textContent = textos[estado] || estado;
-    elChip.className = 'chip chip--' + estado;
+  // ---------- B4: monitor de conexión (chip de 4 estados) ----------
+  // Todo en reloj del HUB (t_hub, epoch segundos) anclado con Date.now() local sólo para
+  // extrapolar entre latidos: así "sin texto hace N s" no depende de que el reloj del cliente
+  // esté sincronizado con el del hub, sólo de que no se desvíe demasiado EN LOS ~250ms-1s entre
+  // ticks (ver tick()).
+  var wsAbierto = false;
+  var ultimoHeartbeatLocalMs = null; // Date.now() de la última vez que "sentimos" un latido (o el open)
+  var ultimoHeartbeatTHub = null;    // t_hub de ese latido (o del init/open_ok más reciente)
+  var ultimoTextoTHub = null;        // t_hub del último `text` aplicado en ESTA vista (o del init si nunca hubo)
+  var ultimoAudioEnd = null;         // audio_end del último `text` aplicado en ESTA vista (huecos > 8s)
+  var cayendoDesde = null;           // Date.now() de cuando se detectó la caída (reconectando -> desconectado)
+  var tickTimer = null;
+
+  // ---------- B4: scroll que se rinde ----------
+  var siguiendoAlFondo = true;
+
+  function setChip(estado, n) {
+    // 4 estados, siempre con TEXTO (nunca sólo color, skill ui-subtitulos):
+    var textos = {
+      'en-vivo': 'en vivo',
+      'sin-texto': 'sin texto hace ' + n + ' s',
+      'reconectando': 'reconectando…',
+      'desconectado': 'desconectado'
+    };
+    var texto = textos[estado] || estado;
+    if (elChip.textContent !== texto) elChip.textContent = texto;
+    var clase = 'chip chip--' + estado;
+    if (elChip.className !== clase) elChip.className = clase;
+  }
+
+  // Recalcula el estado del chip cada 250ms: heartbeat sano (con tolerancia) decide entre
+  // "en vivo"/"sin texto hace N s"; si no, "reconectando…" primero y "desconectado" si la caída
+  // sigue más de UMBRAL_DESCONECTADO_MS. También barre las líneas pendientes vencidas (120s).
+  function tick() {
+    var ahora = Date.now();
+    var sano = false;
+    if (wsAbierto) {
+      if (ultimoHeartbeatLocalMs !== null && (ahora - ultimoHeartbeatLocalMs) > (HEARTBEAT_PERIODO_MS + HEARTBEAT_TOLERANCIA_MS)) {
+        // el latido dejo de llegar a horario: puede ser un socket "zombie" (el navegador todavia
+        // lo ve abierto pero el hub murio sin cerrar prolijo). Se fuerza el cierre para que
+        // dispare la reconexion real (si no, quedaria mintiendo "en vivo" para siempre).
+        wsAbierto = false;
+        if (ws) { try { ws.close(); } catch (e) { /* noop */ } }
+      } else {
+        sano = true;
+      }
+    }
+    if (sano) {
+      cayendoDesde = null;
+      var segSinTexto = null;
+      if (ultimoTextoTHub !== null && ultimoHeartbeatTHub !== null) {
+        segSinTexto = (ultimoHeartbeatTHub - ultimoTextoTHub) + (ahora - ultimoHeartbeatLocalMs) / 1000;
+      }
+      if (segSinTexto === null || segSinTexto <= UMBRAL_SIN_TEXTO_S) {
+        setChip('en-vivo');
+      } else {
+        setChip('sin-texto', Math.max(0, Math.round(segSinTexto)));
+      }
+    } else {
+      if (cayendoDesde === null) cayendoDesde = ahora;
+      setChip((ahora - cayendoDesde) >= UMBRAL_DESCONECTADO_MS ? 'desconectado' : 'reconectando');
+    }
+    purgarPendientesVencidos(ahora);
   }
 
   function marcarReplay() {
@@ -117,6 +209,24 @@
     return div;
   }
 
+  // ---------- B4: huecos de tiempo (audio sin texto), distintos del hueco por seq ----------
+  // "[tramo sin texto: N s]": una charla real puede quedarse callada un rato (pausa, corte,
+  // reapertura del watchdog) sin que se pierda NINGÚN mensaje (el seq sigue continuo) — por eso
+  // esto es un marcador aparte de "[tramo perdido]" (que es por seq discontinuo, aplicarMensajeConSeq).
+  function marcarHuecoAudio(segundos) {
+    agregarLinea('[tramo sin texto: ' + Math.round(segundos) + ' s]', { especial: true });
+  }
+
+  // Al llegar un `text`: si el audio saltó más de 8s desde el fin del anterior, marca el hueco
+  // ANTES de pintar la línea nueva (el hueco queda "entre" las dos). Aplica en vivo, backfill e
+  // init.lines por igual: procesarTexto() es el único camino para pintar un `text` (item 4, B4).
+  function marcarGapAudioSiCorresponde(item) {
+    if (ultimoAudioEnd !== null && typeof item.audio_start === 'number' &&
+        (item.audio_start - ultimoAudioEnd) > UMBRAL_GAP_AUDIO_S) {
+      marcarHuecoAudio(item.audio_start - ultimoAudioEnd);
+    }
+  }
+
   // ---------- linea PENDIENTE (vista traducida, texto final sin su traduccion todavia) ----------
   // Regla (documentada tambien en el reporte): al llegar un `text` sin `translations[lang]`
   // todavia, se pinta el ORIGINAL en gris como linea PENDIENTE (reemplazable, igual que un parcial).
@@ -126,16 +236,12 @@
   // se vuelve a tocar: es la unica mutacion permitida (pendiente -> confirmada), consistente con
   // "las lineas confirmadas nunca se reescriben" (append puro) y con "no reescribís texto ya
   // mostrado" (brief del agente).
-  // FIX B3 (pedido de backend/qa, contracts/README.md "puede llegar DESPUES del session_end"): B2
-  // tenia un timeout de 15s que resolvia la linea como "sin traducir" si no llegaba nada. Un
-  // reintento legitimo que llegara DESPUES de esos 15s (por ejemplo, tras el fin de la sesion,
-  // como en b1-es-60s-trad.jsonl: 3 de 6 eventos translation llegan despues del session_end) se
-  // hubiera perdido en silencio (pendientes[seq] ya no existia) Y ademas hubiera exigido una SEGUNDA
-  // reescritura para corregirlo, prohibida por la regla de arriba. Por eso ya NO hay timeout: la
-  // linea queda pendiente indefinidamente hasta que llegue su `translation` real (ok:true u
-  // ok:false). Si nunca llega (el worker nunca la intento), queda gris: mejor eso que mentir con
-  // una marca de "sin traducir" prematura que despues no se puede corregir.
-  function agregarLineaPendiente(seq, textoOriginal) {
+  // B3: sin timeout (una traduccion real puede llegar despues de session_end).
+  // B4 (pedido del adversario en el cierre de B3: "estado terminal para lineas pendientes"): tope
+  // de 120s en reloj del HUB (creadoTHub, el t_hub del `text` que abrió la línea pendiente) contra
+  // el t_hub del latido más reciente (ver tick()/purgarPendientesVencidos). Pasado el tope, se
+  // resuelve exactamente como un ok:false real: "sin traducir" con el original ya pintado.
+  function agregarLineaPendiente(seq, textoOriginal, creadoTHub) {
     var div = document.createElement('div');
     div.className = 'linea linea--pendiente';
     var span = document.createElement('span');
@@ -144,7 +250,7 @@
     div.appendChild(span);
     elLineas.appendChild(div);
     autoScroll();
-    pendientes[seq] = { nodo: div, span: span };
+    pendientes[seq] = { nodo: div, span: span, creadoTHub: (typeof creadoTHub === 'number' ? creadoTHub : null) };
   }
 
   function resolverPendiente(seq, resultado) {
@@ -171,6 +277,20 @@
     pendientes = {};
   }
 
+  // B4: barrido de líneas pendientes que superaron TOPE_PENDIENTE_S, en reloj del hub (ver
+  // comentario de agregarLineaPendiente). ahoraLocalMs es el Date.now() del tick que llama esto.
+  function purgarPendientesVencidos(ahoraLocalMs) {
+    if (ultimoHeartbeatTHub === null || ultimoHeartbeatLocalMs === null) return;
+    var ahoraTHub = ultimoHeartbeatTHub + (ahoraLocalMs - ultimoHeartbeatLocalMs) / 1000;
+    Object.keys(pendientes).forEach(function (seqStr) {
+      var p = pendientes[seqStr];
+      if (p.creadoTHub === null) return; // sin ancla real (no debería pasar: todo text trae t_hub)
+      if ((ahoraTHub - p.creadoTHub) > TOPE_PENDIENTE_S) {
+        resolverPendiente(Number(seqStr), { marca: 'sin traducir' });
+      }
+    });
+  }
+
   // ---------- linea PARCIAL (solo vista del idioma original: "los parciales no se traducen") ----------
   function mostrarParcial(texto) {
     if (!elParcial) {
@@ -192,15 +312,53 @@
     }
   }
 
+  // ---------- B4: scroll pegado al fondo que se rinde ----------
+  function estaCercaDelFondo() {
+    var margen = 48; // px de tolerancia (evita que un redondeo de 1px deje "siguiendo" en false)
+    return (window.innerHeight + window.scrollY) >= (document.body.scrollHeight - margen);
+  }
+
   function autoScroll() {
-    // B1/B2: scroll simple pegado al fondo en cada línea nueva.
-    // El "se rinde apenas el usuario sube" + botón "volver al vivo" es B8 (plan.md linea 75).
+    if (siguiendoAlFondo) {
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+  }
+
+  function mostrarVolverVivo() {
+    if (elVolverVivo) elVolverVivo.hidden = false;
+  }
+
+  function ocultarVolverVivo() {
+    if (elVolverVivo) elVolverVivo.hidden = true;
+  }
+
+  // El usuario sube: el scroll se rinde (deja de seguir) y aparece el botón. Si vuelve a llegar
+  // al fondo por su cuenta (scrollea de nuevo hasta abajo), retoma solo, sin esperar al botón.
+  function alScrollear() {
+    if (estaCercaDelFondo()) {
+      if (!siguiendoAlFondo) {
+        siguiendoAlFondo = true;
+        ocultarVolverVivo();
+      }
+    } else if (siguiendoAlFondo) {
+      siguiendoAlFondo = false;
+      mostrarVolverVivo();
+    }
+  }
+
+  function volverAlVivo() {
+    siguiendoAlFondo = true;
+    ocultarVolverVivo();
     window.scrollTo(0, document.body.scrollHeight);
   }
 
   // ---------- seleccion de texto por idioma para UNA linea type=text (vive, de init.lines o de historial) ----------
   function procesarTexto(item) {
     limpiarParcial(); // "borrada al llegar el siguiente text final" (solo aplica si habia una, si no es no-op)
+    marcarGapAudioSiCorresponde(item); // B4, ANTES de pintar la linea nueva
+    if (typeof item.t_hub === 'number') ultimoTextoTHub = item.t_hub; // B4: ancla del chip ("texto reciente")
+    if (typeof item.audio_end === 'number') ultimoAudioEnd = item.audio_end; // B4: ancla del proximo gap-check
+
     if (lang === item.lang) {
       // vista del idioma ORIGINAL: siempre confirmada de una, nunca pendiente (no se traduce a si misma)
       agregarLinea(item.text);
@@ -214,9 +372,9 @@
     } else if (trad && trad.ok === false) {
       agregarLinea(item.text, { marca: 'sin traducir' });
     } else {
-      // {} o ausente: todavia no hay traduccion. Pendiente hasta que llegue su translation (sin limite
-      // de tiempo, ver comentario en agregarLineaPendiente).
-      agregarLineaPendiente(item.seq, item.text);
+      // {} o ausente: todavia no hay traduccion. Pendiente hasta que llegue su translation, con
+      // tope de 120s en reloj del hub (ver agregarLineaPendiente/purgarPendientesVencidos, B4).
+      agregarLineaPendiente(item.seq, item.text, item.t_hub);
     }
   }
 
@@ -237,7 +395,7 @@
     // despues / mas actualizado. Este fetch sirve para tenerlo YA si la sesion arranco antes de
     // que esta pestaña se conectara (brief: "Titulo de la sesion (de /api/sesiones) visible arriba").
     var miSessionId = sessionId;
-    fetch('http://' + hubHost + '/api/sesiones').then(function (resp) {
+    fetch(httpScheme + '://' + hubHost + '/api/sesiones').then(function (resp) {
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       return resp.json();
     }).then(function (lista) {
@@ -277,6 +435,21 @@
     });
   }
 
+  // B4: translations_langs también puede llegar en vivo por session_start.meta.translations_langs
+  // (contracts/README.md "Índice de sesiones", B4), no sólo por `init`. Válida contra el mismo
+  // patrón que usa el hub (^[a-z]{2}(-[A-Z]{2})?$) antes de sumarlo.
+  function agregarIdiomasDestino(valor) {
+    var lista = Array.isArray(valor) ? valor : (typeof valor === 'string' ? [valor] : []);
+    var cambio = false;
+    lista.forEach(function (xx) {
+      if (typeof xx === 'string' && LANG_DESTINO_RE.test(xx) && translationsLangs.indexOf(xx) === -1) {
+        translationsLangs.push(xx);
+        cambio = true;
+      }
+    });
+    if (cambio) construirSelector();
+  }
+
   function actualizarTitulo() {
     if (!elTitulo) return;
     var base = (sessionLang && sessionLang !== lang)
@@ -301,6 +474,15 @@
     enBackfill = false;
     bufferEnVivo = [];
     backoffMs = 1000;
+    // B4: estado del chip / monitor de heartbeat, y del hueco por audio — vista nueva, ancla nueva.
+    wsAbierto = false;
+    ultimoHeartbeatLocalMs = null;
+    ultimoHeartbeatTHub = null;
+    ultimoTextoTHub = null;
+    ultimoAudioEnd = null;
+    cayendoDesde = null;
+    siguiendoAlFondo = true;
+    ocultarVolverVivo();
   }
 
   function cambiarIdioma(nuevo) {
@@ -450,15 +632,33 @@
       case 'session_start':
         // item 3 (B3): titulo real de la sesion (ademas de GET /api/sesiones al arrancar).
         if (msg.meta && msg.meta.title) actualizarTituloReal(msg.meta.title);
+        // B4: translations_langs puede venir en el propio session_start (contracts/README.md,
+        // "Índice de sesiones"), sin esperar la 1a traduccion ni un reconnect para verlo en init.
+        if (msg.meta) agregarIdiomasDestino(msg.meta.translations_langs);
+        console.log('[hub] evento de control:', msg.type, msg);
+        break;
+
+      case 'rotation':
+        // B4 (item 4): hueco de audio grande por una reapertura (atasco/cierre) que el worker no
+        // pudo cubrir con el reenvio de solape. meta.audio_lost_s es una cota superior calculada
+        // por worker/session.py (_audio_perdido); 0 en preventiva/GoAway (la vieja drena sola).
+        if (msg.meta && typeof msg.meta.audio_lost_s === 'number' && msg.meta.audio_lost_s > UMBRAL_ROTATION_AUDIO_LOST_S) {
+          marcarHuecoAudio(msg.meta.audio_lost_s);
+          var rango = msg.meta.audio_lost_rango;
+          if (Array.isArray(rango) && typeof rango[1] === 'number') {
+            // no dejar que el proximo `text` marque el MISMO hueco dos veces por el chequeo de
+            // audio_start - audio_end anterior (marcarGapAudioSiCorresponde).
+            ultimoAudioEnd = (ultimoAudioEnd === null) ? rango[1] : Math.max(ultimoAudioEnd, rango[1]);
+          }
+        }
         console.log('[hub] evento de control:', msg.type, msg);
         break;
 
       case 'session_end':
-      case 'rotation':
       case 'watchdog':
       case 'error':
         // item 3 (B3): la audiencia NO ve estos eventos tecnicos (ni linea, ni cambio de chip:
-        // el chip solo reacciona a open/close del socket, ver conectar()). Solo van a consola.
+        // el chip reacciona al heartbeat/socket, ver tick()). Solo van a consola.
         console.log('[hub] evento de control:', msg.type, msg);
         break;
 
@@ -475,22 +675,29 @@
     construirSelector();
     actualizarTitulo();
 
+    // B4: init como ancla de heartbeat (t_hub llega en cada init, hub/nucleo.py `suscribir`) —
+    // cubre el hueco entre 'open' y el primer heartbeat real (~1s). Si todavia no vimos NINGUN
+    // `text` en esta vista, arranca el reloj de "sin texto" desde el propio init (sesion en
+    // silencio ANTES de que nos conectemos: mejor decir "sin texto hace Ns" que "en vivo" a ciegas).
+    if (typeof msg.t_hub === 'number') {
+      ultimoHeartbeatTHub = msg.t_hub;
+      ultimoHeartbeatLocalMs = Date.now();
+      if (ultimoTextoTHub === null) ultimoTextoTHub = msg.t_hub;
+    }
+
     var nuevoLastSeq = normSeq(msg.last_seq);
     if (!haveInit) {
       // contracts/README.md: "lines" son los últimos 10 mensajes type=text COMPLETOS
       // (texto + traducciones ya mergeadas), no strings sueltos: pasan por procesarTexto,
       // la MISMA seleccion de idioma que un 'text' en vivo (si no, se pinta "[object Object]").
-      // Huecos DENTRO del historial: cada item trae su propio 'seq', se compara consecutivo a
-      // consecutivo (no solo hacia adelante), por si el hueco ya existia antes de conectarse.
-      var prevSeq = null;
-      (msg.lines || []).forEach(function (item) {
-        var itemSeq = normSeq(item.seq);
-        if (prevSeq !== null && itemSeq !== null && itemSeq > prevSeq + 1) {
-          agregarLinea('[tramo perdido]', { especial: true });
-        }
-        procesarTexto(item);
-        if (itemSeq !== null) prevSeq = itemSeq;
-      });
+      // FIX B4 (encontrado con el propio test del item 4: contracts/ejemplos + un rotation
+      // sintetico entre dos text): `lines` sólo trae type=text (contracts/README.md, "init"), así
+      // que un `rotation`/`watchdog`/`error` legítimo entre dos líneas de texto consume un seq
+      // sin aparecer en `lines` — comparar el seq consecutivo DE `lines` (B3) marcaba un
+      // "[tramo perdido]" falso ahí. La detección real de huecos (con TODOS los tipos, sin falsos
+      // positivos) ya la hacen aplicarMensajeConSeq/backfill para todo lo que llega después de
+      // este primer pintado; acá sólo se pinta lo que mandó el hub, sin inferir de más.
+      (msg.lines || []).forEach(function (item) { procesarTexto(item); });
       haveInit = true;
       lastSeq = nuevoLastSeq;
     } else {
@@ -519,7 +726,11 @@
 
     if (msg.type === 'heartbeat') {
       // seq siempre null en heartbeat: no participa del conteo de huecos ni del backfill.
-      // El chip fino de 4 estados / 250ms sobre este latido es B8.
+      // B4: ancla del monitor de conexion (chip de 4 estados, ver tick()).
+      if (typeof msg.t_hub === 'number') {
+        ultimoHeartbeatTHub = msg.t_hub;
+        ultimoHeartbeatLocalMs = Date.now();
+      }
       return;
     }
 
@@ -542,14 +753,16 @@
   function conectar() {
     connId += 1;
     var miConn = connId;
-    setChip(haveInit ? 'reconectando' : 'conectando');
     var socket = new WebSocket(wsUrlFor(lang));
     ws = socket;
 
     socket.addEventListener('open', function () {
       if (miConn !== connId) return;
       backoffMs = 1000;
-      setChip('conectado');
+      wsAbierto = true;
+      // ancla provisoria hasta que llegue el init (que trae t_hub real): evita que tick() vea
+      // "vencido" en la fraccion de segundo entre el open y el primer mensaje.
+      ultimoHeartbeatLocalMs = Date.now();
     });
 
     socket.addEventListener('message', function (evt) {
@@ -559,7 +772,7 @@
 
     socket.addEventListener('close', function () {
       if (miConn !== connId) return;
-      setChip('reconectando');
+      wsAbierto = false;
       programarReconexion();
     });
 
@@ -590,6 +803,10 @@
   } else {
     actualizarTitulo();
     cargarTituloInicial();
+    setChip('reconectando'); // estado inicial: se está por intentar la primera conexión
+    window.addEventListener('scroll', alScrollear, { passive: true });
+    if (elVolverVivo) elVolverVivo.addEventListener('click', volverAlVivo);
+    tickTimer = setInterval(tick, 250);
     conectar();
   }
 })();

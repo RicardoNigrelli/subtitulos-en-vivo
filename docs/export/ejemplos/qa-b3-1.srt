@@ -1,0 +1,104 @@
+1
+00:00:00,000 --> 00:00:02,200
+was the function. Now, you may say
+
+2
+00:00:01,800 --> 00:00:04,600
+say well it's obvious wasn't always obvious.
+
+3
+00:00:04,200 --> 00:00:07,100
+obvious. The idea of a function of a as an
+
+4
+00:00:06,700 --> 00:00:11,200
+as an abstraction did not come about until thethe 1940s 1950s
+
+5
+00:00:10,800 --> 00:00:13,200
+And even then it was considered to be
+
+6
+00:00:12,800 --> 00:00:15,100
+be an astonishingly
+
+7
+00:00:14,700 --> 00:00:17,600
+controversial idea. Why is that the case?
+
+8
+00:00:17,200 --> 00:00:20,100
+case because every time you do a function call it
+
+9
+00:00:19,700 --> 00:00:22,200
+All it requires two or three more
+
+10
+00:00:21,800 --> 00:00:24,500
+instructions and those were in the days of
+
+11
+00:00:24,100 --> 00:00:26,600
+of computing back then, extremely
+
+12
+00:00:26,200 --> 00:00:28,500
+expensive. So we had this this
+
+13
+00:00:28,100 --> 00:00:31,100
+This tradeoff between do we build things
+
+14
+00:00:30,700 --> 00:00:33,100
+that serve our machines do we build
+
+15
+00:00:32,700 --> 00:00:35,200
+build things that serve the needs of our humans.
+
+16
+00:00:34,800 --> 00:00:37,300
+I was at this battle, but in those
+
+17
+00:00:36,900 --> 00:00:39,600
+In those days, the machines were far more
+
+18
+00:00:39,200 --> 00:00:42,500
+more expensive than our humans, and so a lot of what we happen in
+
+19
+00:00:42,100 --> 00:00:45,000
+happened in software engineering was to optimize the needs for the
+
+20
+00:00:44,600 --> 00:00:47,000
+for the machine, not the humans themselves.
+
+21
+00:00:46,600 --> 00:00:48,900
+yourselves. Well, with
+
+22
+00:00:48,500 --> 00:00:52,300
+With the advent of micro-miniaturization, we had from the mainframe
+
+23
+00:00:51,900 --> 00:00:54,200
+mainframes, we suddenly had many
+
+24
+00:00:53,800 --> 00:00:56,100
+minicomputers like the PDP-11
+
+25
+00:00:55,700 --> 00:00:59,000
+oven uh 60 series uh we had
+
+26
+00:00:58,600 --> 00:01:00,000
+microcomputers as well
+

@@ -26,6 +26,11 @@ TIPOS_AUDIENCIA = frozenset(TIPOS) - {"heartbeat"}
 TIPOS_SIN_SEQ = frozenset({"heartbeat", "partial", "translation"})
 # Tipos que el hub reenvia en vivo pero NO guarda en el historial.
 TIPOS_EFIMEROS = frozenset({"partial", "translation"})
+# AMPLIADO 24/09 B4 (aditivo): valores de meta.source que rotulan una sesion de PRUEBA (no ASR en
+# vivo). El hub la marca `test: true` en /api/sesiones e init. Ver contracts/README.md.
+FUENTE_TRANSPORTE_CASETE = "transporte-casete"  # worker con --transporte casete: (respuestas grabadas)
+FUENTE_EJEMPLO = "ejemplo-contrato"             # contracts/ejemplos/ (sinteticos)
+FUENTES_TEST = frozenset({FUENTE_TRANSPORTE_CASETE, FUENTE_EJEMPLO})
 ESQUEMA_PATH = Path(__file__).with_name("esquema.json")
 EJEMPLOS_DIR = Path(__file__).with_name("ejemplos")
 

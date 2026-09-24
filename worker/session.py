@@ -33,7 +33,16 @@ conectar; nada se pierde). En atasco/cierre se REENVIAN a la nueva las ventanas 
 cubrio (hasta REENVIO_MAX_S). La vieja recibe activity_end si tenia turno abierto y queda hasta
 DRENAJE_VIEJA_S drenando; de ella se aceptan solo textos con audio_end <= corte + solape. `seq`
 sigue continuo y la session_id publica NO cambia (old_id/new_id son ids internos de conexion).
-Dedup fina de costuras por caracteres: B4.
+B4:
+- DEDUP de costuras por caracteres (worker/dedup.py): sufijo del ultimo texto emitido vs prefijo del
+  nuevo; el original crudo queda en el casete (`dedup.original`). Un duplicado entero no se emite.
+- ROTULO: si el transporte es de test (atributo SOURCE_REPLAY, p.ej. worker/transporte_casete.py)
+  TODO mensaje sale con replay:true y meta.source=<rotulo>; el session_start lleva "[TEST] " en el
+  titulo (contracts/README.md: replay=true si viene de un casete).
+- rotation.meta.audio_lost_s / audio_lost_rango: audio de ventanas que la conexion vieja no cubrio y
+  que NO se reenvia (tope REENVIO_MAX_S): ESTIMACION del hueco que deja la reapertura (cota superior:
+  si la vieja drena, se recupera).
+- session_start.meta.translations_langs: idiomas destino del traductor desde el arranque.
 """
 from __future__ import annotations
 
@@ -46,6 +55,7 @@ from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from worker.casete import Grabador, kind_server
 from worker.contrato import SIN_SEQ, mensaje
+from worker.dedup import dedup_costura
 from worker.emisor import Emisor
 from worker.ingesta import CHUNK_S, Chunk
 from worker.mapeo import InfoVentana, Mapeador, segundos as _segundos_mapeo
@@ -99,6 +109,8 @@ class Resultado:
     rotaciones: list = field(default_factory=list)
     descartados_vieja: int = 0
     reenviados_s: float = 0.0
+    dedup_recortados: int = 0         # textos a los que se les quito el prefijo repetido
+    dedup_descartados: int = 0        # textos que eran duplicado entero (no se emitieron)
 
     @property
     def segundos_enviados(self) -> float:
@@ -156,6 +168,33 @@ class _Conexion:
         return round(max(0.0, self.acc_s - self.offset_s - g), 3)
 
 
+def _union(intervalos) -> float:
+    tot, fin = 0.0, None
+    for a, b in sorted(intervalos):
+        if fin is None or a > fin:
+            tot += b - a
+            fin = b
+        elif b > fin:
+            tot += b - fin
+            fin = b
+    return tot
+
+
+def _audio_perdido(vieja: "_Conexion", reenviar: list, motivo: str) -> dict:
+    """Estimacion del audio que queda SIN TEXTO por la reapertura: ventanas pendientes de la vieja
+    (sin texto del server) que no entran en el reenvio. En preventiva/goaway la vieja sigue sana y
+    drena: 0. Es cota superior (si la vieja drena dentro de DRENAJE_VIEJA_S, se recupera)."""
+    if motivo not in ("atasco", "cierre"):
+        return {"audio_lost_s": 0.0, "audio_lost_rango": None}
+    reenv = {h["v"].idx for h in reenviar}
+    perdidas = [i for i in vieja.mapa.pend if i.idx not in reenv]
+    if not perdidas:
+        return {"audio_lost_s": 0.0, "audio_lost_rango": None}
+    iv = [(i.audio_start, i.audio_end) for i in perdidas]
+    return {"audio_lost_s": round(_union(iv), 2),
+            "audio_lost_rango": [round(min(a for a, _ in iv), 2), round(max(b for _, b in iv), 2)]}
+
+
 class SessionWorker:
     def __init__(self, session_id: str, lang: str, transporte: Transporte,
                  fuente: AsyncIterator[Chunk], grabador: Optional[Grabador] = None,
@@ -168,7 +207,9 @@ class SessionWorker:
                  log: Callable[[str], None] = print,
                  fabrica: Optional[Callable[[float], Transporte]] = None,
                  reabrir: Optional[ConfigReabrir] = None,
-                 turnos_manuales: bool = True):
+                 turnos_manuales: bool = True,
+                 rotulo: Optional[str] = None,
+                 dedup: bool = True):
         self.sid = session_id
         self.lang = lang
         self.tr = transporte
@@ -190,6 +231,10 @@ class SessionWorker:
         self.fabrica = fabrica               # None => sin reabrir (una sola conexion, como B1/B2)
         self.cfg = reabrir or ConfigReabrir.desde_env()
         self.turnos_manuales = turnos_manuales   # False => VAD automatico del server (A/B B3)
+        # rotulo de test/replay: explicito o el que declara el transporte (no se puede olvidar)
+        self.rotulo = rotulo or getattr(transporte, "SOURCE_REPLAY", None)
+        self.dedup = dedup
+        self._ultimo_texto: Optional[str] = None
         self.n_parciales = 0
         self.drenaje: dict = {}
         self.res = Resultado(session_id)
@@ -220,6 +265,14 @@ class SessionWorker:
         else:
             seq = None
         extra_casete = campos.pop("_casete", {})
+        if self.rotulo:
+            # transporte de test: TODO mensaje sale rotulado (no es ASR en vivo)
+            meta = dict(campos.get("meta") or {})
+            if "source" in meta and meta["source"] != self.rotulo:
+                meta["source_original"] = meta["source"]
+            meta["source"] = self.rotulo
+            campos["meta"] = meta
+            campos["replay"] = True
         msg = mensaje(tipo, self.sid, seq, self.lang, t_emit=self.reloj(), **campos)
         if self.rec:
             self.rec.emit(msg, t=msg["t_emit"], **extra_casete)
@@ -353,6 +406,7 @@ class SessionWorker:
         info = {**p, "new_id": nueva.id, "corte_s": round(corte, 2), "conectar_s": conectar_s,
                 "reenvio_ventanas": [h["v"].idx for h in reenviar],
                 "reenvio_s": round(sum(len(h["chunks"]) for h in reenviar) * CHUNK_S, 1)}
+        info.update(_audio_perdido(vieja, reenviar, motivo))
         info.pop("t", None)
         nueva.gracia_s = info["reenvio_s"]
         self._atascos_seguidos = self._atascos_seguidos + 1 if motivo == "atasco" else 0
@@ -521,15 +575,30 @@ class SessionWorker:
                 a.audio_start = self.abierta.audio_start if self.abierta else round(self.pos_s, 3)
                 a.audio_end = round(max(self.pos_s, a.audio_start), 3)
                 a.t_captured = a.t_captured if a.t_captured is not None else self.reloj()
-            self.res.textos += 1
             # el original sale YA con translations {}; la traduccion llega despues como `translation`
             extra = {"ventanas": a.ventanas, "conexion": con.id if con is not None else None}
             if lim is not None and a.audio_end is not None and a.audio_end > lim:
                 extra["cruza_corte"] = {"corte_s": corte, "limite": lim}
-            msg = self.emitir("text", text=a.text, audio_start=a.audio_start, audio_end=a.audio_end,
+            texto = a.text
+            if self.dedup:
+                texto, quitados = dedup_costura(self._ultimo_texto, a.text)
+                if quitados:
+                    extra["dedup"] = {"original": a.text, "quitados": quitados}
+                    if not texto.strip():
+                        # duplicado entero (costura de solape o reenvio al reabrir): no se emite
+                        self.res.dedup_descartados += 1
+                        if self.rec:
+                            self.rec.client("dedup_descartado", {"conexion": extra["conexion"],
+                                                                 "text": a.text, "ventanas": a.ventanas,
+                                                                 "previo": self._ultimo_texto})
+                        continue
+                    self.res.dedup_recortados += 1
+            self.res.textos += 1
+            self._ultimo_texto = texto
+            msg = self.emitir("text", text=texto, audio_start=a.audio_start, audio_end=a.audio_end,
                               t_captured=a.t_captured, _casete=extra)
             if self.traductor is not None:
-                self.traductor.agregar(msg["seq"], a.text, msg["t_emit"])
+                self.traductor.agregar(msg["seq"], texto, msg["t_emit"])
 
     def _on_traduccion(self, res) -> None:
         from worker.traductor import meta_traduccion
@@ -623,7 +692,13 @@ class SessionWorker:
             self.res.t_fin = self.reloj()
             return self.res
         self._vivo = True
-        self.emitir("session_start", meta={"title": self.titulo, "source": self.source})
+        titulo = self.titulo
+        if self.rotulo and not str(titulo or "").startswith("[TEST] "):
+            titulo = f"[TEST] {titulo or self.sid}"
+        self.emitir("session_start", meta={
+            "title": titulo, "source": self.source,
+            # el indice ofrece el idioma destino desde el arranque (no recien con la 1a traduccion)
+            "translations_langs": [self.traductor.a] if self.traductor is not None else []})
         if self.traductor is not None:
             self.traductor.on_resultado = self._on_traduccion
             self.traductor.iniciar()
@@ -671,7 +746,7 @@ class SessionWorker:
         vt.cancel()
         self._emitir_asignaciones(con.mapa.vaciar(), con)
         if self.traductor is not None:
-            await self.traductor.cerrar(15.0)   # ultimo lote + traducciones en vuelo
+            await self.traductor.cerrar(self.traductor.timeout_s + 5.0)   # ultimo lote + en vuelo
         self._vivo = False
         cierre = con.cierre or {}
         if cierre.get("by") in ("server", "red") and cierre.get("code") not in (1000, None):

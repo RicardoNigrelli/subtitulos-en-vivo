@@ -1,0 +1,44 @@
+1
+00:00:00,000 --> 00:00:02,200
+era la función. Ahora, puede que digan
+
+2
+00:00:01,800 --> 00:00:04,600
+digamos, bueno, es obvio. No siempre fue obvio.
+
+3
+00:00:04,200 --> 00:00:07,100
+La idea de una función como un
+
+4
+00:00:06,700 --> 00:00:09,400
+como abstracción no surgió hasta
+
+5
+00:00:09,000 --> 00:00:11,200
+los años 40 50
+
+6
+00:00:10,800 --> 00:00:13,200
+Y aun así se consideraba
+
+7
+00:00:12,800 --> 00:00:15,100
+ser una idea sorpresivamente
+
+8
+00:00:14,700 --> 00:00:17,600
+polémica. ¿Por qué es ese el caso?
+
+9
+00:00:17,200 --> 00:00:20,100
+el caso porque cada vez que haces una llamada a función
+
+10
+00:00:19,700 --> 00:00:22,200
+todo lo que requiere son dos o tres más
+
+11
+00:00:21,800 --> 00:00:31,100
+Y esos eran en los días de la computación de entonces extremadamente caros. Así que teníamos este este compromiso entre construimos cosas que
+

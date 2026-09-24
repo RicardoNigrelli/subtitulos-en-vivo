@@ -1,0 +1,56 @@
+1
+00:00:00,000 --> 00:00:03,100
+Con un diagramita lo podríamos ver de esta forma, ¿no?
+
+2
+00:00:02,700 --> 00:00:06,500
+Los legacy es un subconjunto dentro del
+
+3
+00:00:06,100 --> 00:00:09,300
+el mundo del brownfield. Si un proyecto que empezó ayer
+
+4
+00:00:08,900 --> 00:00:12,700
+posiblemente bajo alguna de las definiciones no sea
+
+5
+00:00:12,300 --> 00:00:14,900
+su legacy, pero podría ser
+
+6
+00:00:14,500 --> 00:00:16,700
+este brownfield
+
+7
+00:00:16,300 --> 00:00:24,200
+podríamos decir porque si empezó ayer posiblemente haya poco.
+
+8
+00:00:23,800 --> 00:00:26,000
+poco código
+
+9
+00:00:25,600 --> 00:00:43,600
+incluidos los legacy, es que es que están en producción. Si empezó ayer, posiblemente no esté en producción. Si empezó hace un mes, tal vez sí, porque los tiempos se han acelerado. En alguna época uno podía estar con
+
+10
+00:00:43,200 --> 00:00:48,300
+algo durante un año sin ponerlo en producción. Hoy en día los tiempos
+
+11
+00:00:47,900 --> 00:00:51,700
+tiempos que se manejan, sobre todo con toda la aceleración que
+
+12
+00:00:51,300 --> 00:00:54,600
+que nos trae las herramientas de inteligencia
+
+13
+00:00:54,200 --> 00:00:56,800
+artificial hace que
+
+14
+00:00:56,400 --> 00:01:00,000
+que uno vaya a producción mucho más rápido.
+

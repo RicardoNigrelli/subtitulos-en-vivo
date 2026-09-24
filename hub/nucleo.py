@@ -9,17 +9,22 @@ Reglas (contracts/README.md):
 - B2 (aditivo): `translation` se MERGEA en el `text` guardado con ese session_id+seq
   (translations[lang_to] = {text, ok}); si el text todavia no llego, el item queda pendiente
   HUB_PENDIENTE_S segundos. `partial` se reparte en vivo y NO se guarda. Ninguno toca last_seq.
+- B4 (aditivo): `session_start.meta.translations_langs` se suma a los idiomas destino de la sesion
+  apenas llega (antes de la primera traduccion). `source` = `session_start.meta.source` o, si no
+  vino, el primer `meta.source` de un mensaje que no sea `translation`; `test` = True si algun
+  mensaje trae un `meta.source` de contracts.FUENTES_TEST (queda pegado).
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import re
 import time
 from collections import Counter, deque
 from typing import Any
 
-from contracts import TIPOS_AUDIENCIA, errores
+from contracts import FUENTES_TEST, TIPOS_AUDIENCIA, errores
 
 from .config import Config
 
@@ -27,10 +32,29 @@ log = logging.getLogger("hub")
 
 CIERRE_LENTO = 1013   # "try again later": se le lleno la cola, que reconecte
 CIERRE_APAGADO = 1001  # going away
+LANG_DESTINO = re.compile(r"^[a-z]{2}(-[A-Z]{2})?$")  # = $defs/lang_destino de contracts/esquema.json
 
 
 def dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def idiomas_declarados(valor: Any) -> tuple[set[str], list]:
+    """B4: session_start.meta.translations_langs -> (validos, ignorados). Acepta lista o un string."""
+    if valor is None:
+        return set(), []
+    if isinstance(valor, str):
+        valor = [valor]
+    if not isinstance(valor, (list, tuple)):
+        return set(), [valor]
+    validos: set[str] = set()
+    ignorados: list = []
+    for x in valor:  # sin `x in set`: un dict o una lista no son hashables y tirarian la ingesta
+        if isinstance(x, str) and LANG_DESTINO.fullmatch(x):
+            validos.add(x)
+        else:
+            ignorados.append(x)
+    return validos, ignorados
 
 
 class Cliente:
@@ -67,7 +91,8 @@ class Sesion:
         self.conocida = False  # True cuando llego algo por /ingest (si no, solo tiene espectadores esperando)
         self.lang: str | None = None
         self.title: str | None = None
-        self.source: str | None = None
+        self.source: Any = None   # string u objeto (el worker manda {file, url, start_s, dur_s})
+        self.test = False         # B4: algun mensaje trajo meta.source en contracts.FUENTES_TEST
         self.replay: bool | None = None
         self.last_seq: int | None = None
         self.last_t_emit: float | None = None
@@ -119,6 +144,7 @@ class Sesion:
             "last_t_emit": self.last_t_emit,
             "state": self.estado(ahora, ventana),
             "source": self.source,
+            "test": self.test,
             "last_t_hub": self.last_t_hub,
             "viewers": len(self.clientes),
             "viewers_por_idioma": dict(Counter(c.lang or "-" for c in self.clientes)),
@@ -212,6 +238,7 @@ class Hub:
             s.lang = msg["lang"]
         if "replay" in msg:
             s.replay = msg["replay"]
+        self._rotular(s, msg)
 
         if msg["type"] == "heartbeat":
             s.latidos_worker += 1
@@ -251,7 +278,14 @@ class Hub:
             s.textos[seq] = m
         if m["type"] == "session_start":
             meta = m.get("meta") or {}
-            s.title, s.source = meta.get("title"), meta.get("source")
+            s.title = meta.get("title")
+            if meta.get("source") is not None:  # manda sobre el meta.source de otros mensajes
+                s.source = meta["source"]
+            validos, ignorados = idiomas_declarados(meta.get("translations_langs"))
+            s.idiomas_destino.update(validos)  # B4: el indice ofrece el idioma antes de la 1a traduccion
+            if ignorados:
+                log.warning("sesion %s: session_start.meta.translations_langs con valores ignorados %r "
+                            "(se espera una lista de codigos como \"es\")", s.session_id, ignorados)
         if s.last_seq is None or seq > s.last_seq:
             s.last_seq, s.last_t_emit = seq, m.get("t_emit")
             s.terminada = m["type"] == "session_end"
@@ -263,6 +297,21 @@ class Hub:
         if m["type"] in TIPOS_AUDIENCIA:
             self.difundir(s, dumps(m))
         return "ok", []
+
+    @staticmethod
+    def _rotular(s: Sesion, msg: dict) -> None:
+        """B4: source/test de la sesion. El `session_start` fija `source` en su rama (manda); si no
+        vino, vale el primer `meta.source` de un mensaje que no sea `translation` (ahi `meta.source`
+        describe la traduccion, no la sesion). `test` queda en True si CUALQUIER mensaje trae un
+        `meta.source` de FUENTES_TEST."""
+        meta = msg.get("meta")
+        fuente = meta.get("source") if isinstance(meta, dict) else None
+        if fuente is None:
+            return
+        if isinstance(fuente, str) and fuente in FUENTES_TEST:
+            s.test = True
+        if s.source is None and msg["type"] not in ("translation", "session_start"):
+            s.source = fuente
 
     def _traduccion(self, s: Sesion, msg: dict, ahora: float) -> tuple[str, list[str]]:
         """Mergea cada item en el text guardado (o lo deja pendiente) y reenvia el evento en vivo
@@ -313,6 +362,8 @@ class Hub:
             "state": s.estado(ahora, self.config.live_s) if s.conocida else "waiting",
             "title": s.title,
             "replay": s.replay,
+            "source": s.source,   # B4
+            "test": s.test,       # B4
             "t_hub": ahora,
             "translations_langs": sorted(s.idiomas_destino),
             "lines": s.lineas(self.config.init_lines),

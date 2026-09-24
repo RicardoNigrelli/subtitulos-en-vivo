@@ -17,6 +17,14 @@ Diseno B2 (ESTADO.md, Decisiones):
   INVALID_ARGUMENT (10/10). Se deja thinking_level="minimal" (el mas bajo que acepta): p50 4694 ms
   vs 8311 ms sin thinking_config (n=10 c/u, intercalados); p95 ~24 s en ambos. p50 NO baja de 3 s.
 - Contador: una linea por llamada en reportes/cuota-texto.log: hora | modelo | items | estado | ms
+B4 (R19 en vivo: en B3 12 de 49 ok y 29-41 s tarde con 2 sesiones; hipotesis del orquestador: los
+lotes se despachaban EN SERIE y uno lento bloqueaba la cola):
+- Cada lote es una TAREA INDEPENDIENTE (asyncio.create_task). La unica compuerta es el limitador por
+  modelo (12 RPM, token bucket, rotacion 3.5 <-> 3.1 flash-lite).
+- Lote = LOTE_MAX=2 ventanas o LOTE_S=5 s desde el primero pendiente.
+- Timeout TIMEOUT_S=20 s; al vencer, ok:false SIN reintento (el reintento duplica carga). Reintento
+  SOLO ante 429/5xx, con backoff del modelo (el reintento prefiere el otro modelo). Respuesta con
+  cantidad distinta o error de otro tipo: ok:false sin reintento.
 
     python -m worker.traductor --listar                        # ids exactos (models.list)
     python -m worker.traductor --probar "Hello world" --a es   # UNA llamada real (gasta 1 RPD)
@@ -37,9 +45,10 @@ from typing import Awaitable, Callable, Optional, Protocol
 
 RAIZ = Path(__file__).resolve().parent.parent
 LOG_TEXTO = Path(os.environ.get("CUOTA_TEXTO_LOG", RAIZ / "reportes" / "cuota-texto.log"))
-LOTE_MAX = 3
-LOTE_S = 8.0
-TIMEOUT_S = 15.0
+LOTE_MAX = 2
+LOTE_S = 5.0
+TIMEOUT_S = 20.0
+ESPERA_CUPO_S = 15.0      # un lote que no consigue cupo en 15 s sale ok:false (ya llegaria tarde)
 RPM = 12
 CAPACIDAD = 2
 RPD_TOPE = int(os.environ.get("TRADUCTOR_RPD_TOPE", 480))
@@ -69,6 +78,13 @@ class Error429(Exception):
     pass
 
 
+class Error5xx(Exception):
+    pass
+
+
+REINTENTABLES = ("429", "5xx")
+
+
 class TransporteGenAI:
     """Transporte REAL (google-genai, models.generate_content). Unico camino de produccion."""
 
@@ -91,8 +107,11 @@ class TransporteGenAI:
         try:
             r = await self._c.aio.models.generate_content(model=modelo, contents=prompt, config=cfg)
         except errors.APIError as e:
-            if getattr(e, "code", None) == 429:
+            code = getattr(e, "code", None)
+            if code == 429:
                 raise Error429(str(e)[:200]) from e
+            if isinstance(code, int) and 500 <= code < 600:
+                raise Error5xx(f"{code}: {str(e)[:200]}") from e
             raise
         return r.text or ""
 
@@ -296,7 +315,7 @@ class Traductor:
     def __init__(self, de: str, a: str, transporte: Optional[TransporteTexto] = None,
                  modelos: Optional[list[str]] = None, limitador: Optional[Limitador] = None,
                  log: Optional[Path] = LOG_TEXTO, timeout_s: float = TIMEOUT_S,
-                 lotes: Optional[Lotes] = None, espera_cupo_s: float = 2 * LOTE_S,
+                 lotes: Optional[Lotes] = None, espera_cupo_s: float = ESPERA_CUPO_S,
                  reintentos: int = 1,
                  on_resultado: Optional[Callable[[ResultadoLote], None]] = None,
                  logger: Callable[[str], None] = lambda s: print(s, file=sys.stderr, flush=True)):
@@ -315,9 +334,11 @@ class Traductor:
         self.n_lotes = 0
         self.n_ok_false = 0
         self.por_modelo: dict[str, int] = {}
-        self._cola: Optional[asyncio.Queue] = None
-        self._tareas: list[asyncio.Task] = []
-        self._en_vuelo = None
+        self._vigia: Optional[asyncio.Task] = None
+        self._vuelo: dict = {}           # tarea -> lote (lotes en vuelo, EN PARALELO)
+        self.max_en_vuelo = 0
+        self.n_timeout = 0
+        self.n_reintentos = 0
 
     def _anotar(self, modelo: str, n: int, estado: str, ms: int) -> None:
         self.n_llamadas += 1
@@ -329,7 +350,7 @@ class Traductor:
             f.write(f"{datetime.now().strftime(FMT)} | {modelo} | {n} | {estado} | {ms}\n")
 
     async def traducir(self, textos: list[str], seqs: Optional[list[int]] = None) -> ResultadoLote:
-        """UNA llamada por lote (+1 reintento). Nunca levanta excepcion."""
+        """UNA llamada por lote (+1 reintento SOLO ante 429/5xx). Nunca levanta excepcion."""
         seqs = seqs if seqs is not None else list(range(len(textos)))
         prompt = prompt_lote(textos, self.de, self.a)
         intentos: list[dict] = []
@@ -354,8 +375,11 @@ class Traductor:
                 estado = "cantidad"
             except asyncio.TimeoutError:
                 ms, estado = int((time.monotonic() - t0) * 1000), "timeout"
+                self.n_timeout += 1
             except Error429:
                 ms, estado = int((time.monotonic() - t0) * 1000), "429"
+            except Error5xx:
+                ms, estado = int((time.monotonic() - t0) * 1000), "5xx"
             except Exception as e:
                 ms, estado = int((time.monotonic() - t0) * 1000), f"error:{type(e).__name__}"
             self._anotar(modelo, len(textos), estado, ms)
@@ -363,6 +387,9 @@ class Traductor:
             intentos.append({"modelo": modelo, "estado": estado, "ms": ms, "backoff_s": espera})
             self.logger(f"[traductor] {modelo} {estado} en {ms} ms (lote de {len(textos)})")
             previo = modelo
+            if estado not in REINTENTABLES:
+                break                     # timeout / cantidad / otro error: ok:false sin reintento
+            self.n_reintentos += 1
         self.n_ok_false += 1
         return ResultadoLote([{"seq": s, "text": None, "ok": False} for s in seqs],
                              intentos[-1]["modelo"] if intentos else None,
@@ -374,9 +401,28 @@ class Traductor:
             self._poner(lote)
 
     def _poner(self, lote) -> None:
-        if self._cola is None:
-            self._cola = asyncio.Queue()
-        self._cola.put_nowait(lote)
+        """Cada lote es una tarea independiente: un lote lento NO bloquea a los siguientes."""
+        t = asyncio.create_task(self._procesar(lote))
+        self._vuelo[t] = lote
+        self.max_en_vuelo = max(self.max_en_vuelo, len(self._vuelo))
+
+    async def _procesar(self, lote) -> None:
+        try:
+            self.n_lotes += 1
+            res = await self.traducir([i.text for i in lote.items], [i.seq for i in lote.items])
+        except asyncio.CancelledError:
+            raise                      # cerrar() la marca ok:false
+        except Exception as e:         # nunca se cae el worker
+            self.logger(f"[traductor] error inesperado: {type(e).__name__}: {e}")
+            self.n_ok_false += 1
+            res = ResultadoLote([{"seq": i.seq, "text": None, "ok": False} for i in lote.items], None, 0,
+                                [{"modelo": None, "estado": f"error:{type(e).__name__}", "ms": 0}])
+        self._vuelo.pop(asyncio.current_task(), None)
+        if self.on_resultado:
+            try:
+                self.on_resultado(res)
+            except Exception as e:
+                self.logger(f"[traductor] on_resultado fallo: {type(e).__name__}: {e}")
 
     async def _vigilar(self) -> None:
         while True:
@@ -385,59 +431,39 @@ class Traductor:
             if lote:
                 self._poner(lote)
 
-    async def _consumir(self) -> None:
-        if self._cola is None:
-            self._cola = asyncio.Queue()
-        while True:
-            lote = await self._cola.get()
-            if lote is None:
-                return
-            try:
-                self.n_lotes += 1
-                self._en_vuelo = lote
-                res = await self.traducir([i.text for i in lote.items], [i.seq for i in lote.items])
-                self._en_vuelo = None
-                if self.on_resultado:
-                    self.on_resultado(res)
-            except Exception as e:     # nunca se cae el worker
-                self.logger(f"[traductor] error inesperado: {type(e).__name__}: {e}")
-
-    def _abandonar(self) -> int:
+    def _abandonar(self, lotes: list) -> int:
         """Al cerrar por timeout: lo que quedo sin traducir sale MARCADO (ok:false), no mudo."""
-        lotes = [self._en_vuelo] if getattr(self, "_en_vuelo", None) else []
-        while self._cola is not None and not self._cola.empty():
-            x = self._cola.get_nowait()
-            if x is not None:
-                lotes.append(x)
         for lote in lotes:
             self.n_ok_false += 1
             res = ResultadoLote([{"seq": i.seq, "text": None, "ok": False} for i in lote.items], None, 0,
                                 [{"modelo": None, "estado": "cierre", "ms": 0}])
             if self.on_resultado:
                 self.on_resultado(res)
-        self._en_vuelo = None
         return len(lotes)
 
     def iniciar(self) -> None:
-        if not self._tareas:
-            self._tareas = [asyncio.create_task(self._vigilar()), asyncio.create_task(self._consumir())]
+        if self._vigia is None:
+            self._vigia = asyncio.create_task(self._vigilar())
 
-    async def cerrar(self, timeout: float = 15.0) -> None:
+    async def cerrar(self, timeout: float = TIMEOUT_S + 5.0) -> None:
         """Manda el lote pendiente y espera las traducciones en vuelo (hasta timeout)."""
         lote = self.lotes.vaciar(time.time())
         if lote:
             self._poner(lote)
-        self._poner(None)
-        if self._tareas:
+        if self._vigia is not None:
+            self._vigia.cancel()
+        tareas = list(self._vuelo)
+        if tareas:
+            await asyncio.wait(tareas, timeout=timeout)
+        quedan = [(t, self._vuelo.pop(t)) for t in list(self._vuelo)]
+        for t, _ in quedan:
+            t.cancel()
+        for t, _ in quedan:
             try:
-                await asyncio.wait_for(asyncio.shield(self._tareas[1]), timeout)
-            except (asyncio.TimeoutError, Exception):
+                await t
+            except (asyncio.CancelledError, Exception):
                 pass
-            for t in self._tareas:
-                t.cancel()
-            if not self._tareas[1].done() or getattr(self, "_en_vuelo", None):
-                await asyncio.sleep(0)
-            self._abandonar()
+        self._abandonar([l for _, l in quedan])
 
 
 def meta_traduccion(res: ResultadoLote, lang_to: str, source=None) -> dict:

@@ -40,7 +40,7 @@ class _Bus:
         self.msgs.append(m)
 
 
-def correr(casete: Path, dur_s: float, mudo=None, cfg: ConfigReabrir | None = None):
+def correr(casete: Path, dur_s: float, mudo=None, cfg: ConfigReabrir | None = None, dedup: bool = True):
     fab = FabricaCasete(str(casete), mudo)
     bus = _Bus()
     chs = list(trocear(_voz(dur_s), t0_epoch=0.0))
@@ -59,7 +59,7 @@ def correr(casete: Path, dur_s: float, mudo=None, cfg: ConfigReabrir | None = No
     async def main():
         w = SessionWorker("sala-b3", "en", fab(0.0), fuente(), emisor=bus, heartbeat_s=10_000,
                           espera_final_s=0.3, reloj=lambda: caja["w"].pos_s, dormir=dormir,
-                          log=lambda s: None, fabrica=fab, reabrir=cfg)
+                          log=lambda s: None, fabrica=fab, reabrir=cfg, dedup=dedup)
         caja["w"] = w
         return await w.correr()
 
@@ -101,13 +101,16 @@ def test_en_quota_atasco_y_cierre_seq_continuo():
     assert res.textos > 0
 
 
-def test_es_cancelled_sin_falso_positivo_en_200s_y_dispara_210_250():
+def test_es_cancelled_a_lo_sumo_2_reaperturas_en_200s_y_dispara_210_250():
+    # B4: el criterio es la METRICA (<= 2 reaperturas en 0-200 s del ES y minimo de segundos sin
+    # texto: test_umbral_default_minimiza_segundos_con_voz_sin_texto), no "nunca reabrir"
     fab0 = FabricaCasete(str(ES))
     res, msgs, _ = correr(ES, _fin_casete(fab0))
     rots = res.rotaciones
     assert rots, "no hubo ninguna reapertura"
     antes = [r for r in rots if r["pos_s"] < 200.0]
-    assert not antes, f"falso positivo en los primeros 200 s: {antes}"
+    assert len(antes) <= 2, f"mas de 2 reaperturas en los primeros 200 s: {antes}"
+    assert all(r["reason"] != "preventiva" or r["audio_lost_s"] == 0.0 for r in rots)
     # preventiva a 240 s de AUDIO ENVIADO a la conexion (escala del audioOffset; con la senal de test
     # el solape suma ~18 %, por eso cae en la posicion ~203 de la fuente)
     prev = [r for r in rots if r["reason"] == "preventiva"]
@@ -140,6 +143,10 @@ def test_sesion_muda_desde_60_reabre_en_15s_y_la_nueva_anda():
     # que en el casete destrababa a t~56 ya no llega), igual dentro de los 15 s
     res, msgs, r = _muda(60.0, 110.0)
     assert r["detalle"] in ("mudo", "atraso"), r
+    # B4: la rotacion estima el audio que queda sin texto (atraso ~31 s > reenvio max 15 s)
+    assert r["audio_lost_s"] > 0 and r["reenvio_s"] <= 15.0, r
+    a, b = r["audio_lost_rango"]
+    assert 0.0 <= a < b <= r["corte_s"] + 0.5, r
     # la sesion nueva anda: llegan textos despues de la rotacion
     i_rot = next(i for i, m in enumerate(msgs) if m["type"] == "rotation")
     assert any(m["type"] == "text" for m in msgs[i_rot + 1:])
@@ -158,3 +165,23 @@ def test_perfil_agresivo_6_4_detecta_en_temprano_pero_da_falso_positivo_en_es():
     agresivo_es = ConfigReabrir(atasco_umbral_s=6.0, atasco_sostenido_s=4.0)
     res_es, _, _ = correr(ES, 200.0, cfg=agresivo_es)
     assert any(r["reason"] == "atasco" and r["pos_s"] < 200.0 for r in res_es.rotaciones)
+
+
+def test_umbral_default_minimiza_segundos_con_voz_sin_texto(tmp_path):
+    """B4: el default (ConfigReabrir()) se eligio POR METRICA (worker/umbrales.py ->
+    reportes/audio-pipeline-b4-umbrales.log): entre 22/8, 15/6 y 12/5 es el que minimiza los segundos
+    con voz y sin texto sumados sobre los dos casetes largos, con <= 2 reaperturas en 0-200 s del ES."""
+    from worker.umbrales import fila
+    d = ConfigReabrir()
+    perfiles = [(d.atasco_umbral_s, d.atasco_sostenido_s), (15.0, 6.0), (12.0, 5.0)]
+    fin_en = FabricaCasete(str(EN)).guion.ventanas[-1][0] + 1.0 + 8.0
+    fin_es = FabricaCasete(str(ES)).guion.ventanas[-1][0] + 1.0
+    tot, es200 = {}, {}
+    for u, s_ in perfiles:
+        f_en = fila("en", EN, fin_en, u, s_, tmp_path)
+        f_es = fila("es", ES, fin_es, u, s_, tmp_path)
+        tot[(u, s_)] = f_en["voz_sin_texto_s"] + f_es["voz_sin_texto_s"]
+        es200[(u, s_)] = f_es["reaperturas_0_200"]
+    base = perfiles[0]
+    assert es200[base] <= 2, es200
+    assert all(tot[base] <= tot[p] for p in perfiles[1:]), tot
