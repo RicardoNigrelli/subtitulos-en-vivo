@@ -17,7 +17,7 @@ def _validate(*args: str) -> subprocess.CompletedProcess:
 def test_ejemplos_validan_con_exit_0():
     r = _validate("contracts/ejemplos/*.jsonl")  # el comodin lo expande el validador si el shell no
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "TOTAL: 3 archivos, 48 mensajes, 0 errores" in r.stdout
+    assert "TOTAL: 4 archivos, 58 mensajes, 0 errores" in r.stdout  # B2: + traduccion.jsonl (10)
 
 
 def test_archivo_invalido_sale_distinto_de_0(tmp_path):

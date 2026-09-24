@@ -2,6 +2,11 @@ CONGELADO 24/09 13:08 AR — desde acá sólo se AGREGAN campos (nunca se renomb
 Si el dominio obliga a cambiar algo: aviso al orquestador en los primeros 15 min del bloque y alias
 del campo viejo. Dueño: `backend`.
 
+AMPLIADO 24/09 14:05 AR (aditivo, B2): tipos nuevos `translation` y `partial`, campo nuevo de primer
+nivel `items`, campo nuevo `translations_langs` en `GET /api/sesiones` y en `init`. Ningún campo
+renombrado ni quitado; todo mensaje que validaba antes sigue validando (ver "Traducción diferida" y
+"Texto provisorio" más abajo).
+
 Cambios desde el congelamiento (todos ENSANCHAN: lo que era válido sigue siéndolo):
 - 13:14 AR (dentro de los 15 min; lo impuso el primer mensaje real del worker): `text`, `audio_start`,
   `audio_end`, `t_captured` aceptan `null` fuera de `type=text` (en `text` siguen obligatorios y no
@@ -21,7 +26,9 @@ el replay) hacia el hub por `/ingest`; el hub le agrega `t_hub` y lo reparte a l
 ```
 
 El validador chequea cada mensaje contra el esquema, `audio_end >= audio_start`,
-`t_captured <= t_emit` y `seq` estrictamente creciente por sesión dentro del archivo. Exit 0 válido ·
+`t_captured <= t_emit` y `seq` estrictamente creciente por sesión dentro del archivo (los `seq: null`
+no cuentan). Para `translation` imprime un `AVISO` (no error) si un item apunta a un `seq` sin `text`
+de esa sesión en el archivo. Exit 0 válido ·
 1 algún mensaje inválido · 2 archivo inexistente. Desde Python: `from contracts import errores`
 (`errores(msg) -> list[str]`, vacía = válido).
 
@@ -30,9 +37,9 @@ El validador chequea cada mensaje contra el esquema, `audio_end >= audio_start`,
 | Campo | Tipo | Quién | Obligatorio | Qué es |
 |---|---|---|---|---|
 | `v` | `1` | worker | siempre | versión del contrato |
-| `type` | `text` · `rotation` · `watchdog` · `error` · `heartbeat` · `session_start` · `session_end` | worker | siempre | tipo de evento |
+| `type` | `text` · `rotation` · `watchdog` · `error` · `heartbeat` · `session_start` · `session_end` · `translation` · `partial` | worker | siempre | tipo de evento (`translation` y `partial`: B2) |
 | `session_id` | string slug `^[a-z0-9][a-z0-9_-]{0,63}$` | worker | siempre | ej. `sala-1`; va en la URL |
-| `seq` | int ≥ 0 · `null` sólo en `heartbeat` | **worker** | siempre | monotónico POR SESIÓN, cubre todos los tipos salvo heartbeat. **El hub nunca renumera ni rebobina.** |
+| `seq` | int ≥ 0 · `null` en `heartbeat`, `partial` y `translation` | **worker** | siempre | monotónico POR SESIÓN, cubre todos los tipos salvo esos tres. **El hub nunca renumera ni rebobina.** |
 | `lang` | `en` · `es` | worker | todos menos heartbeat | idioma ORIGINAL de la sesión (R18) |
 | `text` | string no vacío (`null` fuera de `text`) | worker | `text` | texto final del bloque, en el idioma original |
 | `translations` | objeto | worker | `text` | por idioma destino: `{"es": {"text": "...", "ok": true}}`; si falló: `{"es": {"text": null, "ok": false}}` (marcado); `{}` si no hay |
@@ -42,6 +49,7 @@ El validador chequea cada mensaje contra el esquema, `audio_end >= audio_start`,
 | `t_hub` | float epoch s | **hub** | lo agrega el hub | cuándo el hub hizo el fan-out |
 | `replay` | bool | worker / replay | todos menos heartbeat | `true` si viene de un casete o de un ejemplo. El replay NO es ASR real |
 | `meta` | objeto | worker | según tipo | extensible, ver abajo |
+| `items` | lista `[{seq, text, ok}]` | worker | `translation` | traducciones de mensajes `text` de la MISMA sesión, por `seq` (B2) |
 
 Tiempos en **segundos** (float), no milisegundos: el esquema rechaza epochs > 9999999999.
 
@@ -56,6 +64,57 @@ Tiempos en **segundos** (float), no milisegundos: el esquema rechaza epochs > 99
 | `session_start` | `{title, source}` (`title`: string o `null`; `source`: string, objeto o `null`) |
 | `session_end` | libre |
 | `heartbeat` (del worker, con `t_emit`) | `{alive, audio_seconds_sent}` |
+| `translation` | `{lang_to, model, batch_ms}` + `source` opcional. `lang_to`: idioma destino (`es`, `en`, …); `model`: modelo que tradujo; `batch_ms`: ms del lote (número ≥ 0; se recomienda entero) |
+| `partial` | libre |
+
+## Traducción diferida (`type=translation`) y merge en el hub
+
+El worker emite el `text` apenas lo tiene, con `translations: {}`, y la traducción llega DESPUÉS en
+un evento aparte (lotes de varias ventanas, R19):
+
+```json
+{"v":1,"type":"translation","session_id":"sala-1","seq":null,"lang":"en","replay":false,
+ "t_emit":1790262009.0,"text":null,"translations":{},
+ "meta":{"lang_to":"es","model":"gemini-3.5-flash-lite","batch_ms":1200},
+ "items":[{"seq":2,"text":"Ejemplo de contrato: traducción del seq 2.","ok":true},{"seq":3,"text":null,"ok":false}]}
+```
+
+- `seq: null` (no ocupa número) · `lang`: idioma ORIGINAL de la sesión · `items` (≥ 1): cada uno
+  `{seq, text, ok}` con la misma regla que `translations`: `ok:true` ⇒ `text` no vacío;
+  `ok:false` ⇒ `text: null` (fallo marcado, la vista lo muestra como tal).
+- **Merge (lo hace el hub):** cada item se aplica al mensaje `text` GUARDADO con ese
+  `session_id+seq` como `translations[meta.lang_to] = {text, ok}`. `init.lines`,
+  `GET /api/sesiones/<id>/historial` y todo reenvío posterior devuelven el `text` YA MERGEADO.
+- **Idempotente:** aplicar dos veces el mismo item no cambia nada. Un `ok:false` NO pisa un
+  `ok:true` ya guardado (un reintento fallido no borra una traducción buena); un `ok:true` sí
+  reemplaza un `ok:false` (reintento exitoso) o un `ok:true` anterior (el último gana).
+- **Item que llega ANTES que su `text`** (reconexión, backlog): el hub lo guarda PENDIENTE y lo
+  aplica cuando llega el `text` con ese `seq`, que se reparte ya mergeado. Si el `text` no llega en
+  `HUB_PENDIENTE_S` segundos (default 120) el item se descarta (contador `items_vencidos` en
+  `/api/metricas`). Un item cuyo `seq` es de otro tipo (no `text`) o ya salió del historial se
+  descarta (`items_huerfanos`).
+- **En vivo:** el hub reenvía el evento `translation` TAL CUAL (más `t_hub`) a los clientes de la
+  sesión, salvo que no cambie nada (duplicado exacto: no se reenvía). El cliente aplica cada item a
+  la línea con ese `seq` si la tiene; si no la tiene puede ignorarlo: cuando el `text` llegue, llega
+  mergeado.
+- Puede llegar DESPUÉS del `session_end` (los lotes se atrasan: en `b1-es-60s-trad.jsonl`, 3 de 6
+  eventos): la vista tiene que seguir aplicándolos después del fin de la sesión.
+- No se guarda en el historial ni toca `last_seq`.
+
+## Texto provisorio (`type=partial`)
+
+```json
+{"v":1,"type":"partial","session_id":"sala-1","seq":null,"lang":"en","replay":false,
+ "text":"Contract example, partial","audio_start":12.0,"t_captured":1790262012.4,"t_emit":1790262012.6,"meta":{}}
+```
+
+- Lo que el modelo lleva transcripto del bloque en curso (`interimInputTranscription`), en el idioma
+  original. `text` string (puede ser vacío), `audio_start` y `t_captured` presentes (pueden ser
+  `null`), `seq: null`.
+- El hub lo reenvía EN VIVO a los clientes de la sesión y **no lo guarda**: no aparece en `init`, ni
+  en el historial, ni toca `last_seq`. La vista lo pinta provisorio (gris) y lo reemplaza con el
+  siguiente `partial` o con el `text` final.
+
 
 ## Protocolo de INGESTA (worker / replay → hub)
 
@@ -85,12 +144,16 @@ exista: recibe `init` vacío y después los mensajes cuando arranque.
    - `last_seq`: último `seq` (de cualquier tipo) que tiene el hub; `null` si todavía no hay.
    - `lang`: el idioma PEDIDO (eco de `?lang=`); si no se pidió, el original de la sesión o `null`.
      `session_lang`: idioma original de la sesión.
+   - `translations_langs` (B2): idiomas destino vistos en la sesión, p. ej. `["es"]`.
 2. Hub → cada mensaje del contrato de ESA sesión (`text`, `rotation`, `watchdog`, `error`,
-   `session_start`, `session_end`) COMPLETO, con `t_hub`. El cliente elige el idioma: `text` si
+   `session_start`, `session_end`, y desde B2 `translation` y `partial`) COMPLETO, con `t_hub`. El cliente elige el idioma: `text` si
    `lang` coincide con el pedido; si no `translations[<pedido>]` (si `ok: false`, está marcado como fallido).
 3. Hub → cada 1 s `{"v":1,"type":"heartbeat","session_id":..,"seq":null,"t_hub":..,"last_seq":N,"state":..}`.
    Es la base del chip de conexión. `last_seq` permite detectar un hueco (se perdió un tramo).
 4. Hueco o reconexión: `GET /api/sesiones/<id>/historial?desde=<último seq visto>`.
+5. Después de `session_end` (B2): pueden seguir llegando `translation` rezagados; aplicarlos. Si llega
+   un mensaje con `seq` MAYOR que el del `session_end`, la sesión se reabre (`state` vuelve a `live`,
+   el hub lo avisa con WARNING en su log): la vista lo muestra como continuación.
 
 `state` en `init` y `heartbeat`: `live` · `idle` · `ended` · `waiting` (todavía no llegó nada de esa sesión).
 
@@ -102,8 +165,8 @@ Códigos de cierre del hub: `4401` auth inválida (sólo ingesta) · `1013` clie
 | Ruta | Auth | Respuesta |
 |---|---|---|
 | `GET /health` | no | `200 {"ok":true,...}` |
-| `GET /api/sesiones` | no | lista `[{session_id, lang, title, replay, last_seq, last_t_emit, state, ...}]`; `state`: `live` (el hub recibió algo de la sesión en los últimos 30 s) · `idle` · `ended` (llegó `session_end`) |
-| `GET /api/sesiones/<id>/historial?desde=<seq>` | no | lista de mensajes `type=text` con `seq > desde`, ordenados por `seq` (404 si la sesión no existe) |
+| `GET /api/sesiones` | no | lista `[{session_id, lang, title, replay, last_seq, last_t_emit, state, translations_langs, ...}]`; `state`: `live` (el hub recibió algo de la sesión en los últimos 30 s) · `idle` · `ended` (llegó `session_end`); `translations_langs` (B2): idiomas destino vistos, p. ej. `["es"]` |
+| `GET /api/sesiones/<id>/historial?desde=<seq>` | no | lista de mensajes `type=text` con `seq > desde`, ordenados por `seq`, con las traducciones YA MERGEADAS (404 si la sesión no existe) |
 | `GET /api/metricas` | `Authorization: Bearer <HUB_TOKEN>` | contadores del hub por sesión (clientes, descartes, duplicados) |
 
 ## Ejemplos (`ejemplos/`)
@@ -117,4 +180,5 @@ de ASR: sirven para desarrollar contra el hub real con `python -m hub.inyectar`.
 |---|---|
 | `sesion-en.jsonl` | `ejemplo-en`, 20 `text` en inglés con `translations.es`; la línea 13 trae la traducción fallida (`ok:false`); 5 y 12 son largas |
 | `sesion-es.jsonl` | `ejemplo-es`, 20 `text` en español con `translations.en`; la línea 7 trae la traducción fallida |
-| `tipos.jsonl` | `ejemplo-tipos`: un mensaje de cada `type` en orden de vida de una sesión |
+| `tipos.jsonl` | `ejemplo-tipos`: un mensaje de cada `type` en orden de vida de una sesión (los 7 de B1) |
+| `traduccion.jsonl` | `ejemplo-traduccion` (B2): 3 `partial`, 3 `text` con `translations: {}` y 2 `translation`: seq 2 ok, seq 3 fallida (`ok:false`) y seq 4 cuya traducción llega ANTES que el `text` (queda pendiente en el hub y se aplica al llegar) |

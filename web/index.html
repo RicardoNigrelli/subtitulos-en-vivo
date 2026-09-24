@@ -33,8 +33,13 @@
 
   function linksIdioma(s) {
     var idiomas = [s.lang];
-    var otro = s.lang === 'en' ? 'es' : (s.lang === 'es' ? 'en' : null);
-    if (otro) idiomas.push(otro);
+    // B2: el hub manda translations_langs; si todavía corre el hub viejo (sin este campo)
+    // caemos al supuesto anterior (es<->en) para no dejar el índice sin el link de traducción.
+    var extra = Array.isArray(s.translations_langs) ? s.translations_langs
+      : (s.lang === 'en' ? ['es'] : (s.lang === 'es' ? ['en'] : []));
+    extra.forEach(function (xx) {
+      if (idiomas.indexOf(xx) === -1) idiomas.push(xx);
+    });
     return idiomas.map(function (xx) {
       var qs = new URLSearchParams();
       qs.set('lang', xx);

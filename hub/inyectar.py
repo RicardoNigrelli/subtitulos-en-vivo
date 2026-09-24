@@ -9,7 +9,9 @@
 - Respeta los gaps relativos de t_emit (divididos por --velocidad; 0 = sin esperas).
 - Fuerza replay=true. NO reescribe t_emit ni t_captured: la latencia de un replay no es real.
 - Se comporta como un productor: manda solo los seq > last_seq que el hub informa en auth_ok
-  (si se corta, se vuelve a correr y sigue donde quedo).
+  (si se corta, se vuelve a correr y sigue donde quedo). Los seq null (heartbeat, partial) de un
+  tramo que el hub ya tiene se saltean; los `translation` se mandan siempre (el merge del hub es
+  idempotente: un duplicado exacto no cambia nada ni se reenvia).
 Exit 0: todo enviado y nada rechazado · 1: el hub rechazo mensajes · 2: no se pudo conectar/autenticar.
 """
 from __future__ import annotations
@@ -81,8 +83,9 @@ async def inyectar(msgs: list[dict], url: str, token: str, velocidad: float = 1.
                 if seq is not None and isinstance(last.get(sid), int) and seq <= last[sid]:
                     res["salteados"] += 1
                     continue
-                if seq is None and sid in last and sid not in arrancado:
-                    res["salteados"] += 1  # latido de un tramo que el hub ya tiene
+                if (seq is None and m.get("type") != "translation" and sid in last
+                        and sid not in arrancado):
+                    res["salteados"] += 1  # latido o parcial de un tramo que el hub ya tiene
                     continue
                 arrancado.add(sid)
                 te = m.get("t_emit")

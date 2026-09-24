@@ -43,6 +43,7 @@ class Emisor:
         self.enviado_hasta: dict[str, int] = {}
         self.last_seq_hub: dict[str, int] = {}
         self.volatiles: deque = deque(maxlen=50)
+        self.traducciones: deque = deque(maxlen=HISTORIAL_MAX)
         self.conectado = False
         self.n_enviados = 0
         self.n_conexiones = 0
@@ -54,8 +55,11 @@ class Emisor:
     def publicar(self, msg: dict) -> None:
         sid = msg.get("session_id")
         if msg.get("seq") is None:
-            if self.conectado:
-                self.volatiles.append(msg)
+            if msg.get("type") == "translation":
+                # no es volatil: se reintenta al reconectar (el hub mergea; repetir es inocuo)
+                self.traducciones.append(msg)
+            elif self.conectado:
+                self.volatiles.append(msg)          # heartbeat / partial: sin hub se pierden
         else:
             self.historial.setdefault(sid, deque(maxlen=HISTORIAL_MAX)).append(msg)
             if not self.url or not self.conectado:
@@ -69,7 +73,13 @@ class Emisor:
         for sid, dq in self.historial.items():
             h = self.enviado_hasta.get(sid, 0)
             n += sum(1 for m in dq if m["seq"] > h)
-        return n
+        return n + len(self.traducciones)
+
+    async def esperar_conexion(self, timeout: float = 5.0) -> bool:
+        t0 = time.monotonic()
+        while not self.conectado and time.monotonic() - t0 < timeout:
+            await asyncio.sleep(0.05)
+        return self.conectado
 
     def iniciar(self) -> None:
         if self.url and self._tarea is None:
@@ -153,6 +163,11 @@ class Emisor:
                     self.enviado_hasta[sid] = m["seq"]
                     h = m["seq"]
                     self.n_enviados += 1
+        # translation DESPUES de los text a los que apuntan (mismo orden en el socket)
+        while self.traducciones:
+            await ws.send(json.dumps(self.traducciones[0], ensure_ascii=False))
+            self.traducciones.popleft()
+            self.n_enviados += 1
         while self.volatiles:
             await ws.send(json.dumps(self.volatiles.popleft(), ensure_ascii=False))
 

@@ -9,19 +9,24 @@ import time
 from typing import Any, Optional
 
 V = 1
-TIPOS = ("text", "rotation", "watchdog", "error", "heartbeat", "session_start", "session_end")
+TIPOS = ("text", "rotation", "watchdog", "error", "heartbeat", "session_start", "session_end",
+         "translation", "partial")
+# B2 (aditivos): translation {items: [{seq, text, ok}], meta: {lang_to, model, batch_ms, source?}} y
+# partial (interimInputTranscription). Los dos llevan seq null (no son lineas del historial).
+SIN_SEQ = ("heartbeat", "translation", "partial")
 
 
 def mensaje(tipo: str, session_id: str, seq: Optional[int], lang: str, *,
             text: Optional[str] = None, translations: Optional[dict] = None,
             audio_start: Optional[float] = None, audio_end: Optional[float] = None,
             t_captured: Optional[float] = None, t_emit: Optional[float] = None,
-            replay: bool = False, meta: Optional[dict] = None) -> dict[str, Any]:
+            replay: bool = False, meta: Optional[dict] = None,
+            items: Optional[list] = None) -> dict[str, Any]:
     if tipo not in TIPOS:
         raise ValueError(f"tipo desconocido: {tipo}")
-    if tipo == "heartbeat":
+    if tipo in SIN_SEQ:
         seq = None
-    return {
+    m = {
         "v": V,
         "type": tipo,
         "session_id": session_id,
@@ -36,3 +41,6 @@ def mensaje(tipo: str, session_id: str, seq: Optional[int], lang: str, *,
         "replay": bool(replay),
         "meta": {} if meta is None else meta,
     }
+    if tipo == "translation":
+        m["items"] = list(items or [])
+    return m

@@ -49,6 +49,9 @@ def rotular(msg: dict, *, sesion: Optional[str], base_seq: int, delta_t: float,
         m["session_id"] = sesion
     if m.get("seq") is not None:
         m["seq"] = base_seq + int(m["seq"])
+    for it in m.get("items") or []:          # translation: cada item apunta al seq de un text
+        if isinstance(it, dict) and it.get("seq") is not None:
+            it["seq"] = base_seq + int(it["seq"])
     if m.get("t_emit") is not None:
         m["t_emit"] = float(m["t_emit"]) + delta_t
     if m.get("t_captured") is not None:

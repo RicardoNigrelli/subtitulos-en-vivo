@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from worker.casete import Grabador, kind_server
-from worker.contrato import mensaje
+from worker.contrato import SIN_SEQ, mensaje
 from worker.emisor import Emisor
 from worker.ingesta import CHUNK_S, Chunk
 from worker.mapeo import InfoVentana, Mapeador, segundos as _segundos_mapeo
@@ -66,7 +66,8 @@ class SessionWorker:
                  fuente: AsyncIterator[Chunk], grabador: Optional[Grabador] = None,
                  emisor: Optional[Emisor] = None, titulo: str = "", source: Optional[dict] = None,
                  cortador: Optional[Cortador] = None, tope_envio_s: Optional[float] = None,
-                 heartbeat_s: float = 5.0, espera_final_s: float = 8.0, gap_s: float = GAP_S,
+                 heartbeat_s: float = 5.0, espera_final_s: float = 30.0, gap_s: float = GAP_S,
+                 traductor=None, seq_inicial: int = 0,
                  reloj: Callable[[], float] = time.time,
                  dormir: Callable[[float], Awaitable[None]] = asyncio.sleep,
                  log: Callable[[str], None] = print):
@@ -86,7 +87,10 @@ class SessionWorker:
         self.reloj = reloj
         self.dormir = dormir
         self.log = log
-        self.seq = 0
+        self.seq = int(seq_inicial or 0)     # sigue desde auth_ok.last_seq (el hub no rebobina)
+        self.traductor = traductor           # worker/traductor.py (R19), o None
+        self.n_parciales = 0
+        self.drenaje: dict = {}
         self.res = Resultado(session_id)
         self.mapa = Mapeador()                       # textos -> ventanas (worker/mapeo.py)
         self.abierta: Optional[Ventana] = None
@@ -98,7 +102,7 @@ class SessionWorker:
 
     # ---- emision ----------------------------------------------------------
     def emitir(self, tipo: str, **campos) -> dict:
-        if tipo != "heartbeat":
+        if tipo not in SIN_SEQ:
             self.seq += 1
             seq = self.seq
         else:
@@ -180,8 +184,26 @@ class SessionWorker:
     def _emitir_asignaciones(self, asignaciones) -> None:
         for a in asignaciones:
             self.res.textos += 1
-            self.emitir("text", text=a.text, audio_start=a.audio_start, audio_end=a.audio_end,
-                        t_captured=a.t_captured, _casete={"ventanas": a.ventanas})
+            # el original sale YA con translations {}; la traduccion llega despues como `translation`
+            msg = self.emitir("text", text=a.text, audio_start=a.audio_start, audio_end=a.audio_end,
+                              t_captured=a.t_captured, _casete={"ventanas": a.ventanas})
+            if self.traductor is not None:
+                self.traductor.agregar(msg["seq"], a.text, msg["t_emit"])
+
+    def _on_traduccion(self, res) -> None:
+        from worker.traductor import meta_traduccion
+        self.emitir("translation", items=res.items,
+                    meta=meta_traduccion(res, self.traductor.a, {"vivo": True, "intentos": res.intentos}))
+
+    def _emitir_parcial(self, texto: str) -> None:
+        # turno en curso = ventana mas vieja sin ACTIVITY_END del server; si no hay, la abierta
+        if self.mapa.pend:
+            a0 = self.mapa.pend[0].audio_start
+        else:
+            a0 = self.abierta.audio_start if self.abierta else None
+        tc = self.ultima.t_captured if self.ultima is not None else None
+        self.n_parciales += 1
+        self.emitir("partial", text=texto, audio_start=a0, t_captured=tc)
 
     async def _vigilar_textos(self) -> None:
         # fallback: texto sin ACTIVITY_END en ESPERA_MAX_S -> se emite igual
@@ -210,6 +232,9 @@ class SessionWorker:
             tx = extraer_texto(m)
             if tx:
                 self.mapa.texto(t, tx)
+            itx = ((m.get("serverContent") or {}).get("interimInputTranscription") or {}).get("text")
+            if itx:
+                self._emitir_parcial(itx)
             # ver worker/mapeo.py: el texto se asigna al ACTIVITY_END que le sigue (mismo ms)
             va = m.get("voiceActivity") or {}
             if va.get("type") == "ACTIVITY_END":
@@ -243,16 +268,24 @@ class SessionWorker:
             if callable(cfg):
                 self.rec.client("config", cfg())
         self.emitir("session_start", meta={"title": self.titulo, "source": self.source})
+        if self.traductor is not None:
+            self.traductor.on_resultado = self._on_traduccion
+            self.traductor.iniciar()
         rx = asyncio.create_task(self._recibir())
         hb = asyncio.create_task(self._latido())
         vt = asyncio.create_task(self._vigilar_textos())
         tx = asyncio.create_task(self._enviar())
         await self._envio_terminado.wait()
-        # esperar los textos de las ventanas pendientes (o el cierre del server)
+        # DRENAJE: esperar hasta espera_final_s (30 s) los turnos pendientes (o el cierre del server)
         t0 = time.monotonic()   # reloj real del loop: el inyectable puede estar congelado en tests
+        pend0 = len(self.mapa.pend)
         while (self.mapa.pend and not self._server_cerro.is_set()
                and time.monotonic() - t0 < self.espera_final_s):
             await asyncio.sleep(0.1)
+        self.drenaje = {"pendientes_al_fin_fuente": pend0, "pendientes_tras_drenaje": len(self.mapa.pend),
+                        "espero_s": round(time.monotonic() - t0, 2), "tope_s": self.espera_final_s}
+        if self.rec:
+            self.rec.client("drenaje", self.drenaje)
         if not self._server_cerro.is_set():
             # colchon corto por si llega texto tardio de la ultima ventana
             try:
@@ -272,6 +305,8 @@ class SessionWorker:
         hb.cancel()
         vt.cancel()
         self._emitir_asignaciones(self.mapa.vaciar())
+        if self.traductor is not None:
+            await self.traductor.cerrar(15.0)   # ultimo lote + traducciones en vuelo
         self._vivo = False
         cierre = self.res.cierre or {}
         if cierre.get("by") in ("server", "red") and cierre.get("code") not in (1000, None):

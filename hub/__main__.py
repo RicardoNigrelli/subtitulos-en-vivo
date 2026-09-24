@@ -1,4 +1,4 @@
-"""python -m hub  -> levanta el hub en HUB_HOST:HUB_PORT (localhost:8100 por defecto).
+"""python -m hub  -> levanta el hub en HUB_HOST:HUB_PORT (127.0.0.1:8100 por defecto; en Docker HUB_HOST=0.0.0.0).
 
 En Windows el bind NO falla si el puerto ya esta tomado (el trafico se lo lleva el primero): por eso,
 antes de bindear, se intenta conectar al puerto; si alguien contesta, se aborta con exit 2.
@@ -18,7 +18,8 @@ log = logging.getLogger("hub")
 
 
 def puerto_ocupado(host: str, port: int) -> str | None:
-    destinos = {"127.0.0.1", "::1"} if host in ("localhost", "0.0.0.0", "::", "") else {host}
+    # 127.0.0.1 tambien mira ::1: un cliente que use "localhost" puede resolver primero a ::1
+    destinos = {"127.0.0.1", "::1"} if host in ("localhost", "127.0.0.1", "0.0.0.0", "::", "") else {host}
     for h in sorted(destinos):
         try:
             with socket.create_connection((h, port), timeout=0.5):

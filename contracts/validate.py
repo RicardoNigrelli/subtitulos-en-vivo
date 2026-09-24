@@ -5,7 +5,10 @@
 
 Por archivo: cada mensaje contra contracts/esquema.json + chequeos semanticos
 (audio_end >= audio_start, t_captured <= t_emit) + seq estrictamente creciente POR SESION
-dentro del archivo (heartbeat lleva seq null y no cuenta).
+dentro del archivo (heartbeat, partial y translation llevan seq null y no cuentan).
+type=translation (AMPLIADO 24/09 B2): ademas del esquema, cada item debe apuntar a un seq de un
+`text` de la MISMA sesion en el archivo; si no, se imprime un AVISO (no es error: el hub guarda el
+item pendiente hasta que llegue el text, ver contracts/README.md).
 
 Exit 0: todo valido. Exit 1: algun mensaje invalido. Exit 2: uso incorrecto / archivo inexistente.
 Si el shell no expande el comodin (cmd, PowerShell), se expande aca.
@@ -42,6 +45,8 @@ def validar_archivo(path: Path, out=sys.stdout) -> tuple[int, int]:
     n_msgs = n_err = 0
     tipos: Counter = Counter()
     ultimo_seq: dict[str, tuple[int, int]] = {}
+    textos: dict[str, set[int]] = {}          # seq de los type=text por sesion
+    items: list[tuple[int, str, int]] = []    # (linea, sesion, seq) de cada item de translation
     for linea, msg in leer_archivo(path):
         n_msgs += 1
         if isinstance(msg, Exception):
@@ -58,9 +63,18 @@ def validar_archivo(path: Path, out=sys.stdout) -> tuple[int, int]:
                             f"(linea {ultimo_seq[sid][1]}) de la sesion {sid!r}")
             else:
                 ultimo_seq[sid] = (seq, linea)
+        if not errs and isinstance(msg, dict):
+            if msg.get("type") == "text":
+                textos.setdefault(msg["session_id"], set()).add(msg["seq"])
+            elif msg.get("type") == "translation":
+                items.extend((linea, msg["session_id"], it["seq"]) for it in msg["items"])
         for e in errs:
             n_err += 1
             print(f"ERROR {path}:{linea}: {e}", file=out)
+    for linea, sid, seq in items:
+        if seq not in textos.get(sid, ()):
+            print(f"AVISO {path}:{linea}: item de translation con seq={seq} sin text de la sesion "
+                  f"{sid!r} en este archivo (el hub lo deja pendiente)", file=out)
     resumen = ", ".join(f"{t}={c}" for t, c in sorted(tipos.items())) or "sin mensajes"
     estado = "OK" if n_err == 0 and n_msgs > 0 else "FALLA"
     if n_msgs == 0:

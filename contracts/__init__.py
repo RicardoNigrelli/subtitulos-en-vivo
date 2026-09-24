@@ -18,9 +18,14 @@ from pathlib import Path
 from typing import Any, Iterator
 
 VERSION = 1
-TIPOS = ("text", "rotation", "watchdog", "error", "heartbeat", "session_start", "session_end")
-# Lo que el hub reenvia a la audiencia tal cual (el heartbeat del worker no: el hub manda el suyo).
+TIPOS = ("text", "rotation", "watchdog", "error", "heartbeat", "session_start", "session_end",
+         "translation", "partial")  # translation y partial: AMPLIADO 24/09 B2 (aditivo)
+# Lo que el hub reenvia a la audiencia (el heartbeat del worker no: el hub manda el suyo).
 TIPOS_AUDIENCIA = frozenset(TIPOS) - {"heartbeat"}
+# Tipos que no ocupan numero: seq null (el resto lleva seq entero, monotonico por sesion).
+TIPOS_SIN_SEQ = frozenset({"heartbeat", "partial", "translation"})
+# Tipos que el hub reenvia en vivo pero NO guarda en el historial.
+TIPOS_EFIMEROS = frozenset({"partial", "translation"})
 ESQUEMA_PATH = Path(__file__).with_name("esquema.json")
 EJEMPLOS_DIR = Path(__file__).with_name("ejemplos")
 

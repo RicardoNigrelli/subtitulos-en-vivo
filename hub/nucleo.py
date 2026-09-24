@@ -6,6 +6,9 @@ Reglas (contracts/README.md):
   El mensaje se serializa UNA vez y se encola en todos (put_nowait: nunca espera). Si la cola de un
   cliente se llena o su envio falla/tarda, se desconecta ESE cliente; los demas no se enteran.
 - Nada de lo que hace `ingerir` espera (sin await): un cliente lento no puede frenar la ingesta.
+- B2 (aditivo): `translation` se MERGEA en el `text` guardado con ese session_id+seq
+  (translations[lang_to] = {text, ok}); si el text todavia no llego, el item queda pendiente
+  HUB_PENDIENTE_S segundos. `partial` se reparte en vivo y NO se guarda. Ninguno toca last_seq.
 """
 from __future__ import annotations
 
@@ -73,6 +76,10 @@ class Sesion:
         self.terminada = False
         self.historial: deque[dict] = deque(maxlen=history)
         self.vistos: set[int] = set()
+        # B2: merge de traducciones
+        self.textos: dict[int, dict] = {}   # seq -> mensaje type=text GUARDADO (el mismo objeto del historial)
+        self.pendientes: dict[int, dict[str, tuple[float, dict]]] = {}  # seq -> {lang_to: (t_llegada, {text, ok})}
+        self.idiomas_destino: set[str] = set()
         self.clientes: set[Cliente] = set()
         self.latido_worker: dict | None = None
         # contadores (para /api/metricas y el panel)
@@ -83,6 +90,13 @@ class Sesion:
         self.descartados_lentos = 0
         self.descartados_error = 0
         self.max_clientes = 0
+        self.traducciones = 0          # eventos translation validos recibidos
+        self.traducciones_sin_cambio = 0  # duplicados exactos: no se reenvian
+        self.items_aplicados = 0       # items mergeados en un text guardado (incluye pendientes aplicados)
+        self.items_pendientes = 0      # items que llegaron antes que su text
+        self.items_vencidos = 0        # pendientes descartados tras HUB_PENDIENTE_S (o por el tope)
+        self.items_huerfanos = 0       # seq de otro tipo o fuera del historial
+        self.parciales = 0
 
     def estado(self, ahora: float, ventana: float) -> str:
         if self.terminada:
@@ -108,6 +122,7 @@ class Sesion:
             "last_t_hub": self.last_t_hub,
             "viewers": len(self.clientes),
             "viewers_por_idioma": dict(Counter(c.lang or "-" for c in self.clientes)),
+            "translations_langs": sorted(self.idiomas_destino),
         }
 
     def metricas(self) -> dict:
@@ -117,7 +132,38 @@ class Sesion:
             "descartados_error": self.descartados_error, "clientes": len(self.clientes),
             "max_clientes": self.max_clientes, "en_historial": len(self.historial),
             "latido_worker": self.latido_worker,
+            "traducciones": self.traducciones, "traducciones_sin_cambio": self.traducciones_sin_cambio,
+            "items_aplicados": self.items_aplicados, "items_pendientes": self.items_pendientes,
+            "items_vencidos": self.items_vencidos, "items_huerfanos": self.items_huerfanos,
+            "pendientes_ahora": sum(len(v) for v in self.pendientes.values()),
+            "parciales": self.parciales,
         }
+
+    # -------------------------------------------------------------- B2: merge de traducciones
+    def aplicar(self, destino: dict, lang_to: str, tr: dict) -> bool:
+        """translations[lang_to] = tr en el text guardado. Idempotente. Un ok:false no pisa un ok:true.
+        Devuelve True si cambio algo."""
+        actual = destino["translations"].get(lang_to)
+        if actual == tr:
+            return False
+        if actual is not None and actual.get("ok") and not tr["ok"]:
+            return False
+        destino["translations"][lang_to] = tr
+        self.items_aplicados += 1
+        return True
+
+    def purgar_pendientes(self, ahora: float, vida_s: float) -> int:
+        """Descarta los items pendientes mas viejos que vida_s. Devuelve cuantos descarto."""
+        n = 0
+        for seq in list(self.pendientes):
+            por_lang = self.pendientes[seq]
+            for lang_to in [k for k, (t, _) in por_lang.items() if ahora - t > vida_s]:
+                del por_lang[lang_to]
+                n += 1
+            if not por_lang:
+                del self.pendientes[seq]
+        self.items_vencidos += n
+        return n
 
 
 class Hub:
@@ -171,6 +217,13 @@ class Hub:
             s.latidos_worker += 1
             s.latido_worker = {"t_emit": msg.get("t_emit"), "t_hub": ahora, "meta": msg.get("meta")}
             return "latido", []
+        if msg["type"] == "partial":
+            # En vivo y nada mas: no se guarda, no se deduplica (no tiene seq), no toca last_seq.
+            s.parciales += 1
+            self.difundir(s, dumps({**msg, "t_hub": ahora}))
+            return "parcial", []
+        if msg["type"] == "translation":
+            return self._traduccion(s, msg, ahora)
 
         seq = msg["seq"]
         if seq in s.vistos:
@@ -189,15 +242,58 @@ class Hub:
 
         m = dict(msg)
         m["t_hub"] = ahora
+        if m["type"] == "text":
+            # copia propia: el merge la modifica en el lugar (historial e init devuelven lo mergeado)
+            m["translations"] = dict(m.get("translations") or {})
+            s.idiomas_destino.update(m["translations"])
+            for lang_to, (_t, tr) in (s.pendientes.pop(seq, None) or {}).items():
+                s.aplicar(m, lang_to, tr)  # la traduccion llego antes que el text: se aplica ahora
+            s.textos[seq] = m
         if m["type"] == "session_start":
             meta = m.get("meta") or {}
             s.title, s.source = meta.get("title"), meta.get("source")
         if s.last_seq is None or seq > s.last_seq:
             s.last_seq, s.last_t_emit = seq, m.get("t_emit")
             s.terminada = m["type"] == "session_end"
+        if s.historial.maxlen is not None and len(s.historial) == s.historial.maxlen:
+            viejo = s.historial[0]  # el append de abajo lo saca del historial: tambien del indice
+            if s.textos.get(viejo["seq"]) is viejo:
+                del s.textos[viejo["seq"]]
         s.historial.append(m)
         if m["type"] in TIPOS_AUDIENCIA:
             self.difundir(s, dumps(m))
+        return "ok", []
+
+    def _traduccion(self, s: Sesion, msg: dict, ahora: float) -> tuple[str, list[str]]:
+        """Mergea cada item en el text guardado (o lo deja pendiente) y reenvia el evento en vivo
+        tal cual, salvo que no haya cambiado nada (duplicado exacto)."""
+        s.traducciones += 1
+        lang_to = msg["meta"]["lang_to"]
+        s.idiomas_destino.add(lang_to)
+        cambios = 0
+        for it in msg["items"]:
+            seq, tr = it["seq"], {"text": it["text"], "ok": it["ok"]}
+            destino = s.textos.get(seq)
+            if destino is not None:
+                cambios += s.aplicar(destino, lang_to, tr)
+            elif seq in s.vistos:
+                s.items_huerfanos += 1  # ese seq es de otro tipo o ya salio del historial
+            else:
+                previo = s.pendientes.get(seq, {}).get(lang_to)
+                if previo is not None and (previo[1] == tr or (previo[1]["ok"] and not tr["ok"])):
+                    continue
+                s.pendientes.setdefault(seq, {})[lang_to] = (ahora, tr)
+                s.items_pendientes += 1
+                cambios += 1
+        exceso = len(s.pendientes) - self.config.pendientes_max
+        if exceso > 0:  # tope de memoria: se van los seq pendientes mas viejos
+            viejos = sorted(s.pendientes, key=lambda k: min(t for t, _ in s.pendientes[k].values()))
+            for seq in viejos[:exceso]:
+                s.items_vencidos += len(s.pendientes.pop(seq))
+        if not cambios:
+            s.traducciones_sin_cambio += 1
+            return "duplicado", []
+        self.difundir(s, dumps({**msg, "t_hub": ahora}))
         return "ok", []
 
     # ------------------------------------------------------------------ audiencia
@@ -218,6 +314,7 @@ class Hub:
             "title": s.title,
             "replay": s.replay,
             "t_hub": ahora,
+            "translations_langs": sorted(s.idiomas_destino),
             "lines": s.lineas(self.config.init_lines),
         }
         c.cola.put_nowait(dumps(init))
@@ -280,6 +377,11 @@ class Hub:
             await asyncio.sleep(self.config.heartbeat_s)
             ahora = time.time()
             for s in list(self.sesiones.values()):
+                if s.pendientes:
+                    n = s.purgar_pendientes(ahora, self.config.pendiente_s)
+                    if n:
+                        log.info("sesion %s: %d item(s) de traduccion vencidos sin su text (%.0f s)",
+                                 s.session_id, n, self.config.pendiente_s)
                 if not s.clientes:
                     continue
                 self.difundir(s, dumps({

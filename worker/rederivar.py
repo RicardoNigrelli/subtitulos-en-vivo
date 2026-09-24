@@ -21,7 +21,47 @@ import sys
 from pathlib import Path
 
 from worker.casete import leer
+from worker.contrato import mensaje
 from worker.mapeo import InfoVentana, Mapeador, segundos
+
+
+def parciales_de(eventos: list[dict], session_id: str, lang: str) -> list[dict]:
+    """Eventos emit `partial` (contrato B2) derivados SIN API de los interimInputTranscription crudos.
+
+    Misma regla que el SessionWorker en vivo: audio_start = inicio de la ventana mas vieja sin
+    ACTIVITY_END del server (el turno en curso) o, si no hay, la ventana abierta; t_captured =
+    t_captured de la ultima ventana cerrada (<= t_emit); t_emit = t de llegada del frame.
+    """
+    pend: list[tuple[float, float]] = []      # (audio_start, fin_acum)
+    acum = 0.0
+    abierta = None
+    ult_tc = None
+    out = []
+    for e in eventos:
+        d, k, p = e.get("dir"), e.get("kind"), e.get("payload") or {}
+        if d == "client" and k == "activity_start":
+            abierta = p.get("audio_start")
+        elif d == "client" and k == "ventana":
+            acum += p.get("n_chunks", 0) * 0.1
+            pend.append((p["audio_start"], round(acum, 3)))
+            ult_tc = p.get("t_captured") or e["t"]
+            abierta = None
+        elif d == "server":
+            va = p.get("voiceActivity") or {}
+            if va.get("type") == "ACTIVITY_END":
+                off = segundos(va.get("audioOffset"))
+                if off is not None:
+                    while pend and pend[0][1] <= off + 0.05:
+                        pend.pop(0)
+            sc = p.get("serverContent") or {}
+            it = (sc.get("interimInputTranscription") or {}).get("text")
+            if it:
+                a0 = pend[0][0] if pend else abierta
+                tc = ult_tc if (ult_tc is not None and ult_tc <= e["t"]) else None
+                m = mensaje("partial", session_id, None, lang, text=it, audio_start=a0,
+                            t_captured=tc, t_emit=e["t"], meta={"rederivado": True})
+                out.append({"t": e["t"], "dir": "emit", "kind": "partial", "payload": m})
+    return out
 
 
 def asignaciones_de(eventos: list[dict]):

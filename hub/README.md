@@ -3,7 +3,7 @@
 Protocolo y formato de mensajes: [`contracts/README.md`](../contracts/README.md) (contrato v1, congelado).
 
 ```bash
-.venv/Scripts/python -m hub                                   # levanta el hub (localhost:8100)
+.venv/Scripts/python -m hub                                   # levanta el hub (127.0.0.1:8100)
 .venv/Scripts/python -m hub.inyectar contracts/ejemplos/sesion-en.jsonl        # empuja un JSONL/casete (replay)
 .venv/Scripts/python -m hub.inyectar fixtures/casetes/x.jsonl --velocidad 4 --session-id otra-sala
 .venv/Scripts/python -m hub.cliente_ws ejemplo-en --lang es   # subtítulos en la terminal + chequeo de seq
@@ -13,7 +13,7 @@ Protocolo y formato de mensajes: [`contracts/README.md`](../contracts/README.md)
 
 | Variable | Default | Qué es |
 |---|---|---|
-| `HUB_HOST` | `localhost` | en Docker: `0.0.0.0` |
+| `HUB_HOST` | `127.0.0.1` | en Docker: `0.0.0.0`. Ojo en Windows: con `127.0.0.1` un cliente que conecta a `localhost` prueba primero `::1` y el `websockets` de Python tarda ~2 s en caer a IPv4 (medido 24/09); con `HUB_HOST=localhost` el hub escucha en `127.0.0.1` y `::1` |
 | `HUB_PORT` | `8100` | antes de bindear, si el puerto ya contesta, el hub aborta con exit 2 (en Windows el bind no falla) |
 | `HUB_TOKEN` | `dev-token` (con aviso en el log) | token de productores (`/ingest`, primer frame) y de `GET /api/metricas` (Bearer) |
 | `HUB_HISTORY` | `1000` | mensajes por sesión en memoria |
@@ -21,8 +21,22 @@ Protocolo y formato de mensajes: [`contracts/README.md`](../contracts/README.md)
 | `HUB_HEARTBEAT_S` | `1.0` | latido a la audiencia |
 | `HUB_LIVE_S` | `30` | ventana para `state=live` |
 | `HUB_SEND_TIMEOUT_S` | `5` | un envío que tarda más desconecta a ESE espectador |
+| `HUB_PENDIENTE_S` | `120` | B2: vida de un item de `translation` que llegó antes que su `text` |
 
-Se leen del entorno o de `.env` en la raíz (sólo las claves `HUB_*`).
+Se leen del entorno o de `.env` en la raíz con python-dotenv (sólo las claves `HUB_*`; el entorno gana).
+
+## Traducciones y parciales (B2, aditivo)
+
+- `translation` (`seq: null`, `items: [{seq, text, ok}]`, `meta.lang_to`): el hub aplica cada item al
+  `text` guardado con ese `session_id+seq` como `translations[lang_to]`, así `init`, el historial y
+  los reenvíos salen mergeados. Idempotente (un duplicado exacto no se reenvía; un `ok:false` no
+  pisa un `ok:true`). Si el `text` todavía no llegó, el item queda pendiente `HUB_PENDIENTE_S`
+  segundos y se aplica al llegar. El evento se reenvía en vivo tal cual.
+- `partial` (`seq: null`): se reenvía en vivo, no se guarda, no toca `last_seq`.
+- `GET /api/sesiones` e `init` agregan `translations_langs` (idiomas destino vistos).
+- Contadores en `GET /api/metricas`: `traducciones`, `traducciones_sin_cambio`, `items_aplicados`,
+  `items_pendientes`, `items_vencidos`, `items_huerfanos`, `pendientes_ahora`, `parciales`.
+- Semántica completa: [`contracts/README.md`](../contracts/README.md), sección "Traducción diferida".
 
 ## Diseño (por qué escala a cientos de espectadores por sesión, C3 eje 2)
 

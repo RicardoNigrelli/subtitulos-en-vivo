@@ -94,6 +94,47 @@ def tipos() -> list[dict]:
     ]
 
 
+def traduccion() -> list[dict]:
+    """AMPLIADO 24/09 B2: `partial` + `text` con translations {} + `translation` que el hub mergea.
+
+    Incluye los tres casos del merge: traduccion ok, traduccion fallida (ok:false) y una traduccion
+    que llega ANTES que su text (el hub la deja pendiente y la aplica cuando llega el seq 4).
+    """
+    sid, t = "ejemplo-traduccion", T0 + 7200.0
+    base = {"v": 1, "session_id": sid, "lang": "en", "replay": True}
+
+    def parcial(texto: str, a0: float, dt: float) -> dict:
+        return {**base, "type": "partial", "seq": None, "text": texto, "audio_start": a0,
+                "t_captured": _r(t + dt), "t_emit": _r(t + dt + 0.2), "meta": dict(FUENTE)}
+
+    def final(seq: int, texto: str, a0: float, a1: float, dt: float) -> dict:
+        return {**base, "type": "text", "seq": seq, "text": texto, "translations": {},
+                "audio_start": a0, "audio_end": a1, "t_captured": _r(t + dt), "t_emit": _r(t + dt + 0.9),
+                "meta": dict(FUENTE)}
+
+    def trad(items: list[dict], dt: float, batch_ms: int) -> dict:
+        return {**base, "type": "translation", "seq": None, "text": None, "translations": {},
+                "items": items, "t_emit": _r(t + dt),
+                "meta": {"lang_to": "es", "model": "ejemplo-contrato", "batch_ms": batch_ms, **FUENTE}}
+
+    return [
+        {**base, "type": "session_start", "seq": 1, "t_emit": _r(t),
+         "meta": {"title": "Ejemplo de contrato: partial, text y translation", "source": "ejemplo-contrato"}},
+        parcial("Contract example, partial", 0.0, 1.0),
+        parcial("Contract example, partial text that", 0.0, 2.0),
+        final(2, "Contract example, final text 1 (translated later).", 0.0, 3.0, 3.0),
+        parcial("Contract example, partial of", 3.0, 4.5),
+        final(3, "Contract example, final text 2 (its translation fails).", 3.0, 6.0, 6.0),
+        trad([{"seq": 2, "text": "Ejemplo de contrato, texto final 1 (traducido después).", "ok": True},
+              {"seq": 3, "text": None, "ok": False}], 8.0, 1200),
+        trad([{"seq": 4, "text": "Ejemplo de contrato, texto final 3 (su traducción llegó antes que el texto).",
+               "ok": True}], 9.0, 900),
+        final(4, "Contract example, final text 3 (its translation arrived first).", 6.0, 9.0, 9.0),
+        {**base, "type": "session_end", "seq": 5, "t_emit": _r(t + 11.0),
+         "meta": {"reason": "fin del ejemplo", **FUENTE}},
+    ]
+
+
 def escribir(path: Path, msgs: list[dict]) -> None:
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         for m in msgs:
@@ -106,6 +147,7 @@ def main() -> None:
     escribir(EJEMPLOS_DIR / "sesion-en.jsonl", sesion("en", "ejemplo-en", T0, falla=13))
     escribir(EJEMPLOS_DIR / "sesion-es.jsonl", sesion("es", "ejemplo-es", T0 + 1.5, falla=7))
     escribir(EJEMPLOS_DIR / "tipos.jsonl", tipos())
+    escribir(EJEMPLOS_DIR / "traduccion.jsonl", traduccion())
 
 
 if __name__ == "__main__":

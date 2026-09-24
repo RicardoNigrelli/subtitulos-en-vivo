@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:vibeathon:contrato:mensaje:v1",
   "title": "Mensaje del contrato v1",
-  "description": "Un mensaje por frame/linea. Lo emite el worker (o el replay) hacia el hub por /ingest; el hub le agrega t_hub y lo reparte a la audiencia por /ws/<session_id>. CONGELADO: solo se AGREGAN campos (additionalProperties queda abierto a proposito). Ver contracts/README.md.",
+  "description": "Un mensaje por frame/linea. Lo emite el worker (o el replay) hacia el hub por /ingest; el hub le agrega t_hub y lo reparte a la audiencia por /ws/<session_id>. CONGELADO: solo se AGREGAN campos (additionalProperties queda abierto a proposito). Ver contracts/README.md. AMPLIADO 24/09 B2 (aditivo): type=translation (items [{seq,text,ok}] que el hub mergea en el text guardado) y type=partial (seq null, en vivo, no se guarda).",
   "type": "object",
   "required": [
     "v",
@@ -23,7 +23,9 @@
         "error",
         "heartbeat",
         "session_start",
-        "session_end"
+        "session_end",
+        "translation",
+        "partial"
       ]
     },
     "session_id": {
@@ -35,7 +37,7 @@
         "null"
       ],
       "minimum": 0,
-      "description": "Monotonico POR SESION, lo emite el WORKER. El hub nunca renumera ni rebobina. null solo en heartbeat."
+      "description": "Monotonico POR SESION, lo emite el WORKER. El hub nunca renumera ni rebobina. null en heartbeat, partial y translation (no ocupan numero)."
     },
     "lang": {
       "$ref": "#/$defs/lang_origen"
@@ -92,6 +94,13 @@
     "meta": {
       "type": "object",
       "description": "Extensible. Claves obligatorias segun type (ver allOf)."
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/item_traduccion"
+      },
+      "description": "Solo type=translation: traducciones por seq de mensajes type=text de la MISMA sesion. El hub aplica cada item como translations[meta.lang_to] = {text, ok} del text guardado con ese seq."
     }
   },
   "allOf": [
@@ -126,16 +135,59 @@
         ]
       },
       "else": {
-        "properties": {
-          "seq": {
-            "type": "integer"
-          }
-        },
         "required": [
           "lang",
           "t_emit",
           "replay"
         ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "text",
+              "rotation",
+              "watchdog",
+              "error",
+              "session_start",
+              "session_end"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "seq": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "partial",
+              "translation"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "seq": {
+            "type": "null"
+          }
+        }
       }
     },
     {
@@ -359,6 +411,74 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "partial"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Texto PROVISORIO (interimInputTranscription) en el idioma original. Puede ser vacio."
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "const": "translation"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "items",
+          "meta"
+        ],
+        "properties": {
+          "items": {
+            "minItems": 1
+          },
+          "meta": {
+            "required": [
+              "lang_to",
+              "model",
+              "batch_ms"
+            ],
+            "properties": {
+              "lang_to": {
+                "$ref": "#/$defs/lang_destino"
+              },
+              "model": {
+                "type": "string"
+              },
+              "batch_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "source": {
+                "description": "Opcional, libre."
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -529,6 +649,13 @@
             "$ref": "#"
           },
           "description": "Ultimos 10 mensajes type=text, ordenados por seq, COMPLETOS (texto + traducciones)."
+        },
+        "translations_langs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lang_destino"
+          },
+          "description": "Idiomas destino vistos en la sesion (translations de los text + meta.lang_to de los translation). Agregado B2."
         }
       }
     },
@@ -551,6 +678,26 @@
             "integer",
             "null"
           ]
+        }
+      }
+    },
+    "item_traduccion": {
+      "description": "Un item de type=translation: la traduccion del text con ese seq. Misma regla que $defs/traduccion: ok:true => text no vacio; ok:false => text null.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/traduccion"
+        }
+      ],
+      "type": "object",
+      "required": [
+        "seq",
+        "text",
+        "ok"
+      ],
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     }

@@ -2,7 +2,7 @@
 
 Charlas públicas del canal de YouTube de Nerdearla (`youtube.com/@nerdearla`). En el repo van SOLO
 clips cortos de 60 s, citados con URL y minuto (decisión de Ricardo 24/09 12:55, X3). Las charlas
-enteras se bajan a `fixtures/audio/full/`, que git ignora (`fixtures/audio/full/.gitignore`).
+enteras se bajan a `fixtures/audio/full/`, que git ignora por la regla `fixtures/audio/full/` del `.gitignore` de la raíz.
 
 | Slug | Charla | Orador | URL | Duración | Publicado | Pista usada | Descargado |
 |---|---|---|---|---|---|---|---|

@@ -43,6 +43,11 @@ def _args(argv=None):
     ap.add_argument("--tope-envio-s", type=float, default=None,
                     help="maximo de segundos de audio a enviar en esta corrida")
     ap.add_argument("--key", default="GEMINI_API_KEY", help="NOMBRE de la variable de la key")
+    ap.add_argument("--ventana-s", type=float, default=None, help="ventana objetivo (default 3,0)")
+    ap.add_argument("--gap-s", type=float, default=None, help="gap end->start (default 0,7)")
+    ap.add_argument("--drenaje-s", type=float, default=30.0, help="espera de turnos al fin de la fuente")
+    ap.add_argument("--traducir-a", default="auto", help="es|en|none (auto: en->es, es->en)")
+    ap.add_argument("--timeout-trad-s", type=float, default=3.0)
     return ap.parse_args(argv)
 
 
@@ -60,19 +65,37 @@ async def correr(a) -> int:
     titulo = a.titulo or Path(a.archivo).stem
     from google.genai import __version__ as genai_version
     from worker import ventanas as V
-    cortador = {"ventana_s": V.VENTANA_S, "tolerancia_s": V.TOLERANCIA_S, "solape_s": V.SOLAPE_S,
-                "gap_s": V.GAP_S, "percentil": V.PERCENTIL, "calibracion_s": V.CALIBRACION_S,
-                "chunk_s": 0.1, "chunk_bytes": 3200}
+    ventana_s = a.ventana_s if a.ventana_s is not None else V.VENTANA_S
+    gap_s = a.gap_s if a.gap_s is not None else V.GAP_S
+    cortador = {"ventana_s": ventana_s, "tolerancia_s": V.TOLERANCIA_S, "solape_s": V.SOLAPE_S,
+                "gap_s": gap_s, "percentil": V.PERCENTIL, "calibracion_s": V.CALIBRACION_S,
+                "chunk_s": 0.1, "chunk_bytes": 3200, "drenaje_s": a.drenaje_s}
+    destino = a.traducir_a
+    if destino == "auto":
+        destino = "es" if a.lang == "en" else "en"
+    traductor = None
+    if destino and destino != "none":
+        from worker.traductor import Traductor
+        traductor = Traductor(a.lang, destino, timeout_s=a.timeout_trad_s)
     rec = Grabador(casete, {"session_id": a.sesion, "lang": a.lang, "model": a.modelo,
                             "config": tr.config_enviada()["config"], "source": source,
                             "title": titulo, "generator": "worker.run", "cortador": cortador,
                             "sdk": f"google-genai {genai_version}", "started_at": time.time()})
     emisor = Emisor(a.hub) if a.hub else None
+    seq0 = 0
     if emisor:
         emisor.iniciar()
+        # seq tras reinicio: seguir desde auth_ok.last_seq[session_id] + 1 (el hub no rebobina)
+        if await emisor.esperar_conexion(5.0):
+            seq0 = int(emisor.last_seq_hub.get(a.sesion, 0) or 0)
+        print(f"[run] seq inicial = {seq0} (auth_ok.last_seq; conectado={emisor.conectado})",
+              file=sys.stderr)
+    rec.client("seq_inicial", {"last_seq_hub": seq0, "conectado": bool(emisor and emisor.conectado)})
     fuente = fuente_ffmpeg(a.archivo, a.inicio, a.duracion, tiempo_real=True)
     w = SessionWorker(a.sesion, a.lang, tr, fuente, grabador=rec, emisor=emisor, titulo=titulo,
-                      source=source, tope_envio_s=tope,
+                      source=source, tope_envio_s=tope, espera_final_s=a.drenaje_s, gap_s=gap_s,
+                      cortador=V.Cortador(ventana_s=ventana_s, gap_s=gap_s),
+                      traductor=traductor, seq_inicial=seq0,
                       log=lambda s: print(s, file=sys.stderr, flush=True))
     res = None
     try:
@@ -91,7 +114,11 @@ async def correr(a) -> int:
                "ventanas": res.ventanas, "textos": res.textos, "mensajes_server": res.mensajes_server,
                "goaway": res.goaway, "cierre": res.cierre, "motivo_fin": res.motivo_fin,
                "seq_final": res.seq_final, "duracion_s": round(res.t_fin - res.t_inicio, 1),
-               "errores": res.errores}
+               "errores": res.errores, "seq_inicial": seq0, "parciales": w.n_parciales,
+               "drenaje": w.drenaje,
+               "traduccion": None if traductor is None else {
+                   "a": traductor.a, "llamadas": traductor.n_llamadas, "lotes": traductor.n_lotes,
+                   "lotes_ok_false": traductor.n_ok_false, "por_modelo": traductor.por_modelo}}
     print(json.dumps(resumen, ensure_ascii=False))
     return 0 if res.textos > 0 else 3
 
