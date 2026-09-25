@@ -321,6 +321,17 @@
   }
 
   // ---------- linea PARCIAL (solo vista del idioma original: "los parciales no se traducen") ----------
+  // Arreglo 25/09 01:4x (reportes/verificacion-final2.md, ROJO modo=proyeccion negro con vf2-en):
+  // el parcial crece sin límite hasta que Gemini lo finaliza; en proyección/OBS (pantalla fija,
+  // sin scroll de usuario) eso podía volver el bloque más alto que la pantalla. Se corta al
+  // FINAL (lo más reciente, que es lo que importa) a ~140 caracteres SOLO en esos dos modos; la
+  // vista normal (con scroll que sigue al fondo) no se toca. No es "recortar texto" del contrato
+  // (append-puro sigue intacto para las líneas CONFIRMADAS): el parcial ya es, por diseño,
+  // reemplazable en el DOM (ver limpiarParcial) hasta que llega su texto final.
+  var LARGO_MAX_PARCIAL_FIJO = 140;
+  function esModoPantallaFija() {
+    return document.body.classList.contains('modo-proyeccion') || document.body.classList.contains('modo-obs');
+  }
   function mostrarParcial(texto) {
     if (!elParcial) {
       elParcial = document.createElement('div');
@@ -329,6 +340,9 @@
       span.className = 'linea__texto';
       elParcial.appendChild(span);
       elLineas.appendChild(elParcial);
+    }
+    if (esModoPantallaFija() && texto.length > LARGO_MAX_PARCIAL_FIJO) {
+      texto = '…' + texto.slice(-LARGO_MAX_PARCIAL_FIJO);
     }
     elParcial.firstChild.textContent = texto;
     autoScroll();

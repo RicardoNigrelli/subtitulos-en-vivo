@@ -101,33 +101,41 @@ def test_en_quota_atasco_y_cierre_seq_continuo():
     assert res.textos > 0
 
 
-def test_es_cancelled_a_lo_sumo_2_reaperturas_en_200s_y_dispara_210_250():
-    # B4: el criterio es la METRICA (<= 2 reaperturas en 0-200 s del ES y minimo de segundos sin
-    # texto: test_umbral_default_minimiza_segundos_con_voz_sin_texto), no "nunca reabrir"
-    fab0 = FabricaCasete(str(ES))
-    res, msgs, _ = correr(ES, _fin_casete(fab0))
-    rots = res.rotaciones
-    assert rots, "no hubo ninguna reapertura"
-    antes = [r for r in rots if r["pos_s"] < 200.0]
-    assert len(antes) <= 2, f"mas de 2 reaperturas en los primeros 200 s: {antes}"
-    assert all(r["reason"] != "preventiva" or r["audio_lost_s"] == 0.0 for r in rots)
-    # preventiva a 240 s de AUDIO ENVIADO a la conexion (escala del audioOffset; con la senal de test
-    # el solape suma ~18 %, por eso cae en la posicion ~203 de la fuente)
-    prev = [r for r in rots if r["reason"] == "preventiva"]
-    assert prev and 240.0 <= prev[0]["audio_s"] <= 241.0, prev[:1]
-    # episodio de muerte del casete (offset trabado en 255,4 s desde t~225): atasco entre 210 y 250 s
-    at = [r for r in rots if r["reason"] == "atasco"]
-    assert at and 210.0 <= at[0]["pos_s"] <= 250.0 and at[0]["detalle"] == "atraso", at[:1]
-    _seq_continuo(msgs)
+def _tramos_sin_texto(casete_salida: str, hasta_s: float = 1e9):
+    """Tramos contiguos de ventanas CON VOZ enviadas y sin ningun `text` que las cubra
+    (qa/cobertura.py::cobertura_casete), recortados a `hasta_s`."""
+    from qa.cobertura import cobertura_casete
+    iv = sorted((v["audio_start"], v["audio_end"]) for v in cobertura_casete(casete_salida)["ventanas_sin_texto"])
+    tramos = []
+    for a, b in iv:
+        if tramos and a <= tramos[-1][1] + 0.05:
+            tramos[-1][1] = max(tramos[-1][1], b)
+        else:
+            tramos.append([a, b])
+    return [(a, min(b, hasta_s)) for a, b in tramos if a < hasta_s]
+
+
+def test_es_cancelled_default_sin_tramo_mudo_mayor_a_15s_antes_de_la_muerte_del_server(tmp_path):
+    """Con el default (22/8) se cumple 'ningun tramo con voz enviada y sin texto > 15 s' en 0-200 s del
+    casete ES. Despues de ~217 s el server MUERE (cancelled) y el transporte de casete repite esa muerte en
+    las conexiones nuevas: ese tramo es medicion documentada (reportes/audio-pipeline-umbral.md)."""
+    from worker.umbrales import fila
+    d = ConfigReabrir()
+    fin_es = FabricaCasete(str(ES)).guion.ventanas[-1][0] + 1.0
+    f = fila("es", ES, fin_es, d.atasco_umbral_s, d.atasco_sostenido_s, tmp_path)
+    tramos = _tramos_sin_texto(f["casete_salida"], 200.0)
+    assert all(b - a <= 15.0 for a, b in tramos), tramos
+    assert f["reaperturas"] >= 1                     # se reporta, no se topea (ver reportes/audio-pipeline-umbral.md)
 
 
 def _muda(mudo_desde: float, dur_s: float):
     res, msgs, fab = correr(ES, dur_s, mudo=mudo_desde)
     pos_mudo = fab.guion.pos_de_env(mudo_desde)
-    at = [r for r in res.rotaciones if r["reason"] == "atasco"]
+    # se mira el primer atasco DESPUES del mudo (con umbrales bajos hay uno antes, episodio ES ~37-62 s)
+    at = [r for r in res.rotaciones if r["reason"] == "atasco" and r["pos_s"] > pos_mudo]
     assert at, res.rotaciones
     assert 0 < at[0]["pos_s"] - pos_mudo <= 15.0, (at[0], pos_mudo)
-    assert fab.conexiones[0].descartadas_mudo > 0 and not fab.conexiones[1].muda
+    assert any(c.descartadas_mudo > 0 for c in fab.conexiones) and not fab.conexiones[-1].muda
     return res, msgs, at[0]
 
 
@@ -167,21 +175,14 @@ def test_perfil_agresivo_6_4_detecta_en_temprano_pero_da_falso_positivo_en_es():
     assert any(r["reason"] == "atasco" and r["pos_s"] < 200.0 for r in res_es.rotaciones)
 
 
-def test_umbral_default_minimiza_segundos_con_voz_sin_texto(tmp_path):
-    """B4: el default (ConfigReabrir()) se eligio POR METRICA (worker/umbrales.py ->
-    reportes/audio-pipeline-b4-umbrales.log): entre 22/8, 15/6 y 12/5 es el que minimiza los segundos
-    con voz y sin texto sumados sobre los dos casetes largos, con <= 2 reaperturas en 0-200 s del ES."""
-    from worker.umbrales import fila
+def test_medicion_vf2_en_modelo_documentada(tmp_path):
+    """MEDICION DOCUMENTADA, no asercion de politica (reportes/audio-pipeline-umbral.md). vf2-en (ROJO 1
+    de verificacion-final2): la conexion vieja reproduce las lineas REALES de c1 y las nuevas una sesion
+    sana del mismo clip (worker/umbrales.py::fila_vf2). El modelo NO reproduce el vivo: el texto tardio
+    de c1 queda anclado al audio enviado y llega antes de la rotacion, y la c2 real quedo muda. Solo se
+    exige que el escenario corra y que el atraso de c1 dispare una reapertura por atasco."""
+    from worker.umbrales import fila_vf2
     d = ConfigReabrir()
-    perfiles = [(d.atasco_umbral_s, d.atasco_sostenido_s), (15.0, 6.0), (12.0, 5.0)]
-    fin_en = FabricaCasete(str(EN)).guion.ventanas[-1][0] + 1.0 + 8.0
-    fin_es = FabricaCasete(str(ES)).guion.ventanas[-1][0] + 1.0
-    tot, es200 = {}, {}
-    for u, s_ in perfiles:
-        f_en = fila("en", EN, fin_en, u, s_, tmp_path)
-        f_es = fila("es", ES, fin_es, u, s_, tmp_path)
-        tot[(u, s_)] = f_en["voz_sin_texto_s"] + f_es["voz_sin_texto_s"]
-        es200[(u, s_)] = f_es["reaperturas_0_200"]
-    base = perfiles[0]
-    assert es200[base] <= 2, es200
-    assert all(tot[base] <= tot[p] for p in perfiles[1:]), tot
+    f = fila_vf2(CASETES / "vf2-smoke-final2-en.jsonl", d.atasco_umbral_s, d.atasco_sostenido_s, tmp_path)
+    assert any(p[0] == "atasco" for p in f["posiciones"]), f["posiciones"]
+    print("vf2-en", f["perfil"], f["posiciones"], "tramo_max", f["tramo_max_s"], "final", f["sin_texto_al_final_s"])

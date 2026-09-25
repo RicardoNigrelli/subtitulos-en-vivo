@@ -49,8 +49,8 @@ def senal_sintetica(total_s: float) -> bytes:
     return np.concatenate(partes).tobytes()[: int(total_s * SR) * 2]
 
 
-def correr(casete: Path, dur_s: float, cfg: ConfigReabrir, salida: Path, mudo=None, sid="umbral"):
-    fab = FabricaCasete(str(casete), mudo)
+def correr(casete: Path, dur_s: float, cfg: ConfigReabrir, salida: Path, mudo=None, sid="umbral", fab=None):
+    fab = fab or FabricaCasete(str(casete), mudo)
     chs = list(trocear(senal_sintetica(dur_s), t0_epoch=0.0))
     caja = {}
     rec = Grabador(salida, {"session_id": sid, "lang": "xx", "generator": "worker.umbrales (transporte de casete)",
@@ -87,10 +87,10 @@ def correr(casete: Path, dur_s: float, cfg: ConfigReabrir, salida: Path, mudo=No
     return res, bus.msgs, fab
 
 
-def fila(nombre: str, casete: Path, dur_s: float, u: float, s: float, dirsal: Path, mudo=None) -> dict:
+def fila(nombre: str, casete: Path, dur_s: float, u: float, s: float, dirsal: Path, mudo=None, fab=None) -> dict:
     cfg = ConfigReabrir(atasco_umbral_s=u, atasco_sostenido_s=s)
     out = dirsal / f"umbral-{nombre}-{u:g}-{s:g}.jsonl"
-    res, msgs, _ = correr(casete, dur_s, cfg, out, mudo=mudo)
+    res, msgs, _ = correr(casete, dur_s, cfg, out, mudo=mudo, fab=fab)
     cob = cobertura_casete(str(out))
     rots = res.rotaciones
     sin_texto = round(cob["audio_voz_s"] - cob["audio_voz_cubierto_s"], 2)
@@ -109,25 +109,82 @@ def fila(nombre: str, casete: Path, dur_s: float, u: float, s: float, dirsal: Pa
             "casete_salida": out.as_posix()}
 
 
+# ---- vf2-en (verificacion final 2, ROJO 1): atasco real de la conexion c1 al final de un clip de 60 s ----
+# La conexion VIEJA reproduce SOLO las lineas de c1 del casete real (el atasco tal cual paso). Las
+# conexiones NUEVAS reproducen b8-trad-vivo-en (sesion sana del MISMO clip, fixtures/audio/clips/nerdearla-en-booch-300s-60s.wav)
+# desde el corte: SUPUESTO de que la conexion nueva anda. En la corrida real la c2 tambien quedo muda
+# (setupComplete, voiceActivity y close, ningun texto): eso el casete no permite saber si se repetiria.
+SANA_EN_60 = CASETES / "b8-trad-vivo-en.jsonl"   # 1 conexion sin rotaciones, 26 textos del server
+
+
+def solo_conexion(casete: Path, conexion: str, salida: Path) -> Path:
+    """Copia del casete con las lineas server y client/ventana de UNA conexion (el resto igual)."""
+    import json as _json
+    lineas = casete.read_text(encoding="utf-8").splitlines()
+    out = [lineas[0]]
+    for l in lineas[1:]:
+        if not l.strip():
+            continue
+        e = _json.loads(l)
+        if e.get("dir") == "server" and e.get("conexion") not in (None, conexion):
+            continue
+        if e.get("dir") == "client" and e.get("kind") == "ventana" and e.get("conexion") not in (None, conexion):
+            continue
+        out.append(l)
+    salida.write_text("\n".join(out) + "\n", encoding="utf-8")
+    return salida
+
+
+class FabricaCompuesta:
+    """Primera conexion = `primera` (el atasco real); las siguientes = `siguientes` desde el corte."""
+
+    def __init__(self, primera: FabricaCasete, siguientes: FabricaCasete):
+        self.primera, self.siguientes = primera, siguientes
+        self.siguientes.n = 1          # que la 1a conexion nueva arranque en env_de_pos(corte), no en 0
+        self.n = 0
+        self.guion = primera.guion
+
+    def __call__(self, corte_s: float):
+        self.n += 1
+        return self.primera(corte_s) if self.n == 1 else self.siguientes(corte_s)
+
+
+def fila_vf2(casete_vf2: Path, u: float, s: float, dirsal: Path) -> dict:
+    c1 = solo_conexion(casete_vf2, "c1", dirsal / "vf2-en-solo-c1.jsonl")
+    fab = FabricaCompuesta(FabricaCasete(str(c1)), FabricaCasete(str(SANA_EN_60)))
+    f = fila("vf2-en", c1, 60.0, u, s, dirsal, fab=fab)
+    cob = cobertura_casete(f["casete_salida"])
+    fin = [v for v in cob["ventanas_sin_texto"] if v["audio_end"] >= 59.0]
+    f["sin_texto_al_final_s"] = round(_union([(v["audio_start"], v["audio_end"]) for v in fin]), 2) if fin else 0.0
+    return f
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m worker.umbrales")
     ap.add_argument("--perfiles", default="22/8,15/6,12/5")
     ap.add_argument("--mudo-es", type=float, default=None,
                     help="agrega el escenario ES con sesion muda desde S s de audio enviado")
     ap.add_argument("--salida-dir", default=None)
+    ap.add_argument("--vf2", default=None,
+                    help="casete real de 2 conexiones (qa/out/smoke-final2-vf2-en.casete.jsonl): escenario vf2-en")
+    ap.add_argument("--solo-vf2", action="store_true", help="solo el escenario vf2-en")
     a = ap.parse_args(argv)
     dirsal = Path(a.salida_dir or tempfile.mkdtemp(prefix="umbrales-"))
     dirsal.mkdir(parents=True, exist_ok=True)
     fin_en = FabricaCasete(str(EN)).guion.ventanas[-1][0] + 1.0 + 8.0
     fin_es = FabricaCasete(str(ES)).guion.ventanas[-1][0] + 1.0
-    esc = [("en-quota", EN, fin_en, None), ("es-cancelled", ES, fin_es, None)]
-    if a.mudo_es is not None:
+    esc = [] if a.solo_vf2 else [("en-quota", EN, fin_en, None), ("es-cancelled", ES, fin_es, None)]
+    if a.mudo_es is not None and not a.solo_vf2:
         esc.append((f"es-mudo{a.mudo_es:g}", ES, 160.0, a.mudo_es))
     filas = []
     for p in a.perfiles.split(","):
         u, s = (float(x) for x in p.split("/"))
         for nombre, cas, dur, mudo in esc:
             f = fila(nombre, cas, dur, u, s, dirsal, mudo)
+            filas.append(f)
+            print(json.dumps(f, ensure_ascii=False), flush=True)
+        if a.vf2:
+            f = fila_vf2(Path(a.vf2), u, s, dirsal)
             filas.append(f)
             print(json.dumps(f, ensure_ascii=False), flush=True)
     print()

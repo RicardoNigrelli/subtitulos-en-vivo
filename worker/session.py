@@ -27,6 +27,12 @@ Criterio de los defaults (medido sobre casetes reales; reportes/audio-pipeline-b
   ~5 s (offset trabado ~19 s, con perdida) NO dispara por atraso; en tiempo real es indistinguible
   del episodio ES de los ~37 s (que se recupero solo). "mudo" (sin ningun texto MUDO_S=10 s con voz
   enviada) no confunde a ninguno de los dos: los parciales siguieron llegando.
+25/09: se probo 10 / 4 (ROJO 1 de reportes/verificacion-final2.md) y se VOLVIO a 22 / 8: en replay 10/4
+  reabre mas (EN 14 vs 8, ES 11 vs 8), da un falso positivo en el episodio ES de t~37 (44,6 s) y no
+  achica el tramo mas largo sin texto; 22/8 tiene evidencia en vivo (ESTADO.md, fila R18: cobertura
+  1,0 en 2 x 11 min con rotaciones).
+  Numeros (replay, no vivo): reportes/audio-pipeline-umbral.log (python -m worker.umbrales
+  --perfiles 10/4,22/8 --mudo-es 60 [--vf2 fixtures/casetes/vf2-smoke-final2-en.jsonl --solo-vf2]).
 Mecanica: la conexion nueva se abre ANTES de soltar la vieja, en el borde de ventana (o ya, si la
 vieja murio). Mientras conecta, el audio queda en la fuente (tiempo real: sale en rafaga al
 conectar; nada se pierde). En atasco/cierre se REENVIAN a la nueva las ventanas que la vieja no

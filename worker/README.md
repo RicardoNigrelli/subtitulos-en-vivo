@@ -162,6 +162,25 @@ posición de audio) y `parada`. En el resumen JSON final, `caidas_fuente` y `mot
 unos segundos en entregar el primer byte después de abrir (ver `worker/tests/test_sala.py`, que usa
 7 s con las opciones de producción).
 
+**Si la conexión nueva con Gemini también queda muda.** A veces pasa: en la corrida en vivo `vf2-en` la
+conexión abierta tras un atasco no devolvió ningún texto en 40 s. No hay arreglo del lado nuestro. El
+watchdog (`MUDO_S`, 10 s con voz y sin texto) o el atraso (`ATASCO_UMBRAL_S` sostenido `ATASCO_SOSTENIDO_S`)
+vuelven a reabrir; cada atasco seguido duplica el sostenido (hasta 120 s) y se reenvían hasta `REENVIO_MAX_S`
+(15 s) de audio. Si el atasco dura más que eso, el audio anterior queda sin texto (`rotation.meta.audio_lost_s`).
+
+Medición en REPLAY (transporte de casete, no en vivo; `reportes/audio-pipeline-umbral.log`):
+
+| Casete | Reaperturas 22/8 | Reaperturas 10/4 | Tramo más largo sin texto 22/8 | Tramo más largo sin texto 10/4 |
+|---|---|---|---|---|
+| en-quota (455 s) | 8 | 14 | 252,4 s (81,5 s en 0–200 s) | 255,3 s (72,4 s en 0–200 s) |
+| es-cancelled (533 s) | 8 | 11 | 258,8 s (0,0 s en 0–200 s) | 249,8 s (6,5 s en 0–200 s) |
+| es mudo desde 60 s (160 s) | 1 | 2 | 21,1 s | 24,4 s |
+
+Los tramos de más de 200 s son el server que muere al final de esos casetes (cuota agotada, cancelado):
+en replay la conexión nueva repite la misma falla, así que ningún umbral los arregla. Por eso se
+mantiene 22 / 8: es el valor con el que se hicieron las corridas en vivo del proyecto; 10 / 4 no
+mostró ventaja en esta medición.
+
 Verificación sin API (0 min): `.venv/Scripts/python -m pytest worker/tests/test_sala.py -q`
 (parada con señal simulada; fuente UDP real que se corta y vuelve; `worker.run` como proceso aparte
 con `--transporte casete:`, corte y vuelta del stream UDP y señal real al final).
@@ -272,7 +291,7 @@ raíz lo cargan `worker/gemini.py` (al pedir la key), `worker/emisor.py` y `work
 | `TRADUCTOR_RPD_TOPE` | `480` | tope diario de llamadas por modelo de texto |
 | `TRADUCTOR_FALLAS_CORTE` | `3` | fallas seguidas (5xx, timeout, 429) que sacan a un modelo de la rotación |
 | `TRADUCTOR_CORTE_S` / `TRADUCTOR_CORTE_MAX_S` | `60` / `480` | duración del primer corte y tope de la duplicación |
-| `ATASCO_UMBRAL_S` / `ATASCO_SOSTENIDO_S` | `22` / `8` | reapertura por atraso del server |
+| `ATASCO_UMBRAL_S` / `ATASCO_SOSTENIDO_S` | `22` / `8` | reapertura por atraso del server (10 / 4 se probó el 25/09 y se descartó: `reportes/audio-pipeline-umbral.log`) |
 | `MUDO_S` | `10` | reapertura por ventanas con voz sin ningún texto (watchdog) |
 | `ROTACION_PREVENTIVA_S` | `240` | reapertura preventiva por audio enviado a una conexión |
 | `DRENAJE_VIEJA_S` | `20` | cuánto drena la conexión vieja tras reabrir |

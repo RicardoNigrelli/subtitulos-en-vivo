@@ -340,15 +340,33 @@ body.modo-proyeccion .selector-idioma {
   display: none;
 }
 
+/* Arreglo 25/09 01:4x (reportes/verificacion-final2.md, ROJO "?modo=proyeccion pinta la pantalla
+   100% negra" reproducido con vf2-en): sin tope, un parcial larguísimo estira este bloque varias
+   pantallas de alto y la vista queda a merced del scroll de la ventana (app.js) para mostrar la
+   cola; si ese scroll no llega a tiempo, se ve una franja vacía (negra) del medio del bloque.
+   Con max-height = min-height + overflow:hidden el bloque NUNCA excede el viewport; como sigue
+   siendo flex-end, lo que se recorta es el excedente ARRIBA (texto viejo), nunca las líneas de
+   abajo (lo más reciente) — y deja de depender del scroll de la ventana. */
 body.modo-proyeccion .lineas {
   max-width: none;
   padding: 4vh 5vw 6vh;
   min-height: calc(100vh - 44px);
+  max-height: calc(100vh - 44px);
+  overflow: hidden;
 }
 
 body.modo-proyeccion .linea {
   font-size: var(--tam-subtitulo-proyeccion);
   margin: 0 0 var(--esp-5);
+  overflow-wrap: anywhere; /* palabras pegadas sin espacios del transcript crudo no desbordan */
+}
+
+/* El parcial crece sin límite hasta que Gemini lo finaliza: tope duro a ~2 renglones. app.js
+   (mostrarParcial) ya recorta el STRING al final (lo más reciente) antes de pintarlo; esto es la
+   red de seguridad en CSS por si igual llegara más texto del esperado. */
+body.modo-proyeccion .linea--parcial {
+  max-height: calc(var(--tam-subtitulo-proyeccion) * var(--interlineado-subtitulo) * 2);
+  overflow: hidden;
 }
 
 /* sólo los últimos 4 nodos de línea (3 confirmadas + la parcial, cuando la hay) */
@@ -386,6 +404,11 @@ body.modo-obs .lineas {
   bottom: 0;
   max-width: none;
   min-height: 0;
+  /* mismo cuidado que modo-proyeccion (ver su comentario): tope duro para que un parcial
+     larguísimo no crezca hacia arriba tapando/desbordando la fuente de OBS sin límite. Con
+     flex-end el recorte es arriba (viejo), la línea más nueva siempre queda pegada abajo. */
+  max-height: 90vh;
+  overflow: hidden;
   margin: 0;
   padding: 0 4vw 4vh;
 }
@@ -395,7 +418,14 @@ body.modo-obs .linea {
   margin: 0 0 var(--esp-2);
   animation: none;
   transition: none;
+  overflow-wrap: anywhere; /* palabras pegadas sin espacios del transcript crudo no desbordan */
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 14px rgba(0, 0, 0, 0.6);
+}
+
+/* El parcial crece sin límite hasta finalizarse: mismo tope de ~2 renglones que modo-proyeccion. */
+body.modo-obs .linea--parcial {
+  max-height: calc(var(--tam-subtitulo-proyeccion) * var(--interlineado-subtitulo) * 2);
+  overflow: hidden;
 }
 
 /* caja semitransparente detrás del texto (no detrás de toda la línea vacía: box-decoration-break
