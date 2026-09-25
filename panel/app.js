@@ -678,6 +678,21 @@
     return { urgencia: 4, clase: 'sana', icono: '●', texto: t('estado_al_dia'), accion: null };
   }
 
+  function estadoDesdeControl(sala) {
+    if (sala.estado === 'error') {
+      return { urgencia: 0, clase: 'mudo', icono: '✕', texto: t('estado_ctl_error'),
+               accion: motivoErrorSala(sala), control: 'iniciar' };
+    }
+    if (sala.estado === 'arrancando' || sala.estado === 'reiniciando' || sala.estado === 'corriendo') {
+      return { urgencia: 3, clase: 'reconectando', icono: '◌', texto: t('estado_ctl_arrancando'),
+               accion: null, control: 'detener' };
+    }
+    if (sala.estado === 'deteniendo') {
+      return { urgencia: 5, clase: 'inactiva', icono: '◌', texto: t('salas_estado_deteniendo'), accion: null, control: null };
+    }
+    return { urgencia: 5, clase: 'inactiva', icono: '■', texto: t('estado_ctl_detenida'), accion: null, control: 'iniciar' };
+  }
+
   function tarjetaHtml(s, estado) {
     var badgeReplay = s.replay === true ? '<span class="badge badge-replay">REPLAY</span>' :
                        (s.replay === false ? '<span class="badge badge-vivo">LIVE</span>' : '');
@@ -702,7 +717,9 @@
         '<p class="tarjeta__estado"><span class="tarjeta__icono" aria-hidden="true">' + estado.icono + '</span>' +
           esc(estado.texto) + '</p>' +
         accionHtml +
-        '<p class="tarjeta__pie">' + esc(textoEspectadores) + escucharHtml + '</p>' +
+        '<p class="tarjeta__pie">' + (s.soloControl ? '' : esc(textoEspectadores)) + escucharHtml +
+          (estado.control ? ' <button type="button" class="tarjeta__escuchar" data-accion="control-' + estado.control + '" data-id="' + esc(s.id) + '">' +
+            esc(t(estado.control === 'iniciar' ? 'salas_btn_iniciar' : 'salas_btn_detener')) + '</button>' : '') + '</p>' +
       '</article>'
     );
   }
@@ -721,6 +738,20 @@
       var s = sesiones[id];
       return { s: s, estado: estadoInformativo(s, ahoraMs) };
     });
+    // UNA sola lista (Ricardo 25/09): toda sala configurada en el servicio de control aparece acá con su
+    // estado real, aunque todavía no haya mandado nada al hub (detenida, arrancando o con error).
+    if (typeof salasEstado !== 'undefined' && salasEstado.salas) {
+      salasEstado.salas.forEach(function (sala) {
+        var enHub = sesiones[sala.id] && sesiones[sala.id].hubState && sesiones[sala.id].hubState !== 'ended';
+        if (enHub) return;
+        var destinos = String(sala.traducir_a || '').split(',').map(function (x) { return x.trim(); })
+          .filter(function (x) { return x && x !== 'auto' && x !== 'none'; });
+        if (String(sala.traducir_a) === 'auto') destinos = [sala.lang === 'en' ? 'es' : 'en'];
+        var pseudo = { id: sala.id, title: sala.titulo || sala.id, lang: sala.lang, translationsLangs: destinos,
+                       replay: null, viewers: 0, soloControl: true };
+        items.push({ s: pseudo, estado: estadoDesdeControl(sala) });
+      });
+    }
     items.sort(function (a, b) { return a.estado.urgencia - b.estado.urgencia; });
 
     var enVivoN = 0, replayN = 0, atenderN = 0, sanasN = 0, ultimoDatoMs = null;
@@ -1528,6 +1559,8 @@
 
   // Botón "Escuchar" en la tarjeta Informativa (mismo <audio> compartido, ver tarjetaHtml() arriba).
   elTarjetas && elTarjetas.addEventListener('click', function (e) {
+    var ctl = e.target.closest ? e.target.closest('[data-accion^="control-"]') : null;
+    if (ctl) { accionSala(ctl.getAttribute('data-id'), ctl.getAttribute('data-accion').replace('control-', '')); return; }
     var btn = e.target.closest ? e.target.closest('[data-accion="escuchar-tarjeta"]') : null;
     if (!btn) return;
     var sala = salasEstado.porId[btn.getAttribute('data-id')];

@@ -211,7 +211,7 @@ async def correr(a) -> int:
         print(f"[run] SIN PRESUPUESTO: gastado {cuota.gastado_s():.1f} s de "
               f"{cuota.PRESUPUESTO_S:.0f} s en el bloque. No se corre.", file=sys.stderr)
         return 4
-    tope = (None if a.tope_envio_s is None else a.tope_envio_s) if (es_casete or sin_limite) else (
+    tope = (None if a.tope_envio_s is None else a.tope_envio_s) if (es_casete or sin_limite or not guarda) else (
         restante if a.tope_envio_s is None else min(a.tope_envio_s, restante))
     vocab = [v.strip() for v in a.vocab.split(",") if v.strip()]
     if a.agenda:
