@@ -96,7 +96,16 @@ def _args(argv=None):
     ap.add_argument("--sin-reabrir", action="store_true", help="desactiva reabrir con solape")
     ap.add_argument("--transporte", default="gemini",
                     help="gemini | casete:<archivo.jsonl>[:mudo=S] (test, rotulado, sin API)")
+    ap.add_argument("--monitor-udp", default=None, metavar="HOST:PUERTO",
+                    help="copia cada chunk PCM de la fuente como datagrama UDP (solo 127.0.0.1/localhost/::1)")
     a = ap.parse_args(argv)
+    a.monitor_destino = None
+    if a.monitor_udp:
+        from worker.monitor_udp import parsear
+        try:
+            a.monitor_destino = parsear(a.monitor_udp)
+        except ValueError as e:
+            ap.error(f"--monitor-udp: {e}")
     if not validar_sesion(a.sesion):
         # M5: el id va al nombre del casete (path traversal) y el hub rechaza todo lo que no cumpla
         # el patron (se gastaria cuota contra una sala vacia)
@@ -281,13 +290,18 @@ async def correr(a) -> int:
     cmd_log = [sin_credenciales(x) for x in comando_ffmpeg(entrada, a.inicio, a.duracion, formato, opciones)]
     print(f"[run] fuente {a.fuente}: {' '.join(cmd_log)}",
           file=sys.stderr)
+    monitor = None
+    if a.monitor_destino:
+        from worker.monitor_udp import MonitorUDP
+        monitor = MonitorUDP(*a.monitor_destino)
+        print(f"[run] monitor UDP -> {a.monitor_destino[0]}:{a.monitor_destino[1]}", file=sys.stderr)
     w = SessionWorker(a.sesion, a.lang, tr, fuente, grabador=rec, emisor=emisor, titulo=titulo,
                       source=source, tope_envio_s=tope, espera_final_s=a.drenaje_s, gap_s=gap_s,
                       cortador=V.Cortador(ventana_s=ventana_s, tolerancia_s=tolerancia_s, gap_s=gap_s),
                       traductor=traductores or None, seq_inicial=seq0,
                       log=lambda s: print(s, file=sys.stderr, flush=True),
                       fabrica=None if a.sin_reabrir else fabrica, reabrir=cfg_reabrir,
-                      turnos_manuales=not a.vad_auto, vocab=vocab)
+                      turnos_manuales=not a.vad_auto, vocab=vocab, monitor=monitor)
     loop = asyncio.get_running_loop()
     senales = [signal.SIGINT, signal.SIGTERM] + ([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])
     previos = {}
@@ -322,6 +336,10 @@ async def correr(a) -> int:
                   f"vaciado={ok}", file=sys.stderr)
             await emisor.detener()
         rec.cerrar()
+        if monitor is not None:
+            print(f"[run] monitor UDP: datagramas={monitor.enviados} errores={monitor.errores}",
+                  file=sys.stderr)
+            monitor.cerrar()
         for sg, h in previos.items():
             try:
                 signal.signal(sg, h)

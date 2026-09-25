@@ -55,7 +55,9 @@ import hmac
 import json
 import logging
 import os
+import queue
 import re
+import socket as socket_lib
 import subprocess
 import sys
 import threading
@@ -217,6 +219,88 @@ def detectar_microfonos(forzar: bool = False) -> list[str]:
     return valor
 
 
+MONITOR_QUEUE_MAX = 20
+
+
+def _worker_soporta_monitor_udp(python: str) -> bool:
+    """Corre `worker.run --help` UNA vez al iniciar el servicio; si el flag --monitor-udp no
+    existe todavia (agente audio-pipeline en paralelo), las salas arrancan igual, sin monitor."""
+    try:
+        r = subprocess.run([python, "-m", "worker.run", "--help"], capture_output=True,
+                            text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    salida = (r.stdout or "") + (r.stderr or "")
+    return "--monitor-udp" in salida
+
+
+class UDPMonitorReceptor:
+    """Bindea 127.0.0.1:0 (puerto libre asignado por el SO), recibe cada datagrama PCM que manda
+    `worker.run --monitor-udp` en un hilo propio y lo reparte a los oyentes conectados por WS: una
+    cola de tamano MONITOR_QUEUE_MAX por oyente; si se llena se descarta el dato MAS VIEJO (nunca se
+    frena la recepcion). No requiere el loop de asyncio: socket bloqueante con timeout corto."""
+
+    def __init__(self) -> None:
+        self.sock = socket_lib.socket(socket_lib.AF_INET, socket_lib.SOCK_DGRAM)
+        self.sock.bind(("127.0.0.1", 0))
+        self.puerto = self.sock.getsockname()[1]
+        self._listeners: list[queue.Queue] = []
+        self._lock = threading.Lock()
+        self._parar = threading.Event()
+        self._hilo = threading.Thread(target=self._bucle, daemon=True)
+        self._hilo.start()
+
+    def _bucle(self) -> None:
+        self.sock.settimeout(0.5)
+        while not self._parar.is_set():
+            try:
+                data, _ = self.sock.recvfrom(65536)
+            except socket_lib.timeout:
+                continue
+            except OSError:
+                return
+            with self._lock:
+                listeners = list(self._listeners)
+            for q in listeners:
+                try:
+                    q.put_nowait(data)
+                except queue.Full:
+                    try:
+                        q.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        q.put_nowait(data)
+                    except queue.Full:
+                        pass
+
+    def agregar_oyente(self) -> "queue.Queue":
+        q: queue.Queue = queue.Queue(maxsize=MONITOR_QUEUE_MAX)
+        with self._lock:
+            self._listeners.append(q)
+        return q
+
+    def quitar_oyente(self, q: "queue.Queue") -> None:
+        with self._lock:
+            if q in self._listeners:
+                self._listeners.remove(q)
+
+    def cerrar(self) -> None:
+        self._parar.set()
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        self._hilo.join(timeout=2)
+
+
+def _cola_get_con_timeout(q: "queue.Queue", timeout: float = 0.5):
+    try:
+        return q.get(timeout=timeout)
+    except queue.Empty:
+        return None
+
+
 # --------------------------------------------------------------------------------- ciclo de vida de una sala
 @dataclass
 class SalaDef:
@@ -240,21 +324,27 @@ class SalaProceso:
     proceso muere solo (no si lo para un DELETE/detener explícito), log por sala en
     $TEMP/ops-control-logs/<id>.log."""
 
-    def __init__(self, d: SalaDef, *, hub: str, transporte: str | None, python: str):
+    def __init__(self, d: SalaDef, *, hub: str, transporte: str | None, python: str,
+                 monitor_soportado: bool = False, obtener_loop=None):
         self.d = d
         self.hub = hub
         self.transporte = transporte
         self.python = python
+        self.monitor_soportado = monitor_soportado
+        self._obtener_loop = obtener_loop
         self.estado = "detenida"
         self.pid: int | None = None
         self.intentos = 0
         self.inicio: float | None = None
         self.ultimo_error: str | None = None
         self.audio_inicio: float | None = None
+        self.monitor: UDPMonitorReceptor | None = None
         self._proc: subprocess.Popen | None = None
         self._hilo: threading.Thread | None = None
         self._lock = threading.Lock()
         self._parar_evt = threading.Event()
+        self._ws_lock = threading.Lock()
+        self._ws_clients: list[web.WebSocketResponse] = []
 
     def _log_dir(self) -> Path:
         d = Path(os.environ.get("TEMP", "/tmp")) / "ops-control-logs"
@@ -283,6 +373,12 @@ class SalaProceso:
             self.estado = "arrancando"
             self.intentos = 0
             self.ultimo_error = None
+            if self.monitor is None and self.monitor_soportado:
+                try:
+                    self.monitor = UDPMonitorReceptor()
+                except OSError as e:
+                    log.warning("no se pudo abrir el socket de monitor UDP para %s: %s", self.d.id, e)
+                    self.monitor = None
         self._hilo = threading.Thread(target=self._bucle, daemon=True)
         self._hilo.start()
 
@@ -307,8 +403,10 @@ class SalaProceso:
             self.audio_inicio = None
             sala = Sala(id=self.d.id, titulo=self.d.titulo, lang=self.d.lang, fuente=self.d.fuente,
                         key=self.d.key)
+            monitor_udp = f"127.0.0.1:{self.monitor.puerto}" if self.monitor is not None else None
             cmd = comando_worker(sala, hub=self.hub, transporte=self.transporte, python=self.python,
-                                  traducir_a=self.d.traducir_a, duracion_s=self.d.duracion_s)
+                                  traducir_a=self.d.traducir_a, duracion_s=self.d.duracion_s,
+                                  monitor_udp=monitor_udp)
             log_path = self._log_path()
             try:
                 f = open(log_path, "a", encoding="utf-8")
@@ -376,6 +474,28 @@ class SalaProceso:
             self._proc = None
             self.pid = None
         self.estado = "detenida"
+        self._cerrar_monitor_y_ws()
+
+    def _cerrar_monitor_y_ws(self) -> None:
+        """Al detener/borrar la sala: cierra el socket UDP y los WS de /escuchar de esa sala."""
+        with self._lock:
+            monitor = self.monitor
+            self.monitor = None
+        if monitor is not None:
+            monitor.cerrar()
+        with self._ws_lock:
+            clientes = list(self._ws_clients)
+            self._ws_clients.clear()
+        if not clientes:
+            return
+        loop = self._obtener_loop() if self._obtener_loop else None
+        for ws in clientes:
+            if loop is None:
+                continue
+            try:
+                asyncio.run_coroutine_threadsafe(ws.close(code=4404, message=b"sala detenida"), loop)
+            except RuntimeError:
+                pass
 
     def a_dict(self) -> dict:
         return {
@@ -388,6 +508,7 @@ class SalaProceso:
             "log_tail": self.log_tail(),
             "audio_inicio": self.audio_inicio,
             "video_origen": video_origen_de(self.d.fuente),
+            "escuchar_en_vivo": self.estado == "corriendo" and self.monitor is not None,
         }
 
 
@@ -402,7 +523,17 @@ class Control:
         self.persist_path = persist_path
         self.salas: dict[str, SalaProceso] = {}
         self._lock = threading.Lock()
+        # se prueba UNA vez al iniciar el servicio: si worker.run todavia no tiene --monitor-udp
+        # (agente audio-pipeline en paralelo), las salas arrancan igual, sin "Escuchar en vivo".
+        self.monitor_soportado = _worker_soporta_monitor_udp(python)
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._cargar()
+
+    def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        self._loop = loop
+
+    def obtener_loop(self) -> asyncio.AbstractEventLoop | None:
+        return self._loop
 
     def _cargar(self) -> None:
         if not self.persist_path.exists():
@@ -424,7 +555,9 @@ class Control:
             except (KeyError, TypeError):
                 continue
             self.salas[sd.id] = SalaProceso(sd, hub=self.hub, transporte=self.transporte,
-                                             python=self.python)
+                                             python=self.python,
+                                             monitor_soportado=self.monitor_soportado,
+                                             obtener_loop=self.obtener_loop)
         if self.salas:
             log.info("%d sala(s) recordada(s) desde %s (detenidas: hay que iniciarlas)",
                       len(self.salas), self.persist_path)
@@ -442,7 +575,8 @@ class Control:
                 return None
             if len(self.salas) >= TOPE_SALAS:
                 return None
-            sp = SalaProceso(sd, hub=self.hub, transporte=self.transporte, python=self.python)
+            sp = SalaProceso(sd, hub=self.hub, transporte=self.transporte, python=self.python,
+                              monitor_soportado=self.monitor_soportado, obtener_loop=self.obtener_loop)
             self.salas[sd.id] = sp
             self._guardar()
         if arrancar:
@@ -501,10 +635,25 @@ def _origen_permitido(origen: str, request: web.Request) -> bool:
 
 PUBLICO = {"/api/control/salud"}
 AUDIO_PREFIX = "/api/control/audio/"
+ESCUCHAR_SUFFIX = "/escuchar"
 
 
 def _es_publico(path: str) -> bool:
+    # /escuchar no lleva el Bearer por header (WS del navegador no puede mandar headers propios):
+    # se autentica con el primer frame de texto {"type":"auth","token":...} dentro del handler.
+    if path.startswith("/api/control/salas/") and path.endswith(ESCUCHAR_SUFFIX):
+        return True
     return path in PUBLICO or path.startswith(AUDIO_PREFIX)
+
+
+@web.middleware
+async def loop_mw(request: web.Request, handler):
+    """Guarda el loop de asyncio en marcha: SalaProceso.detener() corre en un hilo comun y necesita
+    `run_coroutine_threadsafe` para cerrar los WS de /escuchar de esa sala."""
+    ctrl = request.app.get(CTRL_KEY)
+    if ctrl is not None:
+        ctrl.set_loop(asyncio.get_running_loop())
+    return await handler(request)
 
 
 @web.middleware
@@ -699,10 +848,76 @@ async def h_audio(request: web.Request) -> web.Response:
     return resp
 
 
+AUTH_TIMEOUT_S = 10.0
+
+
+async def h_escuchar(request: web.Request) -> web.StreamResponse:
+    """GET /api/control/salas/{id}/escuchar: WS que reenvia en vivo el audio PCM crudo que el
+    worker de esa sala manda por --monitor-udp. Auth por el primer frame de texto (no por header:
+    un WS de navegador no puede mandar Authorization); Origin con las mismas reglas de CORS."""
+    ctrl: Control = request.app[CTRL_KEY]
+    sid = request.match_info["id"]
+    origen = request.headers.get("Origin", "")
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    if origen and not _origen_permitido(origen, request):
+        await ws.close(code=4403, message=b"origen no permitido")
+        return ws
+
+    try:
+        primero = await asyncio.wait_for(ws.receive(), timeout=AUTH_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        await ws.close(code=4401, message=b"sin auth")
+        return ws
+    autenticado = False
+    if primero.type == web.WSMsgType.TEXT:
+        try:
+            datos = json.loads(primero.data)
+        except (json.JSONDecodeError, ValueError):
+            datos = None
+        if isinstance(datos, dict) and datos.get("type") == "auth":
+            token = datos.get("token")
+            esperado = _token_actual()
+            if isinstance(token, str) and esperado:
+                autenticado = hmac.compare_digest(token.encode(), esperado.encode())
+    if not autenticado:
+        await ws.close(code=4401, message=b"auth invalida")
+        return ws
+
+    sp = ctrl.obtener(sid)
+    if sp is None or sp.estado != "corriendo" or sp.monitor is None:
+        await ws.close(code=4404, message=b"la sala no esta corriendo")
+        return ws
+
+    cola = sp.monitor.agregar_oyente()
+    with sp._ws_lock:
+        sp._ws_clients.append(ws)
+    loop = asyncio.get_running_loop()
+    try:
+        while not ws.closed:
+            if sp.estado != "corriendo" or sp.monitor is None:
+                break
+            dato = await loop.run_in_executor(None, _cola_get_con_timeout, cola)
+            if dato is None:
+                continue
+            await ws.send_bytes(dato)
+    except (ConnectionResetError, RuntimeError):
+        pass
+    finally:
+        sp.monitor.quitar_oyente(cola) if sp.monitor is not None else None
+        with sp._ws_lock:
+            if ws in sp._ws_clients:
+                sp._ws_clients.remove(ws)
+        if not ws.closed:
+            await ws.close()
+    return ws
+
+
 # --------------------------------------------------------------------------------- app + CLI
 def crear_app(*, hub: str, transporte: str | None = None, python: str = sys.executable,
               persist_path: Path = PERSIST_PATH_DEFAULT) -> web.Application:
-    app = web.Application(middlewares=[cors_mw, auth_mw])
+    app = web.Application(middlewares=[loop_mw, cors_mw, auth_mw])
     app[CTRL_KEY] = Control(hub=hub, transporte=transporte, python=python, persist_path=persist_path)
     app.router.add_get("/api/control/fuentes", h_fuentes)
     app.router.add_get("/api/control/salas", h_listar_salas)
@@ -712,6 +927,7 @@ def crear_app(*, hub: str, transporte: str | None = None, python: str = sys.exec
     app.router.add_delete("/api/control/salas/{id}", h_eliminar)
     app.router.add_get("/api/control/salud", h_salud)
     app.router.add_get("/api/control/audio/{nombre}", h_audio)
+    app.router.add_get("/api/control/salas/{id}/escuchar", h_escuchar)
     return app
 
 

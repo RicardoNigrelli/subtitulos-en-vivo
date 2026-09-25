@@ -724,7 +724,7 @@ body[data-vista="informativa"] .pie { display: none; }
 }
 .sala-fila__fuente a { color: var(--color-link); }
 .sala-fila__escuchar { margin-left: var(--esp-2); }
-.audio-slot { display: none; } /* el <audio> vive acá pero no tiene controles propios (usa el botón + volumen) */
+.sala-fila__escuchar-control { margin: var(--esp-1) 0 0; }
 .sala-fila__volumen { width: 90px; vertical-align: middle; margin-left: var(--esp-2); accent-color: var(--color-acento); }
 .sala-fila__botones {
   display: flex;
@@ -758,6 +758,7 @@ body[data-vista="informativa"] .pie { display: none; }
   cursor: pointer;
   text-decoration: underline;
 }
+.tarjeta__volumen { width: 70px; vertical-align: middle; margin-left: var(--esp-2); accent-color: var(--color-acento); }
 
 .form-salas { display: flex; flex-direction: column; gap: 2px; }
 .form-salas input[type="text"], .form-salas input[type="number"], .form-salas select {

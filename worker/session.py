@@ -253,8 +253,11 @@ class SessionWorker:
                  turnos_manuales: bool = True,
                  rotulo: Optional[str] = None,
                  dedup: bool = True, vocab: Optional[list] = None,
-                 limpieza: Optional[bool] = None):
+                 limpieza: Optional[bool] = None,
+                 monitor: Optional[Callable[[bytes], None]] = None):
         self.sid = session_id
+        # --monitor-udp: recibe cada chunk de la fuente una vez, en orden (sin solape ni reenvio)
+        self.monitor = monitor
         self.lang = lang
         self.tr = transporte
         self.fuente = fuente
@@ -683,6 +686,11 @@ class SessionWorker:
                     self.log(f"[{self.sid}] tope de envio alcanzado "
                              f"({self.res.segundos_enviados} s): se corta")
                     break
+                if self.monitor is not None:
+                    try:
+                        self.monitor(c.data)   # --monitor-udp: el mismo chunk, al leerlo de la fuente
+                    except Exception:
+                        pass
                 for a in self.cortador.push(c):
                     await self._ejecutar(a)
             else:

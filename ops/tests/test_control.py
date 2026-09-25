@@ -327,6 +327,73 @@ async def test_audio_allowlist_traversal_404(control_srv, http, nombre):
         assert r.status == 404, nombre
 
 
+# --------------------------------------------------------------------------------- escuchar (monitor UDP)
+async def test_escuchar_401_auth_invalida(control_srv, http):
+    base, *_ = control_srv
+    ws_url = base.replace("http://", "ws://") + "/api/control/salas/sala-que-no-existe/escuchar"
+    async with http.ws_connect(ws_url) as ws:
+        await ws.send_str(json.dumps({"type": "auth", "token": "token-incorrecto"}))
+        msg = await ws.receive()
+        assert msg.type == aiohttp.WSMsgType.CLOSE
+        assert ws.close_code == 4401
+
+
+async def test_escuchar_404_sala_inexistente(control_srv, http):
+    base, *_ = control_srv
+    ws_url = base.replace("http://", "ws://") + "/api/control/salas/sala-que-no-existe/escuchar"
+    async with http.ws_connect(ws_url) as ws:
+        await ws.send_str(json.dumps({"type": "auth", "token": TOKEN}))
+        msg = await ws.receive()
+        assert msg.type == aiohttp.WSMsgType.CLOSE
+        assert ws.close_code == 4404
+
+
+async def test_escuchar_recibe_datagramas_en_orden(control_srv, http):
+    base, app, *_ = control_srv
+    ctrl: control.Control = app[control.CTRL_KEY]
+    if not ctrl.monitor_soportado:
+        pytest.skip("worker.run de este entorno todavia no soporta --monitor-udp")
+    sid = "sala-escuchar-1"
+    body = _sala_body(sid, fuente={"tipo": "url", "valor": "udp://127.0.0.1:9601"},
+                       traducir_a="none")
+    async with http.post(f"{base}/api/control/salas", headers=_auth(), json=body) as r:
+        assert r.status == 201
+
+    sp = None
+    for _ in range(60):
+        sp = ctrl.obtener(sid)
+        if sp is not None and sp.estado == "corriendo" and sp.monitor is not None:
+            break
+        await asyncio.sleep(0.5)
+    assert sp is not None and sp.monitor is not None, "la sala no llego a 'corriendo' con monitor en 30s"
+    puerto = sp.monitor.puerto
+
+    ws_url = base.replace("http://", "ws://") + f"/api/control/salas/{sid}/escuchar"
+    async with http.ws_connect(ws_url) as ws:
+        await ws.send_str(json.dumps({"type": "auth", "token": TOKEN}))
+        await asyncio.sleep(0.3)  # tiempo a que el server registre el oyente antes de mandar
+
+        import socket
+        emisor = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        paquetes = [f"paquete-{i}".encode().ljust(20, b"\0") for i in range(5)]
+        try:
+            for p in paquetes:
+                emisor.sendto(p, ("127.0.0.1", puerto))
+                await asyncio.sleep(0.05)
+        finally:
+            emisor.close()
+
+        recibidos = []
+        for _ in range(len(paquetes)):
+            msg = await asyncio.wait_for(ws.receive(), timeout=5)
+            assert msg.type == aiohttp.WSMsgType.BINARY
+            recibidos.append(msg.data)
+        assert recibidos == paquetes
+
+    async with http.post(f"{base}/api/control/salas/{sid}/detener", headers=_auth()) as r:
+        assert r.status == 200
+
+
 async def test_audio_inicio_y_video_origen_en_salas(control_srv, http):
     base, *_ = control_srv
     body = _sala_body("sala-video-origen")

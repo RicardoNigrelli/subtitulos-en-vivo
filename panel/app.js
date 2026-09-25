@@ -700,14 +700,17 @@
     var accionHtml = estado.accion ? '<p class="tarjeta__accion"><b>' + esc(t('accion_prefijo')) + '</b> ' + esc(estado.accion) + '</p>' : '';
     var espectadores = s.viewers || 0;
     var textoEspectadores = espectadores === 1 ? t('espectador_uno', { n: num(espectadores) }) : t('espectador_varios', { n: num(espectadores) });
-    // Addendum Ricardo ("escuchar el original"): botón chico sólo si el drawer de Salas conoce esta
-    // sesión y su fuente es un clip (salasEstado.porId, sección "control de salas" más abajo en este
-    // mismo archivo — hoisted, se resuelve en tiempo de ejecución, no de parseo).
+    // Addendum Ricardo ("escuchar el original", ahora en vivo): botón chico sólo si el drawer de
+    // Salas conoce esta sesión (salasEstado.porId, sección "control de salas" más abajo en este mismo
+    // archivo — hoisted, se resuelve en tiempo de ejecución, no de parseo) y el servicio de control
+    // avisa `escuchar_en_vivo`. Sólo con la sala CORRIENDO (Ricardo 25/09: "el sonido empezó" con la
+    // sala en error). Vale para cualquier fuente (clip, micrófono, stream), no sólo archivo.
     var infoControl = (typeof salasEstado !== 'undefined' && salasEstado.porId) ? salasEstado.porId[s.id] : null;
-    // Sólo con la sala CORRIENDO: si no, el navegador reproducía el clip aunque la sala no transmitiera
-    // (Ricardo 25/09: "el sonido empezó" con la sala en error).
-    var escucharHtml = (infoControl && infoControl.estado === 'corriendo' && infoControl.fuente && infoControl.fuente.tipo === 'archivo')
-      ? '<button type="button" class="tarjeta__escuchar" data-accion="escuchar-tarjeta" data-id="' + esc(s.id) + '">' + esc(t('salas_escuchar')) + '</button>'
+    var escuchandoEstaSala = (typeof escucharEstado !== 'undefined' && escucharEstado.activo && escucharEstado.activo.id === s.id);
+    var escucharHtml = (infoControl && infoControl.estado === 'corriendo' && infoControl.escuchar_en_vivo)
+      ? '<button type="button" class="tarjeta__escuchar" data-accion="escuchar-tarjeta" data-id="' + esc(s.id) + '">' +
+          esc(t(escuchandoEstaSala ? 'salas_dejar_escuchar' : 'salas_escuchar')) + '</button>' +
+        '<input type="range" class="tarjeta__volumen" min="0" max="100" value="70" data-accion="volumen-tarjeta" data-id="' + esc(s.id) + '" aria-label="volumen">'
       : '';
     return (
       '<article class="tarjeta tarjeta--' + estado.clase + '" data-estado="' + estado.clase + '" data-id="' + esc(s.id) + '">' +
@@ -778,7 +781,9 @@
     if (elTarjetasVacio) elTarjetasVacio.hidden = items.length > 0;
     if (elTarjetasVacio && !items.length) elTarjetasVacio.textContent = t(hubRespondio ? 'tarjetas_sin_salas' : 'tarjetas_vacio');
 
-    elTarjetas.innerHTML = items.map(function (it) { return tarjetaHtml(it.s, it.estado); }).join('');
+    // Sólo si cambió: redibujar cada 1 s reemplazaba los botones y se perdían clics (Escuchar/Iniciar).
+    var htmlTarjetas = items.map(function (it) { return tarjetaHtml(it.s, it.estado); }).join('');
+    if (htmlTarjetas !== elTarjetas.dataset.ultimoHtml) { elTarjetas.dataset.ultimoHtml = htmlTarjetas; elTarjetas.innerHTML = htmlTarjetas; }
   }
 
   function fmtContador(n, ultimoMs, detalle) {
@@ -1250,8 +1255,7 @@
     requiereToken: false,
     salas: [],
     porId: {},
-    fuentes: null,
-    audios: {}           // id -> <audio> persistido (addendum "escuchar": no recrear en cada poll)
+    fuentes: null
   };
 
   function basename(p) { return String(p || '').split(/[\\/]/).pop(); }
@@ -1318,37 +1322,82 @@
     return videoOrigen.url + sep + 't=' + Math.round(videoOrigen.inicio_s || 0) + 's';
   }
 
-  // ---- reproducción sincronizada del clip (addendum "escuchar el original") ----
-  function obtenerAudioEl(sala) {
-    if (!salasEstado.audios[sala.id]) {
-      var el = document.createElement('audio');
-      el.preload = 'none';
-      salasEstado.audios[sala.id] = el;
-    }
-    return salasEstado.audios[sala.id];
+  // ---- reproducción del audio EN VIVO de la sala (WS binario PCM, contrato del brief "Escuchar") ----
+  // ws://<CONTROL_BASE>/api/control/salas/<id>/escuchar ; auth por primer frame de texto; frames
+  // binarios: PCM s16le, 16 kHz, mono, 3200 bytes = 100 ms. Cierres: 4401 token, 4404 sala no corre,
+  // 4403 origen. Un solo oyente activo en el panel a la vez (escucharEstado.activo).
+  var ESCUCHAR_WS_SCHEME = (location.protocol === 'https:') ? 'wss' : 'ws';
+  var escucharEstado = { activo: null }; // { id, ws, ctx, gain, nextTime }
+
+  function escucharWsUrl(id) {
+    return ESCUCHAR_WS_SCHEME + '://' + (controlParam || (location.hostname + ':' + PUERTO_DEV_CONTROL_DEFAULT)) +
+      '/api/control/salas/' + encodeURIComponent(id) + '/escuchar';
   }
-  function urlAudioClip(fuente) {
-    return CONTROL_BASE + '/api/control/audio/' + encodeURIComponent(basename(fuente.valor));
+  function idEscuchando() { return escucharEstado.activo ? escucharEstado.activo.id : null; }
+  function motivoCierreEscuchar(codigo) {
+    if (codigo === 4401) return t('salas_escuchar_error_token');
+    if (codigo === 4404) return t('salas_escuchar_error_no_corre');
+    if (codigo === 4403) return t('salas_escuchar_error_origen');
+    return null;
   }
-  function sincronizarYReproducir(sala, audioEl, volumen) {
-    if (!audioEl.src) audioEl.src = urlAudioClip(sala.fuente);
-    var anchor = sala.audio_inicio;
-    function posicionar() {
-      var pos = anchor ? (Date.now() / 1000 - anchor) : 0;
-      if (!isFinite(pos) || pos < 0) pos = 0;
-      if (audioEl.duration && isFinite(audioEl.duration) && pos >= audioEl.duration) pos = 0;
-      try { audioEl.currentTime = pos; } catch (e) { /* metadata todavía no cargó: se reintenta abajo */ }
-    }
-    if (audioEl.readyState >= 1) posicionar();
-    else audioEl.addEventListener('loadedmetadata', posicionar, { once: true });
-    audioEl.volume = (volumen == null ? 0.7 : volumen);
-    var p = audioEl.play();
-    if (p && p.catch) p.catch(function (e) { console.warn('panel: no se pudo reproducir el clip', e); });
+  function pararEscuchar() {
+    var st = escucharEstado.activo;
+    if (!st) return;
+    escucharEstado.activo = null;
+    try { st.ws.close(1000); } catch (e) { /* ya cerrado */ }
+    if (st.ctx && st.ctx.state !== 'closed') { try { st.ctx.close(); } catch (e) { /* ya cerrado */ } }
   }
-  function alternarEscuchar(sala, volumenPorDefecto) {
-    var audioEl = obtenerAudioEl(sala);
-    if (!audioEl.paused) { audioEl.pause(); return; }
-    sincronizarYReproducir(sala, audioEl, audioEl.volume || volumenPorDefecto || 0.7);
+  // Int16 -> Float32 -> AudioBuffer programado en nextTime = max(nextTime, currentTime + 0.15 s);
+  // si el atraso acumulado supera 1 s, resincroniza saltando a currentTime + 0.15 (no se aleja del vivo).
+  function programarFrameEscuchar(st, arrayBuffer) {
+    var ctx = st.ctx;
+    var int16 = new Int16Array(arrayBuffer);
+    var float32 = new Float32Array(int16.length);
+    for (var i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+    var buffer = ctx.createBuffer(1, float32.length, 16000);
+    buffer.getChannelData(0).set(float32);
+    var src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(st.gain);
+    var ahora = ctx.currentTime;
+    if ((ahora - st.nextTime) > 1) st.nextTime = ahora + 0.15; // resincronizar: muy atrasado del vivo
+    st.nextTime = Math.max(st.nextTime, ahora + 0.15);
+    src.start(st.nextTime);
+    st.nextTime += buffer.duration;
+  }
+  function empezarEscuchar(sala, volumenPorDefecto) {
+    if (idEscuchando() === sala.id) { pararEscuchar(); render(); renderSalas(); return; }
+    pararEscuchar(); // un solo oyente activo a la vez en el panel
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) { mostrarErrorGeneral('AudioContext no disponible en este navegador.'); return; }
+    var ctx = new Ctx(); // creado en el clic (política de autoplay)
+    var gain = ctx.createGain();
+    gain.gain.value = (volumenPorDefecto == null ? 0.7 : volumenPorDefecto);
+    gain.connect(ctx.destination);
+    var ws = new WebSocket(escucharWsUrl(sala.id));
+    ws.binaryType = 'arraybuffer';
+    var st = { id: sala.id, ws: ws, ctx: ctx, gain: gain, nextTime: 0 };
+    escucharEstado.activo = st;
+    ws.addEventListener('open', function () {
+      ws.send(JSON.stringify({ type: 'auth', token: leerToken() || '' }));
+      st.nextTime = ctx.currentTime + 0.15;
+    });
+    ws.addEventListener('message', function (ev) {
+      if (escucharEstado.activo !== st) return; // se cortó y se abrió otra: ignorar frames viejos
+      if (ev.data instanceof ArrayBuffer) programarFrameEscuchar(st, ev.data);
+    });
+    ws.addEventListener('close', function (ev) {
+      if (escucharEstado.activo === st) escucharEstado.activo = null;
+      if (ctx.state !== 'closed') { try { ctx.close(); } catch (e) { /* ya cerrado */ } }
+      var motivo = motivoCierreEscuchar(ev.code);
+      if (motivo) mostrarErrorGeneral(motivo);
+      render(); renderSalas();
+    });
+    ws.addEventListener('error', function () { /* el close() posterior actualiza el botón */ });
+    render(); renderSalas();
+  }
+  function cambiarVolumenEscuchar(id, volumen) {
+    if (escucharEstado.activo && escucharEstado.activo.id === id) escucharEstado.activo.gain.gain.value = volumen;
   }
 
   // ---- polling: /api/control/salas y /api/control/fuentes ----
@@ -1420,8 +1469,7 @@
     var link = urlVistaSala(sala.id, langParaVista(sala));
     var fuenteHtml = '';
     if (sala.fuente && sala.fuente.tipo === 'mic') {
-      fuenteHtml = '<p class="sala-fila__fuente">' + esc(fuenteLegible(sala.fuente)) +
-        ' — <span class="form-salas__ayuda">' + esc(t('salas_fuente_mic_en_vivo')) + '</span></p>';
+      fuenteHtml = '<p class="sala-fila__fuente">' + esc(fuenteLegible(sala.fuente)) + '</p>';
     } else if (sala.fuente && sala.fuente.tipo === 'url') {
       fuenteHtml = '<p class="sala-fila__fuente">' + esc(fuenteLegible(sala.fuente)) + ' — <a href="' +
         esc(sala.fuente.valor) + '" target="_blank" rel="noopener">' + esc(sala.fuente.valor) + '</a></p>';
@@ -1430,16 +1478,20 @@
         ? ' · <a href="' + esc(urlYoutubeConTiempo(sala.video_origen)) + '" target="_blank" rel="noopener">' +
           esc(t('salas_ver_original', { m: fmtMinSeg(sala.video_origen.inicio_s) })) + '</a>'
         : '';
-      fuenteHtml =
-        '<p class="sala-fila__fuente">' + esc(fuenteLegible(sala.fuente)) +
-          ' <button type="button" class="sala-fila__escuchar" data-accion="escuchar" data-id="' + esc(sala.id) + '"' +
-            (sala.estado === 'corriendo' ? '' : ' disabled title="' + esc(t('salas_escuchar_solo_corriendo')) + '"') + '>' +
-            esc(t('salas_escuchar')) + '</button>' +
-          '<span id="audio-slot-' + cssEscape(sala.id) + '" class="audio-slot"></span>' +
-          '<input type="range" class="sala-fila__volumen" min="0" max="100" value="70" data-accion="volumen" data-id="' + esc(sala.id) + '" aria-label="volumen">' +
-          origenHtml +
-        '</p>';
+      fuenteHtml = '<p class="sala-fila__fuente">' + esc(fuenteLegible(sala.fuente)) + origenHtml + '</p>';
     }
+    // Audio EN VIVO (WS, no el clip): visible con la sala corriendo y `escuchar_en_vivo`, para
+    // cualquier fuente (clip, micrófono, stream) — brief "Escuchar" del bloque de audio en vivo.
+    var puedeEscucharSala = sala.estado === 'corriendo' && !!sala.escuchar_en_vivo;
+    var escuchandoEstaFila = (idEscuchando() === sala.id);
+    var escucharFilaHtml = sala.fuente ? (
+      '<p class="sala-fila__escuchar-control">' +
+        '<button type="button" class="sala-fila__escuchar" data-accion="escuchar" data-id="' + esc(sala.id) + '"' +
+          (puedeEscucharSala ? '' : ' disabled title="' + esc(t('salas_escuchar_solo_corriendo')) + '"') + '>' +
+          esc(t(escuchandoEstaFila ? 'salas_dejar_escuchar' : 'salas_escuchar')) + '</button>' +
+        (puedeEscucharSala ? '<input type="range" class="sala-fila__volumen" min="0" max="100" value="70" data-accion="volumen" data-id="' + esc(sala.id) + '" aria-label="volumen">' : '') +
+      '</p>'
+    ) : '';
     return (
       '<article class="sala-fila sala-fila--' + claseEstado + (sala.id === salaRecienCreada ? ' sala-fila--nueva' : '') + '" data-sala-id="' + esc(sala.id) + '">' +
         '<div class="sala-fila__cabecera">' +
@@ -1451,6 +1503,7 @@
         (sala.estado === 'error' ? '<p class="sala-fila__motivo" role="status">' + esc(motivoErrorSala(sala)) +
           (sala.ultimo_error ? ' <span class="sala-fila__codigo">(' + esc(sala.ultimo_error) + ')</span>' : '') + '</p>' : '') +
         fuenteHtml +
+        escucharFilaHtml +
         '<p class="sala-fila__meta">' + esc(t('salas_intentos', { n: num(sala.intentos || 0) })) +
           (sala.pid ? ' · ' + esc(t('salas_pid', { pid: sala.pid })) : '') + '</p>' +
         '<div class="sala-fila__botones">' +
@@ -1496,10 +1549,13 @@
     }
     if (elAvisoServicio) elAvisoServicio.hidden = true;
     var salas = salasEstado.salas;
-    salas.forEach(function (sl) {
-      var au = salasEstado.audios && salasEstado.audios[sl.id];
-      if (au && !au.paused && sl.estado !== 'corriendo') au.pause();
-    });
+    // Si la sala que se estaba escuchando ya no corre o el servicio dejó de avisar
+    // `escuchar_en_vivo`, cortar del lado del panel (el WS del servicio igual se cierra solo).
+    var idEsc = idEscuchando();
+    if (idEsc) {
+      var salaEsc = salasEstado.porId[idEsc];
+      if (!salaEsc || salaEsc.estado !== 'corriendo' || !salaEsc.escuchar_en_vivo) pararEscuchar();
+    }
     if (!salasEstado.fuentes || !salasEstado.fuentes.idiomas) actualizarFuentes();
     if (!formPlegadoInicial) { formPlegadoInicial = true; if (salas.length) plegarNuevaSala(false); }
     if (elBtnNuevaSala) elBtnNuevaSala.hidden = false;
@@ -1510,14 +1566,6 @@
     if (htmlSalas === elListaSalas.dataset.ultimoHtml) return;
     elListaSalas.dataset.ultimoHtml = htmlSalas;
     elListaSalas.innerHTML = htmlSalas;
-    // Reinsertar los <audio> ya creados (obtenerAudioEl): recrearlos en cada poll de 3 s cortaría la
-    // reproducción en curso.
-    salas.forEach(function (sala) {
-      if (sala.fuente && sala.fuente.tipo === 'archivo') {
-        var slot = document.getElementById('audio-slot-' + cssEscape(sala.id));
-        if (slot && !slot.contains(salasEstado.audios[sala.id])) slot.appendChild(obtenerAudioEl(sala));
-      }
-    });
   }
 
   (function () {
@@ -1551,27 +1599,32 @@
         var sala = salasEstado.porId[id];
         if (sala) {
           var rango = elListaSalas.querySelector('input[data-accion="volumen"][data-id="' + id + '"]');
-          alternarEscuchar(sala, rango ? (parseInt(rango.value, 10) || 70) / 100 : 0.7);
+          empezarEscuchar(sala, rango ? (parseInt(rango.value, 10) || 70) / 100 : 0.7);
         }
       }
     });
     elListaSalas.addEventListener('input', function (e) {
       var el = e.target;
       if (el.getAttribute && el.getAttribute('data-accion') === 'volumen') {
-        var sala = salasEstado.porId[el.getAttribute('data-id')];
-        if (sala) obtenerAudioEl(sala).volume = (parseInt(el.value, 10) || 0) / 100;
+        cambiarVolumenEscuchar(el.getAttribute('data-id'), (parseInt(el.value, 10) || 0) / 100);
       }
     });
   }
 
-  // Botón "Escuchar" en la tarjeta Informativa (mismo <audio> compartido, ver tarjetaHtml() arriba).
+  // Botón "Escuchar" en la tarjeta Informativa (audio en vivo por WS, ver bloque más arriba).
   elTarjetas && elTarjetas.addEventListener('click', function (e) {
     var ctl = e.target.closest ? e.target.closest('[data-accion^="control-"]') : null;
     if (ctl) { accionSala(ctl.getAttribute('data-id'), ctl.getAttribute('data-accion').replace('control-', '')); return; }
     var btn = e.target.closest ? e.target.closest('[data-accion="escuchar-tarjeta"]') : null;
     if (!btn) return;
     var sala = salasEstado.porId[btn.getAttribute('data-id')];
-    if (sala) alternarEscuchar(sala, 0.7);
+    if (sala) empezarEscuchar(sala, 0.7);
+  });
+  elTarjetas && elTarjetas.addEventListener('input', function (e) {
+    var el = e.target;
+    if (el.getAttribute && el.getAttribute('data-accion') === 'volumen-tarjeta') {
+      cambiarVolumenEscuchar(el.getAttribute('data-id'), (parseInt(el.value, 10) || 0) / 100);
+    }
   });
 
   if (elBtnCopiarComando) elBtnCopiarComando.addEventListener('click', function () {

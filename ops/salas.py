@@ -105,7 +105,7 @@ def cargar_salas(ruta: str) -> list[Sala]:
 
 def comando_worker(
     sala: Sala, *, hub: str, transporte: str | None, python: str, traducir_a: str | None = None,
-    duracion_s: float | None = None,
+    duracion_s: float | None = None, monitor_udp: str | None = None,
 ) -> list[str]:
     cmd = [python, "-m", "worker.run", "--sesion", sala.id, "--lang", sala.lang,
            "--titulo", sala.titulo, "--hub", hub]
@@ -127,6 +127,8 @@ def comando_worker(
         cmd += ["--traducir-a", traducir_a]
     if duracion_s is not None:
         cmd += ["--duracion", str(duracion_s)]
+    if monitor_udp:
+        cmd += ["--monitor-udp", monitor_udp]
     return cmd
 
 

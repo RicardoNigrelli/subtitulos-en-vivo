@@ -159,6 +159,10 @@
       salas_pid: 'pid {pid}',
       salas_id_repetido_sugerencia: 'Ya existe una sala con ese id; se sugirió uno nuevo.',
       salas_escuchar: 'Escuchar',
+      salas_dejar_escuchar: 'Dejar de escuchar',
+      salas_escuchar_error_token: 'No se pudo escuchar: token inválido.',
+      salas_escuchar_error_no_corre: 'No se pudo escuchar: la sala no está corriendo.',
+      salas_escuchar_error_origen: 'No se pudo escuchar: origen no permitido.',
       salas_fuente_mic_en_vivo: 'Escuchás la sala en vivo.',
       salas_ver_original: 'Ver original en YouTube (desde {m})',
 
@@ -396,6 +400,10 @@
       salas_pid: 'pid {pid}',
       salas_id_repetido_sugerencia: 'That id already exists; a new one was suggested.',
       salas_escuchar: 'Listen',
+      salas_dejar_escuchar: 'Stop listening',
+      salas_escuchar_error_token: 'Could not listen: invalid token.',
+      salas_escuchar_error_no_corre: 'Could not listen: the room is not running.',
+      salas_escuchar_error_origen: 'Could not listen: origin not allowed.',
       salas_fuente_mic_en_vivo: 'You\'re listening to the room live.',
       salas_ver_original: 'View original on YouTube (from {m})',
 
