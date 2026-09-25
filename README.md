@@ -13,7 +13,8 @@ Google Gemini (Live API for speech-to-text, Flash-Lite for text translation).
 Spanish sections for the full detail):
 
 - Two **simultaneous real ASR** sessions (English + Spanish), ~11 minutes of audio each: transcript
-  coverage 1.0 (no gaps), perceived latency p50 ≈ 0.44 s. Reproducible at smaller scale with
+  coverage 1.0 (no gaps); captions appear p50 ≈ 0.44 s after each ~3 s speech block ends (p50 ≈ 3.0 s
+  counted from the block's first word). Reproducible at smaller scale with
   `qa/smoke.py` and the audio clips shipped in the repo.
 - Live EN→ES / ES→EN translation varies a lot by run: 71–78 % of text blocks translated with 9–12 s
   of lag in two longer/earlier runs, up to 100 % with 2.6–2.7 s of lag in the latest, shorter-batch
@@ -29,8 +30,12 @@ Quickest start, no API key, no cost (replay mode):
 MODO=replay docker compose -f ops/docker-compose.yml up -d --build
 # http://localhost:8080/          session index
 # http://localhost:8080/panel/    monitoring panel
+# panel metrics token: docker compose -f ops/docker-compose.yml exec hub cat //run/vibeathon/hub-token
 docker compose -f ops/docker-compose.yml down
 ```
+
+PowerShell: `$env:MODO="replay"; docker compose -f ops/docker-compose.yml up -d --build` (without a `.env` file,
+plain `docker compose ... up` also falls back to replay).
 
 With a real `GEMINI_API_KEY` in `.env` (see "Credenciales y modelos" below), the same `docker
 compose ... up` runs real ASR instead. Everything else (how to run manually, credentials, test
@@ -181,6 +186,8 @@ python -m venv .venv                                       # una vez (Python 3.1
 # hub + vista de audiencia + panel, los tres en el puerto 8080
 HUB_HOST=localhost HUB_PORT=8080 .venv/Scripts/python -m hub --web web --panel panel
 ```
+
+PowerShell: `$env:HUB_HOST="localhost"; $env:HUB_PORT="8080"; .venv\Scripts\python -m hub --web web --panel panel`
 
 En otra terminal, una sesión con ASR real desde un archivo:
 
