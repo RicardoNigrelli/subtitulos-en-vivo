@@ -120,6 +120,6 @@ Los precios pueden cambiar: volver a consultar la página antes de presupuestar 
 
 **Orden de magnitud para un evento (estimación), cuenta reproducible en una línea:**
 `python -c "m=5*8*60; print(round(m*0.00525,1), round(m*0.004,1), round(m*0.0023,1), round(m*(0.00525+0.004+0.0023),1))"`
-→ `12.6 9.6 5.5 28.2`. Es decir: 5 salas × 8 horas = 2400 minutos de audio ⇒ ≈ 12,6 USD de
+→ `12.6 9.6 5.5 27.7`. Es decir: 5 salas × 8 horas = 2400 minutos de audio ⇒ ≈ 12,6 USD de
 transcripción (entrada) + ≈ 9,6 USD de salida de texto + ≈ 5,5 USD de traducción ⇒ **≈ 28 USD por día de
 conferencia** con dos idiomas por sala, sin contar la infraestructura del hub (un contenedor).

@@ -1,0 +1,54 @@
+{
+ "evento": "Nerdearla 2026",
+ "formato": "agenda v1: ver el docstring de worker/glosario.py",
+ "fuente_datos": "titulo, orador y resumen: descripcion publica de cada video en youtube.com/@nerdearla, leida con yt_dlp (extract_info) el 24/09/2026 20:55 AR, sin editar salvo quitar las lineas 'Track:' y 'Formato:'. empresa y tecnologias: tomadas de ese mismo resumen. terminos: ver 'nota_terminos' de cada sesion.",
+ "terminos_evento": [
+  "Nerdearla"
+ ],
+ "sesiones": [
+  {
+   "id": "booch-en",
+   "titulo": "The Third Golden Age",
+   "orador": "Grady Booch",
+   "empresa": "IBM",
+   "idioma": "en",
+   "url": "https://www.youtube.com/watch?v=cPaqkFCqWeg",
+   "track": "DEVELOPMENT",
+   "resumen": "Cada pocas décadas, alguien declara que la ingeniería de software está muerta o a punto de ser automatizada. Ya escuchamos esta historia antes - con la programación estructurada, con los lenguajes de alto nivel, con el low-code. Pero cada vez que ocurrió, en lugar de desaparecer, la profesión creció.\n\nGrady Booch - co-creador de UML y una de las figuras más influyentes en la historia de la ingeniería de software - pone en contexto histórico las afirmaciones actuales sobre IA y automatización. Desde los años 40, identifica tres \"edades doradas\" de la computación, cada una como respuesta a las limitaciones de su época.\n\nEn esta charla, Booch explica por qué el pensamiento sistémico, el juicio humano y la responsabilidad siguen siendo centrales en nuestro trabajo, incluso mientras las herramientas evolucionan. Y por qué este momento no es el fin de la ingeniería de software, sino el comienzo de su era más interesante.\n\nSobre Grady Booch: Grady Booch is one of the most influential figures in the history of software engineering. He co-created UML (Unified Modeling Language), the standard that changed how the world designs software. He is an IBM Fellow, ACM Fellow, IEEE Fellow, IEEE Computer Pioneer, founding member of the Agile Alliance, and recipient of the Lovelace Medal.\n\nAs Chief Scientist for Software Engineering at IBM, his current work focuses on embodied cognition - AI systems that interact with the physical world. He served as a trustee of the Computer History Museum and delivered the Turing Lecture for the British Computer Society.\n\nAt a time when AI is redefining what it means to write code, Booch brings four decades of perspective on why software engineering is not ending but entering what he calls \"The Third Golden Age.\" His voice is one of the most respected in the global debate on AI, ethics, and the future of the profession.\n\n🛤️ Track: DEVELOPMENT\n📋 Formato: Charla",
+   "tecnologias": [
+    "UML",
+    "Unified Modeling Language"
+   ],
+   "terminos": [
+    "Jim Rumbaugh",
+    "Ivar Jacobson",
+    "Simula",
+    "Plato"
+   ],
+   "nota_terminos": "SESGO DECLARADO: nombres que el orador dice en 06:40-08:10, cargados a mano desde los casetes fixtures/casetes/b3-ab-*.jsonl (en un evento real los entrega el orador al organizador). Son los que mide el A/B de B8."
+  },
+  {
+   "id": "paez-es",
+   "titulo": "Brownfield Engineering: cómo cambiar código que da miedo cambiar",
+   "orador": "Nicolas Paez",
+   "empresa": "Universidad de Buenos Aires",
+   "idioma": "es",
+   "url": "https://www.youtube.com/watch?v=V2YxvP-XXEc",
+   "track": "DEVELOPMENT",
+   "resumen": "Vivimos en una época en que abundan las herramientas de programación y los recursos para aprender a utilizarlas, pero la gran mayoría de esos recursos están enfocados en escenarios simples y proyectos “greenfield” donde el desarrollo comienza desde cero. Sin embargo, la realidad de la industria no siempre es así. Muchas veces nos encontramos con proyectos “ya andando”, proyectos “brownfield\": bases de código con años de historia, decisiones olvidadas, poco documentadas, muchas veces sin tests y autores que hace tiempo abandonaron el proyecto.\nEn un escenario así: ¿Cómo agregar funcionalidades sin romper producción? ¿Cómo mejorar el diseño sin embarcarse en una reescritura imposible? ¿Cómo ganar confianza en un código que apenas entendemos?\nEn esta sesión exploraremos un conjunto de técnicas para evolucionar sistemas brownfield de forma segura y sostenible. Veremos estrategias como el Strangling, el refactoring a patrones, la segregación de cambios y el modelo de Seams de Michael Feathers y entre otros.\nTambién veremos algunas recomendaciones para instruir asistentes de IA para aplicar estas técnicas de manera más efectiva.\nSi tu trabajo diario consiste más en modificar código existente que en crear proyectos desde cero, esta charla es para ti.\n\nSobre Nicolas Paez: NicoPaez is a seasoned Software Engineer and Professor. He shares his time between industry and academia. He teaches Software Engineering at Universidad de Buenos Aires. He has published several articles and a book about Agile Software Development. He has almost 20 years of experience working in the software industry. He currently works as an independent consultant helping teams to improve their software delivery practices.\n\n🛤️ Track: DEVELOPMENT\n📋 Formato: Charla",
+   "tecnologias": [
+    "brownfield",
+    "greenfield",
+    "legacy",
+    "refactoring",
+    "Strangling",
+    "Seams"
+   ],
+   "terminos": [
+    "Michael Feathers",
+    "NicoPaez"
+   ],
+   "nota_terminos": "empresa: la descripcion dice que ensena en la Universidad de Buenos Aires y trabaja como consultor independiente. terminos: del mismo resumen."
+  }
+ ]
+}

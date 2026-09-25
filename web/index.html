@@ -14,6 +14,9 @@
 <main id="lista-sesiones" class="lista-sesiones">
   <p class="estado-carga">Buscando sesiones…</p>
 </main>
+<!-- B9 (R6, "del QR al texto en 2 toques"): qrcode-generator v1.4.4 (MIT, Kazuhiko Arase),
+     vendorizado sin CDN en /vendor/, ver web/README.md. -->
+<script src="/vendor/qrcode-generator/qrcode.min.js"></script>
 <script>
 (function () {
   'use strict';
@@ -56,6 +59,74 @@
       a.textContent = xx === s.lang ? (xx + ' (original)') : xx;
       return a;
     });
+  }
+
+  // B9: URL ABSOLUTA de la vista en el idioma ORIGINAL de la sesión (no la del idioma que el
+  // visitante esté mirando en el índice): es lo que codifica el QR, para que cualquier telefono
+  // que lo escanee llegue directo a `/s/<id>?lang=<original>` sin depender de que este documento
+  // siga abierto. `location.origin` es correcto en los dos modos de servido (mismo origen del hub,
+  // o web/servir.py en 8101: en ambos casos ESTE documento y `/s/<id>` viven en el mismo origen;
+  // sólo la conexión AL HUB de datos cambia, resuelto aparte por app.js, ver su comentario
+  // "calcularOrigen"). Preserva `?hub=` si el índice lo tenía (dev contra un hub que no es el de
+  // este origen).
+  function urlAbsolutaOriginal(s) {
+    var qs = new URLSearchParams();
+    qs.set('lang', s.lang);
+    if (hubParam) qs.set('hub', hubParam);
+    return location.origin + '/s/' + encodeURIComponent(s.session_id) + '?' + qs.toString();
+  }
+
+  // B9: SVG del QR (sin CDN, ver /vendor/qrcode-generator/). `null` si la librería no cargó
+  // (defensivo: si algún día falla la vendorización, el índice sigue funcionando sólo con el
+  // botón "copiar enlace", que es la degradación explícita que pide el brief).
+  function generarQrSvg(url) {
+    if (typeof window.qrcode !== 'function') return null;
+    try {
+      var qr = window.qrcode(0, 'M'); // typeNumber 0 = auto (ajusta al largo de la URL); ECC 'M'
+      qr.addData(url);
+      qr.make();
+      return qr.createSvgTag({ cellSize: 4, margin: 8, scalable: true, alt: 'Código QR', title: url });
+    } catch (e) {
+      console.error('[qr] no se pudo generar el QR para', url, e);
+      return null;
+    }
+  }
+
+  // B9: "copiar enlace". Clipboard API exige contexto seguro (https o localhost); en un evento
+  // real el índice se sirve por http plano en la LAN del lugar, así que hace falta el fallback de
+  // toda la vida (textarea + execCommand) para que el botón funcione también ahí.
+  function copiarFallback(url) {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = url;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, url.length);
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function copiarEnlace(url, btn, estadoEl) {
+    function marcarCopiado(ok) {
+      if (!ok) { window.prompt('Copiá el enlace:', url); return; }
+      var original = btn.textContent;
+      estadoEl.hidden = false;
+      btn.textContent = 'Copiado';
+      setTimeout(function () { btn.textContent = original; estadoEl.hidden = true; }, 1500);
+    }
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(function () { marcarCopiado(true); },
+        function () { marcarCopiado(copiarFallback(url)); });
+    } else {
+      marcarCopiado(copiarFallback(url));
+    }
   }
 
   // Sesiones de prueba (test:true, del transporte de casete o ejemplos del contrato) se ocultan
@@ -104,6 +175,42 @@
       nav.className = 'links-idioma';
       linksIdioma(s).forEach(function (a) { nav.appendChild(a); });
       tarjeta.appendChild(nav);
+
+      // B9 (R6, "del QR al texto en 2 toques"): QR a la vista en el idioma ORIGINAL + botón
+      // "copiar enlace". Toque 1 = escanear con la cámara; toque 2 = abrir el link que ofrece el
+      // propio sistema operativo al reconocer el QR.
+      var urlQr = urlAbsolutaOriginal(s);
+      var qrWrap = document.createElement('div');
+      qrWrap.className = 'qr-sesion';
+
+      var svg = generarQrSvg(urlQr);
+      if (svg) {
+        var qrLink = document.createElement('a');
+        qrLink.className = 'qr-link';
+        qrLink.href = urlQr;
+        qrLink.setAttribute('aria-label', 'Abrir la sesión ' + s.session_id + ' en ' + s.lang + ' (idioma original)');
+        qrLink.innerHTML = svg;
+        qrWrap.appendChild(qrLink);
+      }
+
+      var qrAcciones = document.createElement('div');
+      qrAcciones.className = 'qr-acciones';
+      var btnCopiar = document.createElement('button');
+      btnCopiar.type = 'button';
+      btnCopiar.className = 'boton-copiar';
+      btnCopiar.textContent = 'Copiar enlace';
+      var estadoCopiado = document.createElement('span');
+      estadoCopiado.className = 'copiado-ok';
+      estadoCopiado.textContent = 'Copiado';
+      estadoCopiado.hidden = true;
+      btnCopiar.addEventListener('click', function () {
+        copiarEnlace(urlQr, btnCopiar, estadoCopiado);
+      });
+      qrAcciones.appendChild(btnCopiar);
+      qrAcciones.appendChild(estadoCopiado);
+      qrWrap.appendChild(qrAcciones);
+
+      tarjeta.appendChild(qrWrap);
 
       cont.appendChild(tarjeta);
     });

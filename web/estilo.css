@@ -124,11 +124,17 @@ html, body {
 
 /* Mobile 390px: con 20px de padding de cada lado, una linea de 32 caracteres a 28px
    (el tope de la fuente clamp) no entraba en un renglon (se cortaba "...of / 20.").
-   Con 8px sobra margen para que 32 caracteres tipicos entren en una linea. */
+   B9 (remedido con contracts/ejemplos/sesion-en.jsonl, "Contract example, line NN of 20.",
+   32 caracteres exactos, inyectado en el hub real y visto con resize_window 390x844,
+   frontend-b9.md): con 8px TODAVIA se cortaba; probado 4px y 2px, TAMBIEN se cortaban;
+   0px es el primer valor que entra, con muy poco margen (unos pocos px libres antes del
+   borde). Sin margen lateral en la vista de subtitulos a este ancho: una oracion con
+   mayusculas mas anchas que este ejemplo podria volver a cortarse; reportado como hallazgo
+   de margen justo, no como garantia. */
 @media (max-width: 480px) {
   .lineas {
-    padding-left: 8px;
-    padding-right: 8px;
+    padding-left: 0px;
+    padding-right: 0px;
   }
 
   .cabecera-sesion, .cabecera-indice, .lista-sesiones {
@@ -330,4 +336,62 @@ html, body {
 .link-idioma:hover, .link-idioma:focus {
   background: #2d2d2d;
   border-color: #4a4a4a;
+}
+
+/* B9: QR por sesión (R6, "del QR al texto en 2 toques") + botón "copiar enlace" */
+.qr-sesion {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #2a2a2a;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.qr-link {
+  display: block;
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
+  background: #ffffff;
+  border-radius: 6px;
+  padding: 6px;
+  line-height: 0;
+}
+
+.qr-link svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.qr-acciones {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.boton-copiar {
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: #232323;
+  color: #E8E8E8;
+  border: 1px solid #333333;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.boton-copiar:hover, .boton-copiar:focus {
+  background: #2d2d2d;
+  border-color: #4a4a4a;
+}
+
+.copiado-ok {
+  color: #7CE8A0;
+  font-size: 13px;
+}
+
+.copiado-ok[hidden] {
+  display: none;
 }

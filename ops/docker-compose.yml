@@ -11,6 +11,11 @@
 #
 # El servicio `web` no existe: el hub sirve la vista y el panel (`--web web --panel panel`,
 # hub/README.md). Ver ops/entrypoint-worker.sh para la logica MODO/GEMINI_API_KEY del worker.
+#
+# Variables nuevas del worker (B8: TRADUCTOR_LOTE_S y demas TRADUCTOR_*, CUOTA_*, GEMINI_SSL_RELAX,
+# ver .env.example) NO necesitan entrada nueva aca: `env_file` ya carga TODO ../.env dentro de cada
+# contenedor; alcanza con definirlas en el .env de la raiz. Sin .env, cada una cae al default del
+# codigo (worker/README.md, tabla "Variables de entorno").
 services:
   hub:
     build:

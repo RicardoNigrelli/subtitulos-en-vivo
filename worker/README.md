@@ -22,7 +22,12 @@ Verificar el rótulo: `grep -n "SOURCE_REPLAY\|\[TEST\] \|REPLAY" worker/transpo
 ## `python -m worker.run` — una sala en vivo
 
 ```
---archivo ARCHIVO     archivo de audio o URL que ffmpeg entienda (obligatorio)
+--archivo ARCHIVO     archivo de audio (obligatorio con --fuente archivo, el default)
+--fuente F            archivo | url | mic (ver "Fuentes en vivo")
+--dispositivo NOMBRE  dispositivo de captura para --fuente mic (dshow en Windows)
+--listar-dispositivos lista los dispositivos de audio de dshow y sale
+--agenda AGENDA       agenda JSON (R8c): el glosario de la charla se SUMA a --vocab
+--charla ID           id de la charla en la agenda (default: --sesion)
 --sesion SESION       session_id público de la sala (obligatorio)
 --lang {en,es}        idioma de origen (obligatorio)
 --inicio INICIO       segundo de la fuente donde arranca (default 0)
@@ -30,7 +35,7 @@ Verificar el rótulo: `grep -n "SOURCE_REPLAY\|\[TEST\] \|REPLAY" worker/transpo
 --hub HUB             ws://host:puerto/ingest (sin --hub no publica; igual graba el casete)
 --casete CASETE       ruta del casete JSONL a grabar
 --titulo TITULO       título de la sala (session_start.meta.title)
---url URL             URL de origen (se anota en el casete)
+--url URL             con --fuente url: la entrada (stream); si no, sólo se anota en el casete
 --vocab VOCAB         custom_vocabulary, separado por comas (default "Nerdearla")
 --modelo MODELO       modelo Live (default: GEMINI_LIVE_MODEL)
 --tope-envio-s S      máximo de segundos de audio a enviar en esta corrida
@@ -78,6 +83,53 @@ audio enviado, para ejercitar el watchdog. Ejemplo:
 ```
 
 Con `--hub ws://localhost:8100/ingest` se ve en la vista, rotulada `[TEST] ` (el índice la oculta).
+
+## Fuentes en vivo (R17a): `--fuente archivo|url|mic`
+
+`worker/ingesta.py` (`opciones_fuente`) arma el comando de ffmpeg; siempre sale PCM s16le 16 kHz mono
+en chunks de 100 ms, sin normalizar. El comando exacto queda en el stderr (`[run] fuente ...`) y la
+fuente en el casete y en `session_start.meta.source` (`kind`, `device`, `agenda`).
+
+| Fuente | Entrada | Qué agrega el worker |
+|---|---|---|
+| `archivo` (default) | `--archivo x.wav` | `-ss --inicio`, `-t --duracion`; ritmo real simulado |
+| `url` | `--url <URL>` (o `--archivo <URL>`): HTTP, HLS (`.m3u8`), RTMP, SRT, UDP/mpegts, lo que ffmpeg abra | HTTP(S): `-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5`. Un stream en vivo ya llega a ritmo real; un archivo por HTTP se pauta igual que un archivo |
+| `mic` | `--dispositivo "<nombre>"` | Windows: `-f dshow -audio_buffer_size 50 -i audio=<nombre>`; macOS `avfoundation`; Linux `pulse` |
+
+```
+# stream: un encoder (OBS, mezcladora, ffmpeg) manda mpegts por UDP y el worker lo toma
+ffmpeg -re -i charla.wav -f mpegts udp://127.0.0.1:9000 &
+.venv/Scripts/python -m worker.run --fuente url --url udp://127.0.0.1:9000 --sesion sala-1 --lang en --hub ws://localhost:8100/ingest
+# HTTP: ffmpeg -re -i charla.wav -listen 1 -f wav http://127.0.0.1:9001   y   --url http://127.0.0.1:9001
+# micrófono (Windows):
+.venv/Scripts/python -m worker.run --listar-dispositivos
+.venv/Scripts/python -m worker.run --fuente mic --dispositivo "Micrófono (HD Pro Webcam C920)" --sesion sala-1 --lang es
+```
+
+Probar sólo la ingesta, sin API: agregar `--transporte casete:fixtures/casetes/b1-en-60s.jsonl
+--traducir-a none` (el resumen JSON final trae `segundos_enviados` y `ventanas`; el casete trae el
+RMS de cada ventana en las líneas `client`/`ventana`).
+
+## Glosario desde la agenda (R8c): `--agenda`
+
+`fixtures/agenda.json` (formato completo en el docstring de `worker/glosario.py`):
+
+```
+{"evento": "...", "terminos_evento": ["Nerdearla"],
+ "sesiones": [{"id": "booch-en", "titulo": "...", "orador": "Grady Booch", "empresa": "IBM",
+               "idioma": "en", "url": "...", "resumen": "...", "tecnologias": ["UML", ...],
+               "terminos": ["Jim Rumbaugh", ...], "nota_terminos": "..."}]}
+```
+
+`python -m worker.glosario fixtures/agenda.json [--charla ID]` imprime el vocabulario por charla:
+términos del evento, orador (completo y apellido), empresa, tecnologías, términos, y nombres propios
+del título y del resumen (siglas, CamelCase, secuencias Capitalizadas), sin repetir, hasta 40.
+`worker.run --agenda fixtures/agenda.json --charla booch-en` lo manda como `custom_vocabulary` al
+conectar (sumado a `--vocab`; queda en la cabecera del casete, `config`).
+
+Medir un A/B: `python -m worker.medir_glosario CASETE "Término 1,Término 2"` cuenta, sobre los `text`
+emitidos, apariciones exactas (con mayúsculas y límites de palabra) y sin distinguir mayúsculas.
+Exit 0 = medido; 1 = casete sin textos; 2 = uso.
 
 ## `python -m worker.replay` — modo replay rotulado
 
@@ -151,6 +203,8 @@ raíz lo cargan `worker/gemini.py` (al pedir la key), `worker/emisor.py` y `work
 | `CUOTA_BLOQUE_S` | `1800` | presupuesto de audio del bloque, en segundos |
 | `CUOTA_BLOQUE_DESDE` | `2026-09-24 13:00:00` | desde cuándo se suma el bloque |
 | `CUOTA_TEXTO_LOG` | `reportes/cuota-texto.log` | una línea por llamada al modelo de texto |
+| `CUOTA_TEXTO_RESERVAS` | `reportes/cuota-texto-reservas.jsonl` | reservas de llamadas al modelo de texto, compartidas entre procesos (ver abajo) |
+| `TRADUCTOR_LOTE_MAX` / `TRADUCTOR_LOTE_S` | `2` / `4` | lote del traductor: N ventanas o S segundos desde la primera pendiente |
 | `TRADUCTOR_RPD_TOPE` | `480` | tope diario de llamadas por modelo de texto |
 | `TRADUCTOR_FALLAS_CORTE` | `3` | fallas seguidas (5xx, timeout, 429) que sacan a un modelo de la rotación |
 | `TRADUCTOR_CORTE_S` / `TRADUCTOR_CORTE_MAX_S` | `60` / `480` | duración del primer corte y tope de la duplicación |
@@ -160,6 +214,25 @@ raíz lo cargan `worker/gemini.py` (al pedir la key), `worker/emisor.py` y `work
 | `DRENAJE_VIEJA_S` | `20` | cuánto drena la conexión vieja tras reabrir |
 | `REENVIO_MAX_S` | `15` | tope de audio que se reenvía a la conexión nueva |
 | `ENVIO_TIMEOUT_S` | `5` | un envío trabado más que esto da la conexión por muerta y reabre |
+
+## Llamadas al modelo de texto entre procesos (`cuota-texto-reservas.jsonl`)
+
+Cada sala es un proceso; el cupo de texto (15 RPM por modelo) es por proyecto. Antes de CADA
+llamada, el limitador (`worker.traductor.Reservas`) toma un lock de archivo
+(`cuota-texto-reservas.jsonl.lock`: `msvcrt` en Windows, `fcntl` en Linux), cuenta las reservas de ese
+modelo con `t` en los últimos 60 s (de todos los procesos) y, si hay menos que el límite (12, o 14 con
+un solo modelo sano), apenda una línea y suelta el lock; si no, prueba el otro modelo o espera. Una
+línea por llamada INICIADA (termine bien o mal):
+
+```
+{"t": 1790294443.926, "hora": "2026-09-24 21:00:43", "modelo": "gemini-3.1-flash-lite", "pid": 31936,
+ "etiqueta": "", "en_ventana": 5, "limite": 12}
+```
+
+`en_ventana` = reservas de ese modelo en los 60 s previos, contando ésta. `reportes/cuota-texto.log`
+no cambia (una línea por llamada TERMINADA: `hora | modelo | items | estado | ms`, más las líneas
+`# cortacircuito`); de ahí sigue saliendo el tope diario. Tests: `pytest worker/tests/test_reservas_texto.py`
+(dos procesos reales contra el mismo archivo).
 
 ## Formato del casete (tres capas)
 

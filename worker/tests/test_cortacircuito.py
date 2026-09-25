@@ -9,7 +9,8 @@ import asyncio
 import json
 import time
 
-from worker.traductor import (Error429, Error5xx, Limitador, Traductor, leer_log, meta_traduccion)
+from worker.traductor import (LOTE_MAX, LOTE_S, Error429, Error5xx, Limitador, Traductor, leer_log,
+                              meta_traduccion)
 
 
 class TransporteFalsoPorModelo:
@@ -247,7 +248,7 @@ def test_un_solo_modelo_sano_lotes_de_3_u_8s_y_limitador_14rpm(tmp_path):
     r = Reloj()
     L = _lim(r)
     t, tr = _trad(tmp_path, L, {})
-    assert (t.lotes.maximo, t.lotes.ventana_s) == (2, 5.0)
+    assert (t.lotes.maximo, t.lotes.ventana_s) == (LOTE_MAX, LOTE_S)     # B8: defaults por env
     for _ in range(3):
         L.fallo("m-b", "5xx")
     t._ajustar_lotes()
@@ -259,7 +260,7 @@ def test_un_solo_modelo_sano_lotes_de_3_u_8s_y_limitador_14rpm(tmp_path):
     assert t.lotes.vencido(17.9) is None and [i.seq for i in t.lotes.vencido(18.0).items] == [4]
     L.exito("m-b")                                          # vuelve el segundo modelo
     t._ajustar_lotes()
-    assert (t.lotes.maximo, t.lotes.ventana_s) == (2, 5.0) and not t.lote_solo
+    assert (t.lotes.maximo, t.lotes.ventana_s) == (LOTE_MAX, LOTE_S)     # B8: defaults por env and not t.lote_solo
 
 
 def test_tope_duro_15_en_60s_aunque_el_limitador_permita_mas():

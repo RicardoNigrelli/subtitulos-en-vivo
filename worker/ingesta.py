@@ -3,6 +3,15 @@
 ffmpeg hace la conversion (skill ingesta). NO se normaliza el audio (skill gemini-live).
 La fuente se alimenta a VELOCIDAD REAL: el chunk i sale en t0 + (i+1)*0.1 s, como lo entregaria
 un microfono al completar sus 100 ms. `t_captured` = epoch en que el chunk entro al pipeline.
+
+B8, tres FUENTES (`opciones_fuente`):
+- "archivo": archivo local; `-ss inicio` y `-t duracion`; el ritmo real lo pone este modulo.
+- "url": cualquier entrada que ffmpeg abra (HTTP/HLS/RTMP/SRT/UDP...). Un stream en vivo ya llega a
+  ritmo real (la espera de abajo queda en 0: sus chunks estan "atrasados" respecto de t0 por el
+  arranque); un archivo servido por HTTP se sigue pautando a ritmo real. HTTP(S) con reconexion.
+  `-ss` solo si inicio > 0 (VOD).
+- "mic": dispositivo de captura. Windows: `-f dshow -audio_buffer_size 50 -i audio=<nombre>` (buffer
+  de 50 ms en vez de 500 ms del default de dshow). Listar: `listar_dispositivos()`.
 """
 from __future__ import annotations
 
@@ -44,10 +53,46 @@ def rms_pcm16(data: bytes) -> float:
     return float(np.sqrt(np.mean(x * x)))
 
 
+FUENTES = ("archivo", "url", "mic")
+
+
+def opciones_fuente(fuente: str, valor: str) -> tuple[str, str | None, list[str]]:
+    """(entrada para -i, formato de entrada o None, opciones de entrada extra) de una FUENTE."""
+    if fuente == "mic":
+        import sys
+        if sys.platform == "win32":
+            nombre = valor[len("audio="):] if valor.startswith("audio=") else valor
+            return f"audio={nombre}", "dshow", ["-audio_buffer_size", "50"]
+        if sys.platform == "darwin":
+            return (valor if valor.startswith(":") else f":{valor}"), "avfoundation", []
+        return valor or "default", "pulse", []
+    if fuente == "url":
+        extra = []
+        if valor.lower().startswith(("http://", "https://")):
+            extra = ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+        return valor, None, extra
+    if fuente == "archivo":
+        return valor, None, []
+    raise ValueError(f"fuente desconocida: {fuente!r} (una de {FUENTES})")
+
+
+def listar_dispositivos() -> tuple[list[str], str]:
+    """Dispositivos de AUDIO de dshow (Windows): (nombres, salida cruda de ffmpeg)."""
+    import re
+    ff = shutil.which("ffmpeg") or "ffmpeg"
+    r = subprocess.run([ff, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    crudo = (r.stderr or "") + (r.stdout or "")
+    nombres = [m.group(1) for m in re.finditer(r'"([^"]+)"\s*\(audio\)', crudo)]
+    return nombres, crudo
+
+
 def comando_ffmpeg(entrada: str, inicio: float = 0.0, duracion: float | None = None,
-                   formato_entrada: str | None = None) -> list[str]:
+                   formato_entrada: str | None = None,
+                   opciones_entrada: list[str] | None = None) -> list[str]:
     ff = shutil.which("ffmpeg") or "ffmpeg"
     cmd = [ff, "-hide_banner", "-loglevel", "error", "-nostdin"]
+    cmd += list(opciones_entrada or [])
     if formato_entrada:
         cmd += ["-f", formato_entrada]
     if inicio and not formato_entrada:
@@ -73,10 +118,10 @@ def trocear(pcm: bytes, t0_epoch: float | None = None) -> Iterator[Chunk]:
 
 
 async def fuente_ffmpeg(entrada: str, inicio: float = 0.0, duracion: float | None = None,
-                        tiempo_real: bool = True, formato_entrada: str | None = None
-                        ) -> AsyncIterator[Chunk]:
+                        tiempo_real: bool = True, formato_entrada: str | None = None,
+                        opciones_entrada: list[str] | None = None) -> AsyncIterator[Chunk]:
     """Chunks de 100 ms desde ffmpeg. Con tiempo_real=True respeta el reloj de pared."""
-    cmd = comando_ffmpeg(entrada, inicio, duracion, formato_entrada)
+    cmd = comando_ffmpeg(entrada, inicio, duracion, formato_entrada, opciones_entrada)
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     loop = asyncio.get_running_loop()

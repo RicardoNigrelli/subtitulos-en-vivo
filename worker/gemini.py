@@ -57,7 +57,15 @@ def preparar_ca() -> str | None:
         except Exception:
             pass
     destino = Path(tempfile.gettempdir()) / "vibeathon-ca-bundle.pem"
-    destino.write_text(chr(10).join(partes), encoding="ascii")
+    # B8: dos workers arrancando a la vez escribian el MISMO archivo y uno leia un PEM a medio
+    # escribir ("SSLError: [X509] PEM lib", reportes/audio-pipeline-b8-glosario-sin-intento1-*.err).
+    # Se escribe a un archivo propio del proceso y se reemplaza atomicamente.
+    tmp = destino.with_name(f"vibeathon-ca-bundle.{os.getpid()}.tmp")
+    tmp.write_text(chr(10).join(partes), encoding="ascii")
+    try:
+        os.replace(tmp, destino)
+    except OSError:                      # Windows: destino abierto por otro proceso -> usar el propio
+        destino = tmp
     os.environ["SSL_CERT_FILE"] = str(destino)
     os.environ["REQUESTS_CA_BUNDLE"] = str(destino)
     os.environ["VIBEATHON_CA_LISTO"] = "1"

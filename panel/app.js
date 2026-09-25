@@ -1,4 +1,4 @@
-// app.js — panel de producción (monitor, Bloque 3, R8e; same-origin + Bearer client-side: B5)
+// app.js — panel de producción (monitor, Bloque 3, R8e; same-origin + Bearer client-side: B5/B8)
 //
 // Fuentes de datos (contracts/README.md, hub/README.md; skill ui-subtitulos "Panel de producción"):
 //   - GET /api/sesiones cada 2 s: session_id, lang, title, replay, last_seq, last_t_emit, last_t_hub,
@@ -11,13 +11,16 @@
 //   - WS público /ws/<session_id> (sin token, igual que cualquier espectador): stream en vivo de
 //     TODOS los tipos salvo el heartbeat del worker (el hub no lo reenvía a audiencia). Es la única
 //     fuente para `partial`, `translation` y para la latencia PERCIBIDA (t_receive - t_captured).
-//   - GET /api/metricas (B5: DIRECTO al hub, ya no vía proxy `/panel-api/`; CORS abierto para GET y
-//     permite el header `Authorization`, ver hub/app.py `cors`): requiere `Authorization: Bearer
-//     <HUB_TOKEN>`. El token lo tipea el operador UNA vez en el campo de la cabecera y queda en
-//     `sessionStorage` (NUNCA en la query string ni en la URL: skill ui-subtitulos "Token"); sin
-//     token no se llama a este endpoint y las celdas que dependen de él (audio estimado) lo dicen
-//     ("sin token"). El resto del panel (rotaciones, watchdog, errores, ok:false, parciales/min,
-//     viewers) sale de /api/sesiones y del WS público y no necesita token.
+//   - GET /api/metricas: requiere `Authorization: Bearer <HUB_TOKEN>` (hub/README.md). Servido por
+//     panel/servir.py (dev, 8102): pasa por SU proxy `/panel-api/metricas`, que agrega el Bearer del
+//     lado del servidor (token de `.env`, el navegador no lo ve). Servido por el hub directo
+//     (`--panel`, cualquier otro puerto: 8080 producción, 8195 en B8) ESE proxy no existe (hub/README
+//     "el proxy /panel-api/metricas de panel/servir.py NO existe en el hub") y el panel manda el
+//     Bearer él mismo (B8: `fetchMetricas()`) con el token que tipeó el operador UNA vez en el campo
+//     de la cabecera; queda en `sessionStorage` (NUNCA en la query string ni en la URL: skill
+//     ui-subtitulos "Token"); sin token no se llama al endpoint y las celdas que dependen de él
+//     (audio estimado) y el chip dicen "sin token". El resto del panel (rotaciones, watchdog,
+//     errores, ok:false, parciales/min, viewers) sale de /api/sesiones y del WS público, sin token.
 //
 // B5: resolución de origen del hub — MISMO PATRÓN que web/app.js (frontend), mismo razonamiento: la
 // única señal confiable del lado cliente es el puerto. `panel/servir.py` (dev, este agente) siempre
@@ -26,9 +29,12 @@
 // `?hub=host:puerto` pisa esto siempre. [SUPUESTO: monitor, siguiendo la convención ya usada por
 // frontend en B4] no hay forma de saberlo con certeza sin una vuelta previa.
 //
-// B5: sesiones `test:true` (fixtures `contracts/ejemplos/`, transporte de casete sin API — NO son
-// ASR en vivo) llevan el rótulo TEST y están ocultas por defecto; toggle "mostrar pruebas".
-// B5: `rotation.meta.audio_lost_s`, cuando viene, se acumula por sesión (columna Rotaciones).
+// B5/B8: sesiones `test:true` (fixtures `contracts/ejemplos/`, transporte de casete sin API — NO son
+// ASR en vivo) llevan el rótulo TEST junto al idioma y están ocultas por defecto (fila-oculta, CSS);
+// toggle "mostrar pruebas" las trae de vuelta y el chip de al lado cuenta cuántas hay (B8: cableado
+// del toggle e input de token, que en B5 quedaron escritos en el HTML pero sin listener en JS).
+// B5/B8: `rotation.meta.audio_lost_s`, cuando viene, se acumula por sesión y se muestra junto al
+// detalle de "Rotaciones" (B8: en B5 se acumulaba pero ninguna celda lo mostraba).
 //
 // Reglas de la skill ui-subtitulos ("Panel de producción"): p50/p95 SIEMPRE (nearest-rank), NUNCA
 // promedio; estado nunca sólo por color; rotaciones/reaperturas/errores como contadores con
@@ -68,6 +74,23 @@
     } catch (e) {
       console.warn('panel: sessionStorage no disponible, el token sólo dura mientras esté escrito en el campo', e);
     }
+  }
+
+  // B8: si esta pagina la sirve panel/servir.py (dev, puerto 8102) existe SU proxy autenticado
+  // panel-api/metricas (token server-side leido de .env, ver panel/servir.py). Si la sirve el HUB
+  // directo (--panel, cualquier otro puerto: 8080 produccion, 8195 este bloque) ESE proxy NO existe
+  // (hub/README.md: "el proxy /panel-api/metricas de panel/servir.py NO existe en el hub") y hay que
+  // pedir GET /api/metricas con Authorization: Bearer nosotros mismos, con el token que tipeo el
+  // operador (leerToken(), sessionStorage; NUNCA en la query string, skill ui-subtitulos "Token").
+  var METRICAS_VIA_PROXY_SERVIR = location.port === PUERTO_DEV_PANEL && location.protocol !== 'file:';
+
+  function fetchMetricas() {
+    if (METRICAS_VIA_PROXY_SERVIR) {
+      return fetch('panel-api/metricas?hub=' + encodeURIComponent(hubHost));
+    }
+    var tok = leerToken();
+    if (!tok) return Promise.reject(new Error('SIN_TOKEN'));
+    return fetch(HTTP_BASE + '/api/metricas', { headers: { Authorization: 'Bearer ' + tok } });
   }
 
   // ---------------------------------------------------------------- utilidades
@@ -355,20 +378,26 @@
                   'Los contadores que se ven quedaron en el último valor conocido.');
     });
 
-    fetch('panel-api/metricas?hub=' + encodeURIComponent(hubHost)).then(function (r) {
+    fetchMetricas().then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).then(function (m) {
       metricasGlobal = m;
-      elChipMetricas.textContent = '/api/metricas: ok';
+      elChipMetricas.textContent = 'métricas: ok';
       elChipMetricas.className = 'chip chip--ok';
       Object.keys(sesiones).forEach(function (id) {
         sesiones[id].metricas = (m.sesiones && m.sesiones[id]) || null;
       });
     }).catch(function (e) {
-      elChipMetricas.textContent = '/api/metricas: no disponible';
+      if (e && e.message === 'SIN_TOKEN') {
+        metricasGlobal = null;
+        elChipMetricas.textContent = 'métricas: sin token';
+        elChipMetricas.className = 'chip';
+        return;
+      }
+      elChipMetricas.textContent = 'métricas: no disponible (' + String((e && e.message) || e) + ')';
       elChipMetricas.className = 'chip chip--mal';
-      console.warn('panel: /panel-api/metricas falló:', String(e));
+      console.warn('panel: /api/metricas falló:', String(e));
     });
   }
 
@@ -391,6 +420,15 @@
     var claves = Object.keys(mapa);
     if (!claves.length) return '';
     return claves.sort().map(function (k) { return esc(k) + ':' + mapa[k]; }).join(' · ');
+  }
+
+  // B8: audio_lost_s acumulado (B5 ya lo sumaba en aplicarMensaje, pero no se mostraba en ninguna
+  // celda: brief B8 punto 3, "verificá la fila"). Va junto al detalle de Rotaciones.
+  function fmtDetalleRotacion(s) {
+    var motivos = fmtDetalleMotivos(s.rotacionesPorMotivo);
+    if (!(s.audioLostS > 0)) return motivos;
+    var perdido = 'audio perdido ' + s.audioLostS.toFixed(1) + ' s';
+    return motivos ? motivos + ' · ' + perdido : perdido;
   }
 
   function fmtContador(n, ultimoMs, detalle) {
@@ -424,6 +462,7 @@
     var lang = s.lang || '—';
     var badgeReplay = s.replay === true ? '<span class="badge badge-replay">REPLAY</span>' :
                        (s.replay === false ? '<span class="badge badge-vivo">EN VIVO</span>' : '');
+    var badgeTest = s.test === true ? '<span class="badge badge-test">TEST</span>' : '';
     var destinos = s.translationsLangs && s.translationsLangs.length ?
       '<span class="num-sub">trad: ' + esc(s.translationsLangs.join(', ')) + '</span>' : '';
 
@@ -449,7 +488,7 @@
     return (
       '<td class="col-sesion"><span class="sesion-id">' + esc(s.id) + '</span>' +
         (s.title ? '<span class="sesion-titulo">' + esc(s.title) + '</span>' : '') + '</td>' +
-      '<td>' + esc(lang) + ' ' + badgeReplay + destinos + '</td>' +
+      '<td>' + esc(lang) + ' ' + badgeReplay + badgeTest + destinos + '</td>' +
       '<td class="estado estado--' + estado.clase + '">' + esc(estado.texto) + '</td>' +
       '<td>' + esc(s.wsEstado) + '</td>' +
       '<td class="mono">' + (s.lastSeqHub == null ? '—' : s.lastSeqHub) +
@@ -457,7 +496,7 @@
       '<td class="mono">' + s.textos + '</td>' +
       '<td>' + latWorkerHtml + '</td>' +
       '<td>' + latPercibidaHtml + '</td>' +
-      '<td>' + fmtContador(s.rotaciones, s.ultimaRotacionEn, fmtDetalleMotivos(s.rotacionesPorMotivo)) + '</td>' +
+      '<td>' + fmtContador(s.rotaciones, s.ultimaRotacionEn, fmtDetalleRotacion(s)) + '</td>' +
       '<td>' + fmtContador(s.watchdogReaperturas, s.ultimoWatchdogEn,
                  s.watchdogEventos !== s.watchdogReaperturas ? (s.watchdogEventos + ' eventos watchdog en total') : '') + '</td>' +
       '<td>' + fmtContador(s.errores, s.ultimoErrorEn, s.ultimoErrorDetalle ? esc(s.ultimoErrorDetalle) : '') + '</td>' +
@@ -475,6 +514,7 @@
     var ahoraMs = Date.now();
     var filaVacia = document.getElementById('fila-vacia');
     if (ordenFilas.length && filaVacia) filaVacia.remove();
+    var totalTest = 0;
     ordenFilas.forEach(function (id) {
       var s = sesiones[id];
       var tr = document.getElementById('fila-' + cssEscape(id));
@@ -484,12 +524,58 @@
         elCuerpo.appendChild(tr);
       }
       tr.innerHTML = filaHtml(s, ahoraMs);
+      // B8: sesiones test:true (brief B5/B8, skill ui-subtitulos): ocultas por defecto, el
+      // toggle "mostrar pruebas" las trae de vuelta; nunca se pierden, sólo se ocultan (CSS).
+      if (s.test === true) {
+        totalTest += 1;
+        tr.classList.toggle('fila-oculta', !mostrarPruebas);
+      } else {
+        tr.classList.remove('fila-oculta');
+      }
     });
+    if (elChipPruebasOcultas) {
+      elChipPruebasOcultas.textContent = totalTest === 0 ? 'sin sesiones TEST' :
+        (totalTest + (totalTest === 1 ? ' sesión TEST' : ' sesiones TEST') +
+         (mostrarPruebas ? ' (mostradas)' : ' (ocultas; "mostrar pruebas" las trae)'));
+    }
   }
 
   function cssEscape(s) {
     return String(s).replace(/[^a-zA-Z0-9_-]/g, function (c) { return '_' + c.charCodeAt(0) + '_'; });
   }
+
+  // ---------------------------------------------------------------- controles (token, toggle pruebas)
+  // B8: el campo de token (index.html #input-token) y los botones existían en el HTML pero no
+  // tenían ningún listener en app.js: el Bearer nunca se mandaba a /api/metricas cuando el hub
+  // sirve el panel directo (sin el proxy de servir.py). Ver fetchMetricas() más arriba.
+  var elInputToken = document.getElementById('input-token');
+  var elBtnTokenGuardar = document.getElementById('btn-token-guardar');
+  var elBtnTokenBorrar = document.getElementById('btn-token-borrar');
+  var elChipPruebasOcultas = document.getElementById('chip-pruebas-ocultas');
+  var elTogglePruebas = document.getElementById('toggle-pruebas');
+  var mostrarPruebas = elTogglePruebas ? elTogglePruebas.checked === true : false;
+
+  if (elInputToken) elInputToken.value = leerToken();
+  if (elBtnTokenGuardar) elBtnTokenGuardar.addEventListener('click', function () {
+    guardarToken(elInputToken ? elInputToken.value.trim() : '');
+    pollSesiones(); // aplica ya, sin esperar los 2 s del intervalo
+  });
+  if (elInputToken) elInputToken.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && elBtnTokenGuardar) elBtnTokenGuardar.click();
+  });
+  if (elBtnTokenBorrar) elBtnTokenBorrar.addEventListener('click', function () {
+    if (elInputToken) elInputToken.value = '';
+    guardarToken('');
+    metricasGlobal = null;
+    Object.keys(sesiones).forEach(function (id) { sesiones[id].metricas = null; });
+    elChipMetricas.textContent = 'métricas: sin token';
+    elChipMetricas.className = 'chip';
+    render();
+  });
+  if (elTogglePruebas) elTogglePruebas.addEventListener('change', function () {
+    mostrarPruebas = elTogglePruebas.checked;
+    render();
+  });
 
   // ---------------------------------------------------------------- arranque
   pollSesiones();

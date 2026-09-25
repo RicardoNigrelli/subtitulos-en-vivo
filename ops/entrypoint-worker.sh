@@ -55,6 +55,13 @@ replay_en_bucle() {
 
 asr_real() {
     echo "[entrypoint-worker] MODO=real y GEMINI_API_KEY presente -> ASR real (worker.run), 2 sesiones (R21)"
+    # R8c (B8, no habilitado acá para no repetir la verificacion de B7 con Docker): worker.run
+    # admite "--agenda fixtures/agenda.json --charla booch-en" (respectivamente "paez-es") para
+    # sumar el glosario de la charla a --vocab. Es aditivo (solo agrega custom_vocabulary) pero no
+    # se agrega a los comandos de abajo sin una corrida de compose que lo confirme (brief B9: "no
+    # rompas lo verificado en B7"). Variables nuevas del traductor (TRADUCTOR_LOTE_S y las demas
+    # TRADUCTOR_*, CUOTA_*) NO hace falta pasarlas aca: ya viajan al contenedor via env_file (../.env)
+    # en ops/docker-compose.yml, se lean o no explicitamente en este script.
     python -m worker.run \
         --archivo fixtures/audio/clips/nerdearla-en-booch-300s-60s.wav \
         --sesion docker-en --lang en --duracion 60 \

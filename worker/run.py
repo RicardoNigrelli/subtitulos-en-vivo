@@ -5,6 +5,14 @@
         [--casete fixtures/casetes/x.jsonl] [--titulo ...] [--vocab "Nerdearla,Nombre"] \
         [--url https://...] [--tope-envio-s N] [--vad-auto] [--sin-reabrir]
         [--transporte gemini | casete:<archivo.jsonl>[:mudo=S]]
+    python -m worker.run --fuente url --url udp://127.0.0.1:9000 --sesion x --lang en ...   # stream
+    python -m worker.run --fuente mic --dispositivo "Microphone (X)" --sesion x --lang es ... # dshow
+    python -m worker.run --listar-dispositivos
+    ... --agenda fixtures/agenda.json [--charla booch-en]    # glosario R8c -> custom_vocabulary
+
+B8: --fuente archivo|url|mic (worker/ingesta.py: opciones_fuente). url = cualquier entrada que ffmpeg
+abra (HTTP/HLS/RTMP/SRT/UDP); mic = dshow en Windows. --agenda: el vocabulario de la charla
+(worker/glosario.py) se SUMA a --vocab.
 
 B3: reabrir con solape ACTIVO por defecto (worker/session.py: cierre/atasco/preventiva/goaway).
 --vad-auto: VAD automatico del server (sin activity_start/end nuestros), NO_INTERRUPTION igual.
@@ -29,14 +37,20 @@ from worker import cuota
 from worker.casete import Grabador
 from worker.emisor import Emisor
 from worker.gemini import MODELO_LIVE_DEFAULT
-from worker.ingesta import fuente_ffmpeg
+from worker.ingesta import comando_ffmpeg, fuente_ffmpeg
 from worker.session import SessionWorker
 from worker.transporte import TransporteGemini
 
 
 def _args(argv=None):
     ap = argparse.ArgumentParser(prog="python -m worker.run")
-    ap.add_argument("--archivo", required=True, help="archivo de audio o URL que ffmpeg entienda")
+    ap.add_argument("--archivo", default=None, help="archivo de audio o URL que ffmpeg entienda")
+    ap.add_argument("--fuente", default="archivo", choices=["archivo", "url", "mic"],
+                    help="archivo (default) | url (stream: --url o --archivo) | mic (--dispositivo)")
+    ap.add_argument("--dispositivo", default=None,
+                    help='nombre del dispositivo de captura (dshow), p.ej. "Microphone (Realtek)"')
+    ap.add_argument("--agenda", default=None, help="agenda JSON (R8c): glosario -> custom_vocabulary")
+    ap.add_argument("--charla", default=None, help="id de la charla en la agenda (default: --sesion)")
     ap.add_argument("--sesion", required=True)
     ap.add_argument("--lang", required=True, choices=["en", "es"])
     ap.add_argument("--inicio", type=float, default=0.0)
@@ -61,7 +75,22 @@ def _args(argv=None):
     ap.add_argument("--sin-reabrir", action="store_true", help="desactiva reabrir con solape")
     ap.add_argument("--transporte", default="gemini",
                     help="gemini | casete:<archivo.jsonl>[:mudo=S] (test, rotulado, sin API)")
-    return ap.parse_args(argv)
+    a = ap.parse_args(argv)
+    if a.fuente == "archivo" and not a.archivo:
+        ap.error("--fuente archivo necesita --archivo")
+    if a.fuente == "url" and not (a.url or a.archivo):
+        ap.error("--fuente url necesita --url (o --archivo con la URL)")
+    if a.fuente == "mic" and not a.dispositivo:
+        ap.error('--fuente mic necesita --dispositivo "<nombre>" (listar: --listar-dispositivos)')
+    return a
+
+
+def entrada_de(a) -> tuple[str, str | None, list[str], str]:
+    """(entrada, formato, opciones de entrada, nombre legible) segun --fuente."""
+    from worker.ingesta import opciones_fuente
+    valor = {"archivo": a.archivo, "url": a.url or a.archivo, "mic": a.dispositivo}[a.fuente]
+    ent, fmt, extra = opciones_fuente(a.fuente, valor)
+    return ent, fmt, extra, valor
 
 
 async def correr(a) -> int:
@@ -74,6 +103,14 @@ async def correr(a) -> int:
     tope = (None if a.tope_envio_s is None else a.tope_envio_s) if es_casete else (
         restante if a.tope_envio_s is None else min(a.tope_envio_s, restante))
     vocab = [v.strip() for v in a.vocab.split(",") if v.strip()]
+    if a.agenda:
+        from worker.glosario import vocabulario
+        for t in vocabulario(a.agenda, a.charla or a.sesion):
+            if t.lower() not in {v.lower() for v in vocab}:
+                vocab.append(t)
+        print(f"[run] glosario de {a.agenda} ({a.charla or a.sesion}): {len(vocab)} terminos "
+              f"-> custom_vocabulary", file=sys.stderr)
+    entrada, formato, opciones, valor = entrada_de(a)
     if es_casete:
         from worker.transporte_casete import FabricaCasete
         fab_casete = FabricaCasete.desde_spec(a.transporte)
@@ -88,8 +125,10 @@ async def correr(a) -> int:
         def fabrica(corte_s: float):
             return TransporteGemini(a.modelo, a.lang, vocab, nombre_key=a.key, auto_vad=a.vad_auto)
     casete = a.casete or f"fixtures/casetes/{a.sesion}-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
-    source = {"file": a.archivo, "url": a.url, "start_s": a.inicio, "dur_s": a.duracion}
-    titulo = a.titulo or Path(a.archivo).stem
+    source = {"file": a.archivo, "url": a.url, "start_s": a.inicio, "dur_s": a.duracion,
+              "kind": a.fuente, "device": a.dispositivo,
+              "agenda": {"file": a.agenda, "charla": a.charla or a.sesion} if a.agenda else None}
+    titulo = a.titulo or (Path(a.archivo).stem if a.fuente == "archivo" else f"{a.fuente}: {valor}")
     from google.genai import __version__ as genai_version
     from worker import ventanas as V
     ventana_s = a.ventana_s if a.ventana_s is not None else V.VENTANA_S
@@ -125,7 +164,10 @@ async def correr(a) -> int:
         print(f"[run] seq inicial = {seq0} (auth_ok.last_seq; conectado={emisor.conectado})",
               file=sys.stderr)
     rec.client("seq_inicial", {"last_seq_hub": seq0, "conectado": bool(emisor and emisor.conectado)})
-    fuente = fuente_ffmpeg(a.archivo, a.inicio, a.duracion, tiempo_real=True)
+    fuente = fuente_ffmpeg(entrada, a.inicio, a.duracion, tiempo_real=True,
+                           formato_entrada=formato, opciones_entrada=opciones)
+    print(f"[run] fuente {a.fuente}: {' '.join(comando_ffmpeg(entrada, a.inicio, a.duracion, formato, opciones))}",
+          file=sys.stderr)
     w = SessionWorker(a.sesion, a.lang, tr, fuente, grabador=rec, emisor=emisor, titulo=titulo,
                       source=source, tope_envio_s=tope, espera_final_s=a.drenaje_s, gap_s=gap_s,
                       cortador=V.Cortador(ventana_s=ventana_s, gap_s=gap_s),
@@ -142,7 +184,7 @@ async def correr(a) -> int:
             print(f"[run] transporte de casete (test): {seg} s NO van a Gemini, no se registran",
                   file=sys.stderr)
         else:
-            linea = cuota.registrar(a.sesion, seg, a.archivo)
+            linea = cuota.registrar(a.sesion, seg, valor)
             print(f"[run] cuota: {linea}", file=sys.stderr)
         if emisor:
             ok = await emisor.vaciar(3.0)
@@ -170,6 +212,13 @@ async def correr(a) -> int:
 
 
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if "--listar-dispositivos" in argv:
+        from worker.ingesta import listar_dispositivos
+        nombres, crudo = listar_dispositivos()
+        print(crudo.strip(), file=sys.stderr)
+        print(json.dumps({"dshow_audio": nombres}, ensure_ascii=False))
+        return 0 if nombres else 3
     a = _args(argv)
     return asyncio.run(correr(a))
 

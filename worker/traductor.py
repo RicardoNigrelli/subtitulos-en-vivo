@@ -42,6 +42,16 @@ B5 (R19 en vivo 32/41; gemini-3.1-flash-lite fallo 8 de 11 con 5xx/timeout; ESTA
 - translation.meta.reason (campo AGREGADO, el esquema lo admite): en los ok:false, el estado del
   ultimo intento (sin_modelo | sin_cupo | timeout | 5xx | 429 | cantidad | cierre | error:X).
 
+B8 (con 2 sesiones cada proceso contaba solo sus llamadas TERMINADAS: las que estaban en vuelo en otro
+proceso no se veian y se podia pasar de 15 RPM por modelo):
+- RESERVA ANTES DE LLAMAR, compartida entre procesos: `Reservas` apende una linea JSON por llamada
+  INICIADA a reportes/cuota-texto-reservas.jsonl (CUOTA_TEXTO_RESERVAS) bajo un LOCK DE ARCHIVO
+  (`<reservas>.lock`, msvcrt en Windows / fcntl en POSIX). Dentro del lock cuenta las reservas de ese
+  modelo con t > ahora - 60 s (de TODOS los procesos) y reserva solo si hay menos que el limite
+  (rpm del modo: 12, o 14 con un solo modelo sano). Toda ventana de 60 s queda con <= limite llamadas
+  iniciadas, sumando procesos. El token bucket y el tope duro por proceso siguen igual.
+- Lote = TRADUCTOR_LOTE_MAX=2 ventanas o TRADUCTOR_LOTE_S=4 s (B4-B7: 5 s).
+
     python -m worker.traductor --listar                        # ids exactos (models.list)
     python -m worker.traductor --probar "Hello world" --a es   # UNA llamada real (gasta 1 RPD)
 """
@@ -63,8 +73,8 @@ from typing import Awaitable, Callable, Optional, Protocol
 
 RAIZ = Path(__file__).resolve().parent.parent
 LOG_TEXTO = Path(os.environ.get("CUOTA_TEXTO_LOG", RAIZ / "reportes" / "cuota-texto.log"))
-LOTE_MAX = 2
-LOTE_S = 5.0
+RESERVAS_TEXTO = Path(os.environ.get("CUOTA_TEXTO_RESERVAS",
+                                     RAIZ / "reportes" / "cuota-texto-reservas.jsonl"))
 TIMEOUT_S = 20.0
 ESPERA_CUPO_S = 15.0      # un lote que no consigue cupo en 15 s sale ok:false (ya llegaria tarde)
 RPM = 12
@@ -94,6 +104,119 @@ TOPE_RPM = 15            # free tier: 15 RPM por modelo -> nunca mas de 15 llama
 LOTE_MAX_SOLO = 3
 LOTE_S_SOLO = 8.0
 MARCA_EVENTO = "# cortacircuito"
+LOTE_MAX = int(_env_num("TRADUCTOR_LOTE_MAX", 2))
+LOTE_S = _env_num("TRADUCTOR_LOTE_S", 4.0)
+VENTANA_RESERVAS_S = 60.0
+
+
+class LockArchivo:
+    """Lock EXCLUSIVO entre procesos sobre un archivo (msvcrt / fcntl), con espera activa corta.
+    La seccion critica es chica (leer la cola del archivo de reservas y apendar una linea)."""
+
+    def __init__(self, ruta: Path, timeout_s: float = 5.0):
+        self.ruta = Path(ruta)
+        self.timeout_s = timeout_s
+        self.f = None
+
+    def __enter__(self):
+        self.ruta.parent.mkdir(parents=True, exist_ok=True)
+        self.f = open(self.ruta, "a+b")
+        t_lim = time.monotonic() + self.timeout_s
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    self.f.seek(0)
+                    msvcrt.locking(self.f.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if time.monotonic() > t_lim:
+                    self.f.close()
+                    raise TimeoutError(f"lock {self.ruta} ocupado mas de {self.timeout_s} s")
+                time.sleep(0.005)
+
+    def __exit__(self, *exc):
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self.f.seek(0)
+                msvcrt.locking(self.f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.f.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.f.close()
+        return False
+
+
+class Reservas:
+    """Llamadas al modelo de texto RESERVADAS ANTES de llamar, compartidas entre procesos (B8).
+
+    Una linea JSON por llamada iniciada: {"t": epoch, "hora": "AAAA-MM-DD HH:MM:SS", "modelo": ...,
+    "pid": ..., "etiqueta": ...}. `reservar(modelo, limite)` cuenta, DENTRO del lock, las lineas de
+    ese modelo con t > ahora - ventana_s y apenda solo si hay menos que `limite`."""
+
+    COLA_BYTES = 256 * 1024          # 15 RPM x 2 modelos x varios procesos entra de sobra
+
+    def __init__(self, ruta: Path = RESERVAS_TEXTO, ventana_s: float = VENTANA_RESERVAS_S,
+                 reloj: Callable[[], float] = time.time, etiqueta: str = ""):
+        self.ruta = Path(ruta)
+        self.lock = self.ruta.with_name(self.ruta.name + ".lock")
+        self.ventana_s = ventana_s
+        self.reloj = reloj
+        self.etiqueta = etiqueta
+        self.n_reservadas = 0
+        self.n_rechazadas = 0
+
+    def _recientes(self, ahora: float) -> list[dict]:
+        if not self.ruta.exists():
+            return []
+        with open(self.ruta, "rb") as f:
+            f.seek(0, 2)
+            tam = f.tell()
+            f.seek(max(0, tam - self.COLA_BYTES))
+            crudo = f.read().decode("utf-8", errors="replace")
+        out = []
+        for linea in crudo.splitlines():
+            try:
+                d = json.loads(linea)
+                if float(d["t"]) > ahora - self.ventana_s:
+                    out.append(d)
+            except (ValueError, KeyError, TypeError):
+                continue                  # primera linea cortada por la cola, o basura
+        return out
+
+    def contar(self, modelo: str) -> int:
+        with LockArchivo(self.lock):
+            return sum(1 for d in self._recientes(self.reloj()) if d.get("modelo") == modelo)
+
+    def espera(self, modelo: str, limite: int) -> float:
+        """Segundos hasta que se libere un lugar para `modelo` (0 si ya hay)."""
+        with LockArchivo(self.lock):
+            ahora = self.reloj()
+            ts = sorted(float(d["t"]) for d in self._recientes(ahora) if d.get("modelo") == modelo)
+        if len(ts) < limite:
+            return 0.0
+        return max(0.0, ts[len(ts) - limite] + self.ventana_s - ahora)
+
+    def reservar(self, modelo: str, limite: int) -> bool:
+        with LockArchivo(self.lock):
+            ahora = self.reloj()
+            n = sum(1 for d in self._recientes(ahora) if d.get("modelo") == modelo)
+            if n >= limite:
+                self.n_rechazadas += 1
+                return False
+            linea = json.dumps({"t": round(ahora, 3),
+                                "hora": datetime.fromtimestamp(ahora).strftime(FMT),
+                                "modelo": modelo, "pid": os.getpid(), "etiqueta": self.etiqueta,
+                                "en_ventana": n + 1, "limite": int(limite)}, ensure_ascii=False)
+            with open(self.ruta, "a", encoding="utf-8") as f:
+                f.write(linea + "\n")
+            self.n_reservadas += 1
+            return True
 
 
 def modelos_por_defecto() -> list[str]:
@@ -241,7 +364,8 @@ class Limitador:
                  fallas_corte: int = FALLAS_CORTE, corte_s: float = CORTE_S,
                  corte_max_s: float = CORTE_MAX_S, rpm_solo: float = RPM_SOLO,
                  capacidad_solo: float = CAPACIDAD_SOLO, tope_rpm: int = TOPE_RPM,
-                 on_evento: Optional[Callable[[str], None]] = None):
+                 on_evento: Optional[Callable[[str], None]] = None,
+                 reservas="auto"):
         self.rpm = rpm
         self.rate = rpm / 60.0
         self.cap = capacidad
@@ -261,6 +385,16 @@ class Limitador:
         self.m = {n: EstadoModelo(n, capacidad, t) for n in modelos}
         self.orden = list(modelos)
         self._rr = 0
+        # B8: reservas entre procesos. "auto": junto al log de cuota (el de reportes/ usa
+        # CUOTA_TEXTO_RESERVAS); sin log (tests con reloj falso) no hay reservas.
+        if reservas == "auto":
+            if log is None:
+                reservas = None
+            elif Path(log) == LOG_TEXTO:
+                reservas = Reservas(RESERVAS_TEXTO)
+            else:
+                reservas = Reservas(Path(log).with_name("cuota-texto-reservas.jsonl"))
+        self.reservas: Optional[Reservas] = reservas
         if log is not None:
             d0 = inicio_dia()
             for dt, mod, _est in leer_log(log):
@@ -314,11 +448,14 @@ class Limitador:
         e.tokens = min(cap, e.tokens + (t - e.t_ref) * rpm / 60.0)
         e.t_ref = t
 
-    def _recientes_en_log(self, modelo: str) -> int:
-        if self.log is None:
-            return 0
-        lim = datetime.now() - timedelta(seconds=60)
-        return sum(1 for dt, mod, _ in leer_log(self.log)[-40:] if mod == modelo and dt >= lim)
+    def _reservar(self, modelo: str, limite: float) -> bool:
+        """B8: reserva la llamada en el archivo compartido entre procesos (si hay reservas)."""
+        if self.reservas is None:
+            return True
+        try:
+            return self.reservas.reservar(modelo, int(limite))
+        except TimeoutError:
+            return False                   # lock trabado: no llamar ahora, reintentar en 0,5 s
 
     def espera(self, modelo: str) -> float:
         """Segundos hasta que `modelo` pueda llamar (inf si agoto el tope diario)."""
@@ -350,17 +487,20 @@ class Limitador:
             rpm, _cap = self.modo()
             rot = [n for n in self.orden[self._rr:] + self.orden[:self._rr] if n in sanos]
             cands = [n for n in rot if n != evitar] + [n for n in rot if n == evitar]
-            esperas = [(self.espera(n), i, n) for i, n in enumerate(cands)]
-            w, _, n = min(esperas)
+            esperas = sorted((self.espera(n), i, n) for i, n in enumerate(cands))
+            w = esperas[0][0]
             if w == float("inf"):
                 return None, "sin_cupo"
-            if w <= 0 and self._recientes_en_log(n) < rpm:
-                e = self.m[n]
-                e.tokens -= 1
-                e.hoy += 1
-                e.llamadas.append(self.reloj())
-                self._rr = (self.orden.index(n) + 1) % len(self.orden)
-                return n, "ok"
+            for wn, _, n in esperas:        # el primero libre que consiga RESERVA entre procesos
+                if wn > 0:
+                    break
+                if self._reservar(n, rpm):
+                    e = self.m[n]
+                    e.tokens -= 1
+                    e.hoy += 1
+                    e.llamadas.append(self.reloj())
+                    self._rr = (self.orden.index(n) + 1) % len(self.orden)
+                    return n, "ok"
             t = self.reloj()
             vence = [self.m[x].cortado_hasta - t for x in self.orden if x not in sanos]
             if vence:                    # un corte que vence antes: reevaluar ahi (reingreso)

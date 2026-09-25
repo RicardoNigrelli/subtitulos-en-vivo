@@ -62,7 +62,7 @@ def test_lote_lleno_a_las_2_ventanas():
 
 
 def test_lote_por_tiempo_5s_desde_el_primero():
-    L = Lotes()
+    L = Lotes(ventana_s=5.0)               # B8: el default paso a TRADUCTOR_LOTE_S (ver test de abajo)
     L.agregar(1, "a", 0.0)
     assert L.vencido(4.9) is None
     lote = L.vencido(5.0)
@@ -247,3 +247,8 @@ def test_translation_sin_modelo_valida_contra_el_contrato():
     res = ResultadoLote([{"seq": 3, "text": None, "ok": False}], None, 0, [{"modelo": None, "estado": "cierre"}])
     m = mensaje("translation", "s", None, "en", items=res.items, meta=meta_traduccion(res, "es", {"vivo": True}))
     assert errores(m) == [] and m["meta"]["model"] == "ninguno"
+
+
+def test_lote_default_sale_de_traductor_lote_s():
+    from worker import traductor as T
+    assert (Lotes().maximo, Lotes().ventana_s) == (T.LOTE_MAX, T.LOTE_S)
