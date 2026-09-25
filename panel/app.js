@@ -704,7 +704,9 @@
     // sesión y su fuente es un clip (salasEstado.porId, sección "control de salas" más abajo en este
     // mismo archivo — hoisted, se resuelve en tiempo de ejecución, no de parseo).
     var infoControl = (typeof salasEstado !== 'undefined' && salasEstado.porId) ? salasEstado.porId[s.id] : null;
-    var escucharHtml = (infoControl && infoControl.fuente && infoControl.fuente.tipo === 'archivo')
+    // Sólo con la sala CORRIENDO: si no, el navegador reproducía el clip aunque la sala no transmitiera
+    // (Ricardo 25/09: "el sonido empezó" con la sala en error).
+    var escucharHtml = (infoControl && infoControl.estado === 'corriendo' && infoControl.fuente && infoControl.fuente.tipo === 'archivo')
       ? '<button type="button" class="tarjeta__escuchar" data-accion="escuchar-tarjeta" data-id="' + esc(s.id) + '">' + esc(t('salas_escuchar')) + '</button>'
       : '';
     return (
@@ -1430,7 +1432,8 @@
         : '';
       fuenteHtml =
         '<p class="sala-fila__fuente">' + esc(fuenteLegible(sala.fuente)) +
-          ' <button type="button" class="sala-fila__escuchar" data-accion="escuchar" data-id="' + esc(sala.id) + '">' +
+          ' <button type="button" class="sala-fila__escuchar" data-accion="escuchar" data-id="' + esc(sala.id) + '"' +
+            (sala.estado === 'corriendo' ? '' : ' disabled title="' + esc(t('salas_escuchar_solo_corriendo')) + '"') + '>' +
             esc(t('salas_escuchar')) + '</button>' +
           '<span id="audio-slot-' + cssEscape(sala.id) + '" class="audio-slot"></span>' +
           '<input type="range" class="sala-fila__volumen" min="0" max="100" value="70" data-accion="volumen" data-id="' + esc(sala.id) + '" aria-label="volumen">' +
@@ -1493,6 +1496,10 @@
     }
     if (elAvisoServicio) elAvisoServicio.hidden = true;
     var salas = salasEstado.salas;
+    salas.forEach(function (sl) {
+      var au = salasEstado.audios && salasEstado.audios[sl.id];
+      if (au && !au.paused && sl.estado !== 'corriendo') au.pause();
+    });
     if (!salasEstado.fuentes || !salasEstado.fuentes.idiomas) actualizarFuentes();
     if (!formPlegadoInicial) { formPlegadoInicial = true; if (salas.length) plegarNuevaSala(false); }
     if (elBtnNuevaSala) elBtnNuevaSala.hidden = false;
