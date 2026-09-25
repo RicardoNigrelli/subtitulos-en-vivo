@@ -19,13 +19,24 @@ from typing import Callable, Optional
 HISTORIAL_MAX = 1000
 
 
+_AVISO_DEV_TOKEN = False
+
+
 def token_hub() -> str:
+    global _AVISO_DEV_TOKEN
     try:
         from worker.gemini import _cargar_env
         _cargar_env()
     except Exception:
         pass
-    return os.environ.get("HUB_TOKEN") or "dev-token"
+    tok = os.environ.get("HUB_TOKEN")
+    if tok:
+        return tok
+    if not _AVISO_DEV_TOKEN:           # fallback de dev local, pero NO en silencio (una sola vez)
+        _AVISO_DEV_TOKEN = True
+        print("[emisor] AVISO: HUB_TOKEN no definido: se usa dev-token; el hub lo rechaza fuera de "
+              "localhost", file=sys.stderr, flush=True)
+    return "dev-token"
 
 
 def _log_stderr(s: str) -> None:

@@ -358,62 +358,91 @@ arranque simple, sin un operador dedicado mirando la mini PC) esto se mantiene o
   el panel remoto con token (`/panel/`, sección "Panel de monitoreo" más abajo), no parado junto al
   escenario.
 
-## Cómo escalar a más sesiones (R21, C3) — tres ejes
+**Latencia en producción (nivel pago):** con `TRADUCTOR_RPM`/`TRADUCTOR_TOPE_RPM` en los límites del proyecto y `VENTANA_S=2`, el original llega ~2,3 s después de que el orador empieza la frase (medido) y el traducido ~3,5–4,7 s (estimación con la llamada al modelo medida); detalle en [`docs/evidencia.md`](docs/evidencia.md), sección 1c.
 
-La fuerza bruta no alcanza: hay tres cuellos de botella distintos y cada uno se resuelve distinto.
+## Cómo escalar a más sesiones (R21, C3)
 
-1. **Sesiones contra la API de Gemini.** Cada sesión de transcripción en vivo consume el cupo de
-   *Transcribe Live* del proyecto de Google Cloud. Los límites de frecuencia (RPM/RPD/TPM) son **por
-   PROYECTO, no por key**: está documentado textual en
-   [ai.google.dev/gemini-api/docs/rate-limits](https://ai.google.dev/gemini-api/docs/rate-limits):
-   *"Rate limits are applied per project, not per API key"*. Por eso cada `GEMINI_API_KEY` adicional
-   tiene que ser de un **proyecto de Google Cloud distinto**: usar la misma cuenta con dos keys del
-   mismo proyecto NO suma cupo. Los valores concretos del nivel gratuito (20 000 TPM en
-   transcripción, 15 RPM / 500 RPD por modelo de texto) **no están publicados** en esa página ni en
-   ninguna documentación pública: son los que se vieron en la vista de límites de AI Studio de esta
-   cuenta el 24/09/2026 y pueden cambiar sin aviso — nunca "según la documentación". Igual con **7
-   sesiones Live concurrentes**: es una **medición propia** hecha antes del evento con esta cuenta
-   (no una cifra documentada por Google), y en esta entrega el MVP corrió **2 sesiones reales de
-   ~11 min en simultáneo** (tabla de arriba). Para más salas que las que entran en el nivel
-   gratuito: pasar a un **nivel pago** de Gemini (límites más altos, pero tampoco publicados —
-   verificar en AI Studio antes de presupuestar, no asumir un número), o repartir sesiones entre
-   **varios proyectos de Google Cloud** (cada uno con su propia `GEMINI_API_KEY` y su propio cupo;
-   cada sala elige la suya con `python -m worker.run --key GEMINI_API_KEY_B ...`, donde el valor es el
-   NOMBRE de la variable en `.env`). Con dos salas del mismo proyecto vimos más atascos del server que
-   con una (fila "Dos o más salas" de "Qué pasa si…"): escalonar el arranque 20–30 s o una key por sala.
-   El segundo modelo que traduce el texto (R19, no es la Live API) tiene, según lo visto en AI Studio
-   el 24/09 (no documentado, puede cambiar), 15 RPM por modelo en el nivel gratuito; el worker se
-   autoimpone un tope propio de **12 llamadas por modelo por minuto**, y desde el arreglo del 25/09
-   ese tope se cuenta **por (key, modelo)** — coherente con que el límite real de Google también es
-   por proyecto: dos salas con `--key` distinta (dos proyectos) tienen cada una su propio cupo de
-   12/modelo/60 s, aunque compartan el mismo archivo de reservas (`CUOTA_TEXTO_RESERVAS`) y la misma
-   máquina (detalle en
-   [`worker/README.md`](worker/README.md#llamadas-al-modelo-de-texto-entre-procesos-cuota-texto-reservasjsonl)).
-   Con lotes por defecto (`TRADUCTOR_LOTE_MAX=2 TRADUCTOR_LOTE_S=4`) entran **2 salas por key** en el
-   nivel gratuito; con lotes más grandes (`TRADUCTOR_LOTE_MAX=3 TRADUCTOR_LOTE_S=6`, ~2 s más de
-   atraso) entran **3 por key**. Corrida REAL de **5 salas simultáneas** (25/09 08:02 AR, 2 keys —
-   3 salas con la principal y 2 con `GEMINI_API_KEY_RESERVA`, arranques escalonados 5 s): las 5
-   conexiones Live abrieron y transcribieron (ningún `1011` por cupo); las 3 salas que compartían
-   key tradujeron 78 % / 74 % / 50 % de sus líneas, y las 2 con key propia el 100 %
-   ([`docs/evidencia.md`](docs/evidencia.md), sección "1b. Cinco salas reales en simultáneo"). Para
-   10 salas: 4–5 keys/proyectos (repartidas de a 2 o 3 por key según el lote) o nivel pago —
-   receta completa en [`worker/README.md`](worker/README.md#cómo-llegar-a-5-y-10-salas). Hay además
-   un *hedge*: si un lote no respondió en `TRADUCTOR_HEDGE_S` segundos (default 4, "0" lo apaga) se
-   lo manda también al otro modelo con cupo libre y gana el primero que conteste, sin quitarle cupo
-   a lotes nuevos (`TRADUCTOR_HEDGE_MARGEN`, default 3 lugares reservados).
-2. **Espectadores por sesión.** El hub hace fan-out por sesión + idioma, con una cola propia por
-   cliente: uno lento o colgado no afecta a los demás (se lo desconecta con `1013` y reconecta
-   solo). No gasta cupo de Gemini — es tráfico entre el hub y los navegadores. Medido con clientes
-   sintéticos:
-   ```bash
-   .venv/Scripts/python -m hub.carga --hub http://localhost:8100 --clientes 200
-   .venv/Scripts/python -m hub.carga --hub http://localhost:8100 --clientes 500
-   ```
-3. **Modo replay para demos sin cupo.** El mismo hub y la misma vista reproducen sesiones grabadas
-   (`fixtures/casetes/`, `python -m worker.replay`) con sus tiempos originales: se pueden mostrar
-   muchas salas en paralelo sin tocar la API. Es lo que permite `docker compose up` sin ninguna
-   credencial. Siempre rotulado `replay: true` en `/api/sesiones`, nunca presentado como ASR en
-   vivo (eje 3 de C3).
+Pensado para desplegarse con **nivel pago** de Gemini (o Vertex AI): los límites del nivel gratuito
+no son el techo de diseño, van como nota al final. Dos cuellos de botella son independientes entre sí
+y se atacan por separado: cuántas salas transcriben a la vez, y cuánta gente mira cada sala.
+
+### La receta para N salas: `ops/salas.py`
+
+Un proceso `worker.run` por sala, supervisado:
+
+```bash
+python -m ops.salas ops/salas.ejemplo.json --hub ws://localhost:8080/ingest --escalon-s 20
+```
+
+Lee un JSON con la lista de salas (id, título, idioma, fuente —archivo/URL/mic—, `key` opcional para
+repartir salas entre proyectos de Google Cloud, vocabulario opcional; formato completo en
+[`ops/salas.ejemplo.json`](ops/salas.ejemplo.json)) y por cada una lanza un `worker.run` con:
+
+- **arranque escalonado** (`--escalon-s`, 20 s por default: ver "por qué 20 s" abajo);
+- **reinicio automático con backoff** (1, 2, 4… s) si un worker muere solo, hasta `--reintentos`
+  (default 5) por sala — no reinicia si el worker terminó con `exit 0`;
+- **logs por sala** en `--logs-dir/<id>.log`;
+- **parada limpia**: Ctrl+C o `SIGTERM` para el supervisor manda la señal a TODOS los workers y
+  espera a que cierren antes de salir;
+- `--dry-run` imprime los comandos sin ejecutar nada; `--transporte casete:<archivo.jsonl>` (y
+  `--traducir-a none`) prueban el supervisor entero SIN gastar cuota (tabla de abajo, fila "10 salas
+  sin API").
+
+**Por qué 20 s de escalón.** En los pares de salas que vimos trabarse en esta vibeathon, las dos
+arrancaron en el mismo segundo y la traba del server empezó en los primeros segundos de la conexión
+(`worker/README.md`, "Varias salas a la vez: cuando el server se traba"); escalonar el arranque evita
+que dos sesiones atraviesen ese tramo inicial juntas, a costo cero (la sala siguiente empieza a
+transcribir 20 s más tarde). El mismo patrón aparece, de forma independiente, en la evidencia de
+terceros de abajo: sesiones creadas a ~1 s de distancia tardaron 10–12 s en la primera respuesta,
+contra 4–5 s cuando estaban espaciadas 12 s o más.
+
+Para **decenas de salas**: nivel pago de Gemini o Vertex AI / Firebase AI Logic (límites publicados
+abajo), repartir sesiones entre varios proyectos de Google Cloud si hace falta (`worker.run --key
+GEMINI_API_KEY_B ...`, el valor es el NOMBRE de la variable en `.env`; ya implementado y pasa por
+`ops/salas.py` vía el campo `key` de cada sala) y **una prueba de carga PROPIA antes del evento** con
+el modelo y la carga reales: ni el número de Google ni el de un tercero en un foro se sostienen sin
+volver a medir con lo que uno va a correr.
+
+### Límites publicados (terceros, no medidos por nosotros)
+
+- **Vertex AI / Firebase AI Logic** (Live API), límites oficiales de Google:
+  ["1,000 concurrent sessions per Firebase project"](https://firebase.google.com/docs/ai-logic/live-api/limits-and-specs)
+  y "4M tokens per minute" (misma página). La Gemini Developer API (la que usa este proyecto, con
+  `GEMINI_API_KEY`) no publica ese número: remite a los límites por nivel de la vista de rate limits
+  de AI Studio (ver la nota de nivel gratuito al final).
+- **Evidencia de terceros** (foro oficial de Google AI para desarrolladores; no es documentación de
+  Google ni una medición nuestra, la citamos porque es la única medición pública de concurrencia real
+  contra la Live API que encontramos):
+  - [Gemini 3.5 Live: measured concurrency, silent stalls (discuss.ai.google.dev, hilo 180489)](https://discuss.ai.google.dev/t/gemini-3-5-live-translate-preview-in-production-paid-tier-measured-concurrency-dashboard-409s-vs-real-409s-silent-stalls-and-session-birth-degradation-data-6-questions/180489):
+    60 sesiones concurrentes en un proyecto durante 10 min; congelamientos silenciosos de 8 a 51 s con
+    el socket todavía abierto; sesiones creadas a ~1 s de distancia tardaron 10–12 s en la primera
+    respuesta, contra 4–5 s cuando estaban espaciadas 12 s o más (de ahí el escalonado de arriba).
+  - [Gemini Live API Tier 2 project still limited to 50 concurrent connections (discuss.ai.google.dev, hilo 94634)](https://discuss.ai.google.dev/t/gemini-live-api-tier-2-project-still-limited-to-50-concurrent-connections-and-billed-as-tier-1/94634):
+    un proyecto Tier 2 reporta quedar limitado en la práctica a 50 conexiones concurrentes, facturado
+    igual como Tier 1.
+
+### Lo nuestro, medido, con su comando
+
+| Qué | Resultado | Comando |
+|---|---|---|
+| **5 salas reales** (ASR real, 2 proyectos/keys, 25/09 08:02 AR) | las 5 conexiones Live abrieron y transcribieron (ningún `1011` por cupo); traducción 78 % / 74 % / 50 % en las 3 salas que compartían key, 100 % en las 2 con key propia | [`docs/evidencia.md`](docs/evidencia.md), sección "1b. Cinco salas reales en simultáneo" |
+| **10 salas SIN API** (`ops/salas.py`, transporte de casete, sin traducción) | las 10 aparecen en `/api/sesiones`; matar un worker a mano (`Stop-Process`/`kill`) lo reinicia solo con backoff, log de `intento 1` y `intento 2` en su archivo | `python -m ops.salas <10 salas, formato de ops/salas.ejemplo.json> --hub ws://127.0.0.1:PUERTO/ingest --transporte casete:fixtures/casetes/evidencia-25-09/video-vivo-en-050903.jsonl --traducir-a none --escalon-s 2` (CPU/RAM y el log de reinicio en el reporte del bloque, no versionado por tamaño — ver "Verificación" más abajo) |
+| **20 sesiones en modo replay** | sin problemas de memoria del hub | `qa/smoke.py --sesiones 20 --replay <lista de .jsonl de fixtures/casetes/ separados por coma> --tag veinte-salas` |
+| **1000 espectadores en un hub** | sin pérdidas ni cierres | `.venv/Scripts/python -m hub.carga --hub http://localhost:8100 --clientes 1000` |
+
+El hub hace fan-out por sesión + idioma con una cola propia por cliente (uno lento o colgado no afecta
+a los demás: se lo desconecta con `1013` y reconecta solo) y no gasta cupo de Gemini — es tráfico
+entre el hub y los navegadores, no llamadas a la API. El **modo replay** (`fixtures/casetes/`, `python
+-m worker.replay`, lo mismo que usa `docker compose up` sin credenciales) reproduce sesiones grabadas
+con sus tiempos originales para mostrar muchas salas sin tocar la API; siempre rotulado `replay: true`
+en `/api/sesiones`, nunca presentado como ASR en vivo.
+
+El hub es **un único proceso Python en un núcleo** (estado en memoria, sin forma de repartirlo entre
+CPUs ni entre máquinas): ese, y no la API de Gemini, es el techo de espectadores/salas por hub. Receta
+para pasarlo (no implementada en esta entrega): un **hub por grupo de salas** — las salas son
+independientes entre sí (cada una es su propio `session_id`), así que repartirlas entre varios hubs
+(por ejemplo detrás de un balanceador que rutee por sala) no requiere tocar el protocolo; sólo hace
+falta cuando una sola sala pasa de ~1000 espectadores o el número de salas satura un solo proceso.
 
 Además, cada sesión Live se **rota sola, de forma transparente para la audiencia**, por cinco causas
 distintas: el servidor cierra la conexión, queda "atascada" (atraso sostenido o muda, sin texto por
@@ -426,13 +455,14 @@ proveedor**. Corrida real de referencia (2 × ~11 min, mismo comando citado en "
 números de R21"): 5 rotaciones (3 en la sesión EN, 2 en la ES; todas preventiva o cierre en esa
 corrida en particular), cobertura 1,0 en las dos sesiones, sin ningún tramo con voz y sin texto.
 
-El hub es **un único proceso Python en un núcleo** (estado en memoria, sin forma de repartirlo entre
-CPUs ni entre máquinas): eso, y no la API de Gemini, es el techo del eje 2. Medido: 1000 espectadores
-sintéticos sobre UNA sala, sin pérdidas ni cierres (`hub.carga --clientes 1000`, comando de arriba); y
-20 sesiones en simultáneo en modo replay sin problemas de memoria del hub (`qa/smoke.py --sesiones 20
---replay <lista de .jsonl de fixtures/casetes/ separados por coma> --tag veinte-salas`, reutiliza los
-casetes existentes para tener 20 sesiones aunque haya menos de 20 archivos). Detalle de CPU/RAM en los
-reportes de bloque del equipo (no versionados por tamaño, ver "Verificación" más abajo).
+> **Para probar con el nivel gratuito** (no es el despliegue recomendado, sirve para desarrollar sin
+> pagar): esta cuenta midió **7 sesiones Live concurrentes** antes del evento (medición propia, no
+> documentada por Google, puede cambiar) y, con el tope propio de 12 llamadas/modelo/60 s del
+> traductor, **2 salas por proyecto** traducen completo con los lotes por default (3 con lotes más
+> grandes, `TRADUCTOR_LOTE_MAX=3 TRADUCTOR_LOTE_S=6`, ~2 s más de atraso). Los valores concretos del
+> nivel gratuito (RPM/RPD/TPM) no están publicados en ninguna documentación: son los vistos en la
+> vista de límites de AI Studio de esta cuenta el 24/09/2026. Receta completa (reparto de salas y
+> keys por nivel gratuito) en [`worker/README.md`](worker/README.md#cómo-llegar-a-5-y-10-salas).
 
 ## Panel de monitoreo (R8e)
 
@@ -477,6 +507,7 @@ reportes de bloque del equipo, no versionados por tamaño — lo reproducible es
   las corridas fuera de la media con su causa medida; cada número con su comando. Casetes en `fixtures/casetes/evidencia-25-09/`.
 - [`docs/video/r14/`](docs/video/r14/README.md) — subtítulos del video hechos con el propio traductor (R14): scripts, entradas y SRT.
 - [`worker/README.md`](worker/README.md) — CLI completa del worker (`worker.run`, `worker.replay`, importador, cuota, medición de traducción), variables de entorno y formato del casete de tres capas.
+- `python -m ops.salas --help` y [`ops/salas.ejemplo.json`](ops/salas.ejemplo.json) — supervisor de N salas (ver "Cómo escalar" arriba): arranque escalonado, reinicio con backoff, `--dry-run`, `--transporte casete:...` para probar sin API.
 - [`docs/costos.md`](docs/costos.md) — estimación de costo por minuto de audio y por sesión.
 - [`hub/README.md`](hub/README.md) y [`contracts/README.md`](contracts/README.md) — protocolo y
   contrato de mensajes entre worker, hub y la vista.

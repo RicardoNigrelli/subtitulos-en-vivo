@@ -47,7 +47,34 @@ body {
   row-gap: var(--esp-2);
 }
 
-.cabecera__identidad { justify-content: space-between; }
+.cabecera__identidad { justify-content: space-between; flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------- switch Informativa / Técnica
+   Segmented control sobrio (borde fino, sin relleno de color salvo el estado activo con la MISMA
+   superficie que ya usa el resto del panel — nada de pastillas/gradientes, corrección de dirección
+   de Ricardo ya aplicada al resto del panel). */
+.selector-vista {
+  display: inline-flex;
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-chico);
+  overflow: hidden;
+  flex: none;
+}
+.selector-vista button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--color-texto-secundario);
+  font: inherit;
+  font-size: var(--tam-chico);
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.selector-vista button + button { border-left: 1px solid var(--color-borde); }
+.selector-vista button:hover { color: var(--color-texto); background: var(--color-superficie-alta); }
+.selector-vista button[aria-selected="true"] { color: var(--color-texto); background: var(--color-superficie-alta); }
+.selector-vista button:focus-visible { outline: 2px solid var(--color-link); outline-offset: -2px; }
 
 .cabecera__titulo {
   margin: 0;
@@ -150,7 +177,7 @@ body {
 .token-caja button:hover { background: var(--color-superficie-alta); }
 .token-caja button:focus-visible { outline: 2px solid var(--color-link); outline-offset: 1px; }
 
-.toggle-pruebas {
+.toggle-pruebas, .toggle-sonido {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -159,6 +186,11 @@ body {
   cursor: pointer;
   user-select: none;
 }
+
+/* Sólo una "?" a la vez: la de jerga técnica en vista Técnica, la de lenguaje llano en Informativa
+   (mismo contenido semántico, texto distinto — nunca las dos abiertas compitiendo). */
+body[data-vista="informativa"] .ayuda-tecnica { display: none; }
+body[data-vista="tecnica"] .ayuda-informativa { display: none; }
 
 /* ---------------------------------------------------------------- ayuda ("?" desplegable)
    El párrafo largo de explicación vive acá adentro, colapsado por defecto (nativo <details>, sin
@@ -205,6 +237,98 @@ body {
   display: none;
 }
 .aviso.visible { display: block; }
+
+/* ---------------------------------------------------------------- vista INFORMATIVA / TÉCNICA
+   Sólo se muestra una de las dos secciones a la vez, según body[data-vista]. La técnica es la tabla
+   de siempre (min-width 1500px, scroll horizontal propio) sin cambios de fondo. */
+body[data-vista="tecnica"] .vista-informativa { display: none; }
+body[data-vista="informativa"] .vista-tecnica { display: none; }
+
+.vista-tecnica { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+.vista-informativa {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--esp-3) var(--esp-4);
+}
+
+.resumen-informativa {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--esp-4);
+  padding-bottom: var(--esp-3);
+  margin-bottom: var(--esp-3);
+  border-bottom: 1px solid var(--color-borde);
+  font-size: var(--tam-chico);
+  color: var(--color-texto-secundario);
+}
+.resumen-informativa b { color: var(--color-texto); font-size: var(--tam-titulo); font-weight: 600; margin-right: 4px; }
+#resumen-atender.hay { color: var(--color-error); }
+
+.tarjetas-vacio { color: var(--color-texto-secundario); font-size: var(--tam-chico); }
+.tarjetas-vacio[hidden] { display: none; }
+
+/* Tarjetas: una fila (grid) por sala en desktop, apiladas en columna angosta (mobile ya lo hace
+   solo, grid-template-columns con minmax se encarga). Franja de color a la izquierda = ESTADO,
+   mismo patrón "borde, nunca la tarjeta entera pintada" que ya usa la tabla técnica; el texto+icono
+   de adentro siguen siendo la fuente de verdad del estado (skill ui-subtitulos: nunca sólo color). */
+.tarjetas {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--esp-3);
+}
+.tarjeta {
+  background: var(--color-superficie);
+  border: 1px solid var(--color-borde);
+  border-left: 3px solid var(--color-borde);
+  border-radius: var(--radio-medio);
+  padding: var(--esp-3);
+}
+.tarjeta--mudo { border-left-color: var(--color-error); }
+.tarjeta--rotacion { border-left-color: var(--color-atencion); }
+.tarjeta--traduccion { border-left-color: var(--color-aviso); }
+.tarjeta--reconectando { border-left-color: var(--color-aviso); }
+.tarjeta--sana { border-left-color: var(--color-exito); }
+.tarjeta--inactiva { border-left-color: var(--color-texto-silenciado); }
+.tarjeta--terminada { border-left-color: var(--color-texto-silenciado); }
+
+.tarjeta__cabecera {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--esp-2);
+  margin-bottom: 4px;
+}
+.tarjeta__nombre { margin: 0; font-size: var(--tam-cuerpo); font-weight: 600; color: var(--color-texto); }
+.tarjeta__idioma { margin: 0 0 var(--esp-2); font-size: var(--tam-chico); color: var(--color-texto-secundario); }
+
+.tarjeta__estado {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px;
+  font-size: var(--tam-cuerpo);
+  font-weight: 600;
+  color: var(--color-texto);
+}
+.tarjeta--mudo .tarjeta__estado { color: var(--color-error); }
+.tarjeta--rotacion .tarjeta__estado { color: var(--color-atencion); }
+.tarjeta--traduccion .tarjeta__estado { color: var(--color-aviso); }
+.tarjeta--reconectando .tarjeta__estado { color: var(--color-aviso); }
+.tarjeta--sana .tarjeta__estado { color: var(--color-exito); }
+.tarjeta--inactiva .tarjeta__estado, .tarjeta--terminada .tarjeta__estado { color: var(--color-texto-secundario); font-weight: 400; }
+.tarjeta__icono { flex: none; font-size: 14px; line-height: 1; }
+
+.tarjeta__accion {
+  margin: 0 0 var(--esp-2);
+  padding: 6px 8px;
+  background: var(--color-superficie-alta);
+  border-radius: var(--radio-chico);
+  font-size: var(--tam-chico);
+  color: var(--color-texto-secundario);
+}
+.tarjeta__pie { margin: 0; font-size: var(--tam-diminuto); color: var(--color-texto-silenciado); }
 
 /* ---------------------------------------------------------------- tabla */
 .envoltorio-tabla {
@@ -353,4 +477,18 @@ table.panel tbody tr[data-estado="mudo"] .sparkline polyline { stroke: var(--col
 @media (max-width: 900px) {
   .cabecera__identidad { justify-content: flex-start; }
   .cabecera__titulo { flex-basis: 100%; }
+}
+
+/* ---------------------------------------------------------------- informativa sin jerga + teléfono
+   El pie (fuente, refrescos, override de hub) es información técnica: sólo en la vista técnica.
+   En pantallas angostas la página entera scrollea (no un recuadro interno chico debajo de la
+   cabecera) y la cabecera no desborda. */
+body[data-vista="informativa"] .pie { display: none; }
+@media (max-width: 600px) {
+  html, body { height: auto; }
+  body { display: block; }
+  .vista-informativa { overflow: visible; padding: var(--esp-3) var(--esp-3); }
+  .cabecera { max-width: 100%; box-sizing: border-box; }
+  .cabecera__subtitulo { display: none; }
+  .cabecera__estado, .cabecera__controles { flex-wrap: wrap; }
 }

@@ -54,6 +54,35 @@ proceso no se veian y se podia pasar de 15 RPM por modelo):
   iniciadas, sumando procesos. El token bucket y el tope duro por proceso siguen igual.
 - Lote = TRADUCTOR_LOTE_MAX=2 ventanas o TRADUCTOR_LOTE_S=4 s (B4-B7: 5 s).
 
+FINAL (25/09, cola larga: en las tomas reales la traduccion llego p50 3,7 s / p95 12,8 s despues de su
+linea; la cola eran 5xx y timeouts de UN modelo):
+- PEDIDO CUBIERTO ("hedge"): si un lote no respondio en TRADUCTOR_HEDGE_S (default 4,0 s), se dispara
+  el MISMO prompt al OTRO modelo sano, SOLO si ese modelo tiene cupo YA (token del limitador + reserva
+  entre procesos; no espera). Gana la primera respuesta valida; la otra llamada se cancela (queda en el
+  log con estado "cancelado": el server la recibio y cuenta para el RPD). Si una de las dos falla, se
+  espera a la otra. Sin otro modelo sano (o sin cupo en el otro, dejando TRADUCTOR_HEDGE_MARGEN=3
+  lugares libres en su ventana de 60 s para lotes nuevos) no se cubre. TRADUCTOR_HEDGE_S=0
+  apaga la cobertura (comportamiento anterior).
+- Reservas POR KEY: cada linea de reserva lleva `key` (NOMBRE de la variable, nunca el valor) y el
+  tope se cuenta por (key, modelo). Dos salas con --key distinta (proyectos distintos) no se limitan
+  entre si aunque compartan el archivo; dos con la misma key si. Lineas viejas sin `key` cuentan como
+  GEMINI_API_KEY.
+
+LATENCIA (25/09: el traducido llegaba ~7 s detras del orador; texto->traduccion p50 3,8 s / p95 12,8 s,
+la mitad era la espera del lote):
+- TRADUCTOR_MODO=inmediato (default): cada `text` se traduce SOLO y YA si el modelo menos cargado de la
+  key tiene <= TRADUCTOR_INMEDIATO_MAX=6 reservas en los ultimos 60 s (tope 12). Si no hay ese margen
+  cae al lote normal (2 textos / 4 s) y, con > TRADUCTOR_APRETADO_MAX=9 o con un lote de la sala
+  ESPERANDO cupo en el limitador > TRADUCTOR_CONGESTION_S=1 s (congestion), al lote de 3 textos / 8 s.
+  Umbrales 6/9 y no 9/11 (test_inmediato.py con reloj falso, cadencia real, 240 s): con 9/11, 1 sala
+  por key sale 57/67 inmediato pero 3 salas por key bajan la cobertura a 0,688 (lote de hoy: 0,769);
+  con 6/9, 1 sala 41/67 inmediato (p50 1,4 s vs 3,5 s en lote) y 3 salas 0,804.
+  El conteo lo refresca el vigia cada 0,2 s EN UN HILO (lee el archivo de reservas con lock); el tope
+  lo sigue imponiendo el limitador (token bucket + reserva entre procesos): el modo solo decide el
+  tamano del lote. TRADUCTOR_MODO=lote = comportamiento anterior (2/4 s; 3/8 s con un solo modelo).
+- Modelo por PREFERENCIA (3.5-flash-lite primero, medido mas rapido), no rotacion (TRADUCTOR_ROTAR=1
+  la restituye). Pedido cubierto a los TRADUCTOR_HEDGE_S=2,5 s (antes 4,0).
+
     python -m worker.traductor --listar                        # ids exactos (models.list)
     python -m worker.traductor --probar "Hello world" --a es   # UNA llamada real (gasta 1 RPD)
 """
@@ -73,13 +102,23 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Awaitable, Callable, Optional, Protocol
 
+def _env_num_pre(nombre: str, defecto: float) -> float:
+    try:
+        return float(os.environ.get(nombre, defecto))
+    except ValueError:
+        return float(defecto)
+
+
 RAIZ = Path(__file__).resolve().parent.parent
 LOG_TEXTO = Path(os.environ.get("CUOTA_TEXTO_LOG", RAIZ / "reportes" / "cuota-texto.log"))
 RESERVAS_TEXTO = Path(os.environ.get("CUOTA_TEXTO_RESERVAS",
                                      RAIZ / "reportes" / "cuota-texto-reservas.jsonl"))
 TIMEOUT_S = 20.0
 ESPERA_CUPO_S = 15.0      # un lote que no consigue cupo en 15 s sale ok:false (ya llegaria tarde)
-RPM = 12
+# Topes propios por (key, modelo). Defaults = nivel GRATUITO (15 RPM por modelo, vistos en AI Studio el 24/09).
+# En nivel PAGO subirlos con los valores de la vista de limites de AI Studio del proyecto, p. ej.
+# TRADUCTOR_RPM=300 TRADUCTOR_TOPE_RPM=400: con cupo holgado cada linea se traduce sola y al instante.
+RPM = _env_num_pre("TRADUCTOR_RPM", 12)
 CAPACIDAD = 2
 RPD_TOPE = int(os.environ.get("TRADUCTOR_RPD_TOPE", 480))
 BACKOFF_MIN = 1.0
@@ -102,15 +141,32 @@ FALLAS_CORTE = int(_env_num("TRADUCTOR_FALLAS_CORTE", 3))
 CORTE_S = _env_num("TRADUCTOR_CORTE_S", 60.0)
 CORTE_MAX_S = _env_num("TRADUCTOR_CORTE_MAX_S", 480.0)
 CUENTAN_PARA_CORTE = ("5xx", "timeout", "429")
-RPM_SOLO = 14
+RPM_SOLO = _env_num("TRADUCTOR_RPM_SOLO", max(RPM + 2, 14) if RPM > 12 else 14)
 CAPACIDAD_SOLO = 1
-TOPE_RPM = 15            # free tier: 15 RPM por modelo -> nunca mas de 15 llamadas en 60 s
+TOPE_RPM = int(_env_num("TRADUCTOR_TOPE_RPM", 15))  # free tier: 15 RPM por modelo -> nunca mas de 15 en 60 s
 LOTE_MAX_SOLO = 3
 LOTE_S_SOLO = 8.0
 MARCA_EVENTO = "# cortacircuito"
 LOTE_MAX = int(_env_num("TRADUCTOR_LOTE_MAX", 2))
 LOTE_S = _env_num("TRADUCTOR_LOTE_S", 4.0)
+HEDGE_S = _env_num("TRADUCTOR_HEDGE_S", 2.5)       # LATENCIA 25/09: 4,0 -> 2,5 s
+# el pedido cubierto solo reserva si el otro modelo tiene al menos HEDGE_MARGEN lugares libres en la
+# ventana de 60 s (de esa key): con el cupo casi lleno, cubrir le quita lugar a lotes nuevos
+# (simulacion: 2 salas / 1 key con cobertura 0,97 con hedge sin margen vs 1,0 sin hedge)
+HEDGE_MARGEN = int(_env_num("TRADUCTOR_HEDGE_MARGEN", 3))
+KEY_DEFAULT = "GEMINI_API_KEY"
 VENTANA_RESERVAS_S = 60.0
+# LATENCIA 25/09: traduccion INMEDIATA ADAPTATIVA (ver docstring). TRADUCTOR_MODO=inmediato|lote.
+MODO = (os.environ.get("TRADUCTOR_MODO") or "inmediato").strip().lower()
+# inmediato si el modelo menos cargado de ESTA key tiene <= INMEDIATO_MAX reservas en 60 s (tope 12);
+# si no, lote normal (2/4 s); con > APRETADO_MAX, lote solo (3/8 s).
+# por defecto escalan con RPM (6 y 9 con el tope gratuito de 12)
+INMEDIATO_MAX = int(_env_num("TRADUCTOR_INMEDIATO_MAX", round(RPM * 0.5)))
+APRETADO_MAX = int(_env_num("TRADUCTOR_APRETADO_MAX", round(RPM * 0.75)))
+# orden de PREFERENCIA (el primero de la lista, 3.5-flash-lite, medido mas rapido) en vez de rotar;
+# TRADUCTOR_ROTAR=1 vuelve a la rotacion 3.5 <-> 3.1 de antes.
+ROTAR = os.environ.get("TRADUCTOR_ROTAR", "0") == "1"
+CONGESTION_S = _env_num("TRADUCTOR_CONGESTION_S", 1.0)
 
 
 class LockArchivo:
@@ -166,8 +222,9 @@ class Reservas:
     COLA_BYTES = 256 * 1024          # 15 RPM x 2 modelos x varios procesos entra de sobra
 
     def __init__(self, ruta: Path = RESERVAS_TEXTO, ventana_s: float = VENTANA_RESERVAS_S,
-                 reloj: Callable[[], float] = time.time, etiqueta: str = ""):
+                 reloj: Callable[[], float] = time.time, etiqueta: str = "", key: str = KEY_DEFAULT):
         self.ruta = Path(ruta)
+        self.key = key or KEY_DEFAULT          # NOMBRE de la variable de la key, nunca el valor
         self.lock = self.ruta.with_name(self.ruta.name + ".lock")
         self.ventana_s = ventana_s
         self.reloj = reloj
@@ -193,15 +250,19 @@ class Reservas:
                 continue                  # primera linea cortada por la cola, o basura
         return out
 
+    def _mia(self, d: dict, modelo: str) -> bool:
+        """La reserva cuenta para (esta key, modelo). Sin campo key (lineas previas): GEMINI_API_KEY."""
+        return d.get("modelo") == modelo and (d.get("key") or KEY_DEFAULT) == self.key
+
     def contar(self, modelo: str) -> int:
         with LockArchivo(self.lock):
-            return sum(1 for d in self._recientes(self.reloj()) if d.get("modelo") == modelo)
+            return sum(1 for d in self._recientes(self.reloj()) if self._mia(d, modelo))
 
     def espera(self, modelo: str, limite: int) -> float:
         """Segundos hasta que se libere un lugar para `modelo` (0 si ya hay)."""
         with LockArchivo(self.lock):
             ahora = self.reloj()
-            ts = sorted(float(d["t"]) for d in self._recientes(ahora) if d.get("modelo") == modelo)
+            ts = sorted(float(d["t"]) for d in self._recientes(ahora) if self._mia(d, modelo))
         if len(ts) < limite:
             return 0.0
         return max(0.0, ts[len(ts) - limite] + self.ventana_s - ahora)
@@ -209,13 +270,14 @@ class Reservas:
     def reservar(self, modelo: str, limite: int) -> bool:
         with LockArchivo(self.lock):
             ahora = self.reloj()
-            n = sum(1 for d in self._recientes(ahora) if d.get("modelo") == modelo)
+            n = sum(1 for d in self._recientes(ahora) if self._mia(d, modelo))
             if n >= limite:
                 self.n_rechazadas += 1
                 return False
             linea = json.dumps({"t": round(ahora, 3),
                                 "hora": datetime.fromtimestamp(ahora).strftime(FMT),
-                                "modelo": modelo, "pid": os.getpid(), "etiqueta": self.etiqueta,
+                                "modelo": modelo, "key": self.key, "pid": os.getpid(),
+                                "etiqueta": self.etiqueta,
                                 "en_ventana": n + 1, "limite": int(limite)}, ensure_ascii=False)
             with open(self.ruta, "a", encoding="utf-8") as f:
                 f.write(linea + "\n")
@@ -371,7 +433,8 @@ class Limitador:
                  corte_max_s: float = CORTE_MAX_S, rpm_solo: float = RPM_SOLO,
                  capacidad_solo: float = CAPACIDAD_SOLO, tope_rpm: int = TOPE_RPM,
                  on_evento: Optional[Callable[[str], None]] = None,
-                 reservas="auto"):
+                 reservas="auto", key: str = KEY_DEFAULT, rotar: Optional[bool] = None):
+        self.rotar = ROTAR if rotar is None else bool(rotar)
         self.rpm = rpm
         self.rate = rpm / 60.0
         self.cap = capacidad
@@ -397,9 +460,9 @@ class Limitador:
             if log is None:
                 reservas = None
             elif Path(log) == LOG_TEXTO:
-                reservas = Reservas(RESERVAS_TEXTO)
+                reservas = Reservas(RESERVAS_TEXTO, key=key)
             else:
-                reservas = Reservas(Path(log).with_name("cuota-texto-reservas.jsonl"))
+                reservas = Reservas(Path(log).with_name("cuota-texto-reservas.jsonl"), key=key)
         self.reservas: Optional[Reservas] = reservas
         if log is not None:
             d0 = inicio_dia()
@@ -502,7 +565,8 @@ class Limitador:
             if not sanos:
                 return None, "sin_modelo"
             rpm, _cap = self.modo()
-            rot = [n for n in self.orden[self._rr:] + self.orden[:self._rr] if n in sanos]
+            rr = self._rr if self.rotar else 0           # sin rotar: orden de preferencia
+            rot = [n for n in self.orden[rr:] + self.orden[:rr] if n in sanos]
             cands = [n for n in rot if n != evitar] + [n for n in rot if n == evitar]
             esperas = sorted((self.espera(n), i, n) for i, n in enumerate(cands))
             w = esperas[0][0]
@@ -526,6 +590,36 @@ class Limitador:
             if t + w > t_lim:
                 return None, "sin_cupo"
             await self.dormir(w)
+
+    def carga(self, modelo: str) -> int:
+        """Llamadas de `modelo` en los ultimos 60 s PARA ESTA KEY: reservas entre procesos (con lock:
+        llamar desde un hilo) o, sin reservas, los tokens tomados por este proceso."""
+        if self.reservas is not None:
+            try:
+                return self.reservas.contar(modelo)
+            except TimeoutError:
+                return 10 ** 6            # lock trabado: sin dato, no arriesgar inmediato
+        e = self.m[modelo]
+        t = self.reloj()
+        return sum(1 for x in e.llamadas if t - x < 60.0)
+
+    async def tomar_alterno(self, modelo: str) -> Optional[str]:
+        """FINAL (hedge): OTRO modelo sano con cupo YA (token + tope duro + reserva entre procesos), o
+        None. No espera: un pedido cubierto que tiene que esperar cupo ya no sirve."""
+        rpm, _cap = self.modo()
+        limite = rpm - HEDGE_MARGEN
+        if limite < 1:
+            return None
+        for n in self.sanos():
+            if n == modelo or self.espera(n) > 0:
+                continue
+            if await self._reservar_async(n, limite):
+                e = self.m[n]
+                e.tokens -= 1
+                e.hoy += 1
+                e.llamadas.append(self.reloj())
+                return n
+        return None
 
     async def tomar(self, evitar: Optional[str] = None, espera_max: float = 60.0) -> Optional[str]:
         """Modelo a usar (consume un token) o None si ninguno queda libre dentro de espera_max."""
@@ -644,11 +738,30 @@ class Traductor:
                  reintentos: int = 1,
                  lote_solo: tuple[int, float] = (LOTE_MAX_SOLO, LOTE_S_SOLO),
                  on_resultado: Optional[Callable[[ResultadoLote], None]] = None,
-                 logger: Callable[[str], None] = lambda s: print(s, file=sys.stderr, flush=True)):
+                 logger: Callable[[str], None] = lambda s: print(s, file=sys.stderr, flush=True),
+                 hedge_s: Optional[float] = None, key: Optional[str] = None,
+                 modo: Optional[str] = None, inmediato_max: int = INMEDIATO_MAX,
+                 apretado_max: int = APRETADO_MAX, reloj: Callable[[], float] = time.time):
         self.de, self.a = de, a
+        self.modo = (modo or MODO)
+        if self.modo not in ("inmediato", "lote"):
+            raise ValueError(f"TRADUCTOR_MODO invalido: {self.modo!r} (inmediato|lote)")
+        self.inmediato_max = int(inmediato_max)
+        self.apretado_max = int(apretado_max)
+        self.reloj = reloj
+        self.carga_min = 0               # min de reservas en 60 s entre modelos activos (refresca el vigia)
+        self.nivel = "inmediato" if self.modo == "inmediato" else "lote"
+        self.textos_por_nivel: dict[str, int] = {}
+        self.esperando_cupo: dict = {}   # id -> t de inicio: lotes de esta sala esperando cupo (congestion)
         self.tr = transporte if transporte is not None else TransporteGenAI()
         self.modelos = modelos or modelos_por_defecto()
-        self.lim = limitador or Limitador(self.modelos, log=log)
+        # reservas por (key, modelo): la key es la del transporte (--key de la sala)
+        self.key = key or getattr(self.tr, "nombre_key", None) or KEY_DEFAULT
+        self.lim = limitador or Limitador(self.modelos, log=log, key=self.key)
+        self.hedge_s = HEDGE_S if hedge_s is None else float(hedge_s)
+        self.n_cubiertos = 0             # lotes a los que se les disparo el pedido cubierto
+        self.n_cubiertos_ganados = 0     # lotes en los que el pedido cubierto respondio primero
+        self.n_cancelados = 0            # llamadas canceladas por perder la carrera
         self.log = log
         self.timeout_s = timeout_s
         self._lotes_adaptativos = lotes is None      # B5: con un lote propio no se toca
@@ -703,33 +816,24 @@ class Traductor:
         t_lote = time.monotonic()
         previo = None
         for _ in range(1 + self.reintentos):
-            modelo, motivo = await self.lim.elegir(evitar=previo, espera_max=self.espera_cupo_s)
+            clave = object()
+            self.esperando_cupo[clave] = self.reloj()
+            try:
+                modelo, motivo = await self.lim.elegir(evitar=previo, espera_max=self.espera_cupo_s)
+            finally:
+                self.esperando_cupo.pop(clave, None)
             if modelo is None:            # "sin_modelo" (ninguno sano: sin llamar) o "sin_cupo"
                 intentos.append({"modelo": None, "estado": motivo, "ms": 0})
                 if motivo == "sin_modelo":
                     self.n_sin_modelo += 1
                 break
-            t0 = time.monotonic()
-            try:
-                raw = await asyncio.wait_for(self.tr.generar(modelo, prompt), self.timeout_s)
-                arr = parsear(raw, len(textos))
-                ms = int((time.monotonic() - t0) * 1000)
-                if arr is not None:
-                    self._anotar(modelo, len(textos), "ok", ms)
-                    self.lim.exito(modelo)
-                    intentos.append({"modelo": modelo, "estado": "ok", "ms": ms})
-                    return ResultadoLote([{"seq": s, "text": x, "ok": True} for s, x in zip(seqs, arr)],
-                                         modelo, int((time.monotonic() - t_lote) * 1000), intentos)
-                estado = "cantidad"
-            except asyncio.TimeoutError:
-                ms, estado = int((time.monotonic() - t0) * 1000), "timeout"
-                self.n_timeout += 1
-            except Error429:
-                ms, estado = int((time.monotonic() - t0) * 1000), "429"
-            except Error5xx:
-                ms, estado = int((time.monotonic() - t0) * 1000), "5xx"
-            except Exception as e:
-                ms, estado = int((time.monotonic() - t0) * 1000), f"error:{type(e).__name__}"
+            modelo, arr, estado, ms = await self._llamar_cubierto(modelo, prompt, len(textos), intentos)
+            if arr is not None:
+                self._anotar(modelo, len(textos), "ok", ms)
+                self.lim.exito(modelo)
+                intentos.append({"modelo": modelo, "estado": "ok", "ms": ms})
+                return ResultadoLote([{"seq": s, "text": x, "ok": True} for s, x in zip(seqs, arr)],
+                                     modelo, int((time.monotonic() - t_lote) * 1000), intentos)
             self._anotar(modelo, len(textos), estado, ms)
             espera = self.lim.fallo(modelo, estado) if estado != "cantidad" else 0.0
             intentos.append({"modelo": modelo, "estado": estado, "ms": ms, "backoff_s": espera})
@@ -743,23 +847,130 @@ class Traductor:
                              intentos[-1]["modelo"] if intentos else None,
                              int((time.monotonic() - t_lote) * 1000), intentos)
 
+    async def _intento(self, modelo: str, prompt: str, n: int) -> tuple:
+        """UNA llamada: (modelo, arr | None, estado, ms). No anota ni toca el limitador."""
+        t0 = time.monotonic()
+        try:
+            raw = await asyncio.wait_for(self.tr.generar(modelo, prompt), self.timeout_s)
+            arr = parsear(raw, n)
+            estado = "ok" if arr is not None else "cantidad"
+        except asyncio.TimeoutError:
+            arr, estado = None, "timeout"
+            self.n_timeout += 1
+        except Error429:
+            arr, estado = None, "429"
+        except Error5xx:
+            arr, estado = None, "5xx"
+        except Exception as e:
+            arr, estado = None, f"error:{type(e).__name__}"
+        return modelo, arr, estado, int((time.monotonic() - t0) * 1000)
+
+    def _lateral(self, r: tuple, n: int, intentos: list) -> None:
+        """Una llamada de la carrera que NO decide el lote (fallo con la otra en vuelo): se anota y
+        cuenta para el cortacircuito igual que siempre."""
+        modelo, _arr, estado, ms = r
+        self._anotar(modelo, n, estado, ms)
+        espera = self.lim.fallo(modelo, estado) if estado != "cantidad" else 0.0
+        intentos.append({"modelo": modelo, "estado": estado, "ms": ms, "backoff_s": espera,
+                         "cubierto": True})
+        self.logger(f"[traductor] {modelo} {estado} en {ms} ms (lote de {n}, carrera cubierta)")
+
+    async def _llamar_cubierto(self, modelo: str, prompt: str, n: int, intentos: list) -> tuple:
+        """FINAL: la llamada del lote con PEDIDO CUBIERTO (ver docstring del modulo). Devuelve el
+        resultado que decide el lote; las demas llamadas de la carrera quedan anotadas en `intentos`."""
+        ta = asyncio.create_task(self._intento(modelo, prompt, n))
+        if self.hedge_s <= 0:
+            return await ta
+        pend = {ta}
+        t_a = time.monotonic()
+        try:
+            done, _ = await asyncio.wait(pend, timeout=self.hedge_s)
+            if done:
+                return ta.result()
+            otro = await self.lim.tomar_alterno(modelo)
+            if otro is None or ta.done():
+                # sin alterno sano con cupo (o A respondio mientras se reservaba: esa reserva se pierde)
+                return await ta
+            self.n_cubiertos += 1
+            self.logger(f"[traductor] {modelo} sin respuesta en {self.hedge_s:g} s: pedido cubierto a {otro}")
+            t_b = time.monotonic()
+            tb = asyncio.create_task(self._intento(otro, prompt, n))
+            pend = {ta, tb}
+            while True:
+                done, pend = await asyncio.wait(pend, return_when=asyncio.FIRST_COMPLETED)
+                res = [t.result() for t in done]
+                oks = [r for r in res if r[1] is not None]
+                malos = [r for r in res if r[1] is None]
+                if oks:
+                    for r in malos:
+                        self._lateral(r, n, intentos)
+                    for t in pend:
+                        t.cancel()
+                        try:
+                            await t
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        perdedor = otro if t is tb else modelo
+                        ms = int((time.monotonic() - (t_b if t is tb else t_a)) * 1000)
+                        self._anotar(perdedor, n, "cancelado", ms)
+                        self.n_cancelados += 1
+                        intentos.append({"modelo": perdedor, "estado": "cancelado", "ms": ms,
+                                         "cubierto": True})
+                    pend = set()
+                    if oks[0][0] == otro:
+                        self.n_cubiertos_ganados += 1
+                    return oks[0]
+                if not pend:
+                    for r in malos[:-1]:
+                        self._lateral(r, n, intentos)
+                    return malos[-1]
+                for r in malos:
+                    self._lateral(r, n, intentos)
+        finally:
+            for t in pend:
+                if not t.done():
+                    t.cancel()
+
     # -- modo vivo (SessionWorker) --
+    def actualizar_carga(self) -> int:
+        """Minimo de reservas en 60 s (esta key) entre los modelos activos. Toma el lock del archivo de
+        reservas: el vigia lo llama en un hilo."""
+        activos = self.lim.activos()
+        self.carga_min = min((self.lim.carga(m) for m in activos), default=10 ** 6)
+        return self.carga_min
+
     def _ajustar_lotes(self) -> None:
-        """B5: con UN solo modelo sano, lotes de 3 textos u 8 s (menos llamadas para el mismo texto)."""
+        """B5: con UN solo modelo sano, lotes de 3 textos u 8 s (menos llamadas para el mismo texto).
+        LATENCIA 25/09 (modo inmediato): lote de 1 si hay margen; si no, 2/4 s; muy apretado, 3/8 s."""
         if not self._lotes_adaptativos:
             return
         activos = self.lim.activos()
         solo = len(activos) == 1
-        if solo != self.lote_solo:
-            self.lote_solo = solo
-            self.lotes.maximo, self.lotes.ventana_s = self._lote_solo if solo else self._lote_normal
-            self.logger(f"[traductor] lotes: {self.lotes.maximo} textos / {self.lotes.ventana_s:g} s "
-                        f"(modelos activos: {','.join(activos) or 'ninguno'})")
+        self.lote_solo = solo
+        # congestion: un lote de esta sala lleva > CONGESTION_S esperando cupo (la reserva normal tarda
+        # milisegundos en su hilo: contarla como congestion hacia oscilar inmediato <-> solo, corrida C)
+        ahora = self.reloj()
+        congestion = any(ahora - t0 > CONGESTION_S for t0 in self.esperando_cupo.values())
+        if (self.modo == "inmediato" and activos and self.carga_min <= self.inmediato_max
+                and not congestion):
+            nivel, params = "inmediato", (1, 0.0)
+        elif solo or (self.modo == "inmediato" and (congestion or self.carga_min > self.apretado_max)):
+            nivel, params = "solo", self._lote_solo
+        else:
+            nivel, params = "lote", self._lote_normal
+        if (self.lotes.maximo, self.lotes.ventana_s) != params:
+            self.lotes.maximo, self.lotes.ventana_s = params
+            self.logger(f"[traductor] lotes: {nivel} {params[0]} textos / {params[1]:g} s (carga min "
+                        f"{self.carga_min} en 60 s; activos: {','.join(activos) or 'ninguno'})")
+        self.nivel = nivel
 
     def agregar(self, seq: int, text: str, t: float) -> None:
         self._ajustar_lotes()
+        self.textos_por_nivel[self.nivel] = self.textos_por_nivel.get(self.nivel, 0) + 1
         for lote in self.lotes.agregar(seq, text, t):
             self._poner(lote)
+            if self.modo == "inmediato":
+                self.carga_min += 1       # hasta el proximo refresco del vigia
 
     def _poner(self, lote) -> None:
         """Cada lote es una tarea independiente: un lote lento NO bloquea a los siguientes."""
@@ -785,13 +996,22 @@ class Traductor:
             except Exception as e:
                 self.logger(f"[traductor] on_resultado fallo: {type(e).__name__}: {e}")
 
+    def tic(self, ahora: float) -> None:
+        """Un paso del vigia (sin E/S): ajusta el nivel y despacha el lote vencido."""
+        self._ajustar_lotes()
+        lote = self.lotes.vencido(ahora)
+        if lote:
+            self._poner(lote)
+
     async def _vigilar(self) -> None:
         while True:
             await asyncio.sleep(0.2)
-            self._ajustar_lotes()
-            lote = self.lotes.vencido(time.time())
-            if lote:
-                self._poner(lote)
+            if self.modo == "inmediato":
+                try:
+                    await asyncio.to_thread(self.actualizar_carga)
+                except Exception as e:
+                    self.logger(f"[traductor] carga: {type(e).__name__}: {e}")
+            self.tic(self.reloj())
 
     def _abandonar(self, lotes: list) -> int:
         """Al cerrar por timeout: lo que quedo sin traducir sale MARCADO (ok:false), no mudo."""
@@ -809,7 +1029,7 @@ class Traductor:
 
     async def cerrar(self, timeout: float = TIMEOUT_S + 5.0) -> None:
         """Manda el lote pendiente y espera las traducciones en vuelo (hasta timeout)."""
-        lote = self.lotes.vaciar(time.time())
+        lote = self.lotes.vaciar(self.reloj())
         if lote:
             self._poner(lote)
         if self._vigia is not None:

@@ -11,6 +11,10 @@
   <header class="cabecera">
     <div class="cabecera__fila cabecera__identidad">
       <h1 class="cabecera__titulo">Panel de producción<span class="cabecera__subtitulo">control de sesiones en vivo</span></h1>
+      <div class="selector-vista" role="tablist" aria-label="Vista del panel">
+        <button type="button" id="btn-vista-informativa" role="tab" aria-selected="true">Informativa</button>
+        <button type="button" id="btn-vista-tecnica" role="tab" aria-selected="false">Técnica</button>
+      </div>
       <div class="cabecera__estado" role="status" aria-live="polite">
         <span id="chip-hub" class="chip">hub: conectando…</span>
         <span id="chip-metricas" class="chip">métricas: sin token</span>
@@ -30,7 +34,26 @@
         <input type="checkbox" id="toggle-pruebas"> mostrar pruebas
       </label>
       <span id="chip-pruebas-ocultas" class="chip">sin sesiones TEST</span>
-      <details class="ayuda">
+      <label class="toggle-sonido" for="toggle-sonido">
+        <input type="checkbox" id="toggle-sonido"> aviso con voz
+      </label>
+      <details class="ayuda ayuda-informativa">
+        <summary class="ayuda__boton" aria-label="Cómo leer la vista informativa">?</summary>
+        <div class="ayuda__contenido">
+          Cada tarjeta es una sala. Están ordenadas primero las que hay que atender. "Al día" o "Replay"
+          quiere decir que todo funciona bien. "Sin texto todavía" o "Sin texto hace N s" aparece cuando una
+          sala lleva más de 30 segundos en vivo sin mostrar ninguna frase, o dejó de mostrar frases por más de
+          20 segundos: en los dos casos suena además un aviso hablado (silenciable con "aviso con voz"), porque
+          es lo primero que hay que mirar. "Se trabó y se reabrió" es una sala que tuvo un problema técnico y
+          se recuperó sola; si dice cuántos segundos de audio se perdieron, es lo que no se pudo recuperar.
+          "Traducción fallando" cuenta cuántas de las últimas traducciones no salieron. "Reconectando" es que
+          este panel perdió la conexión con esa sala y está reintentando. Cuando una tarjeta dice "Qué hacer",
+          es una sugerencia concreta, no una orden. El resumen de arriba cuenta cuántas salas están en vivo,
+          cuántas hay que atender ahora y cuántas están sin problemas. Los detalles técnicos (latencias exactas,
+          números de secuencia, motivos con jerga) están en la vista <b>Técnica</b>.
+        </div>
+      </details>
+      <details class="ayuda ayuda-tecnica">
         <summary class="ayuda__boton" aria-label="Cómo leer este panel">?</summary>
         <div class="ayuda__contenido">
           Estado <code>live</code> con más de <code>15 s</code> sin un <code>type=text</code> nuevo se muestra
@@ -61,30 +84,44 @@
 
   <div id="aviso-hub" class="aviso"></div>
 
-  <div class="envoltorio-tabla">
-    <table class="panel">
-      <thead>
-        <tr>
-          <th class="col-sesion">Sesión</th>
-          <th>Idioma</th>
-          <th>Estado</th>
-          <th>Último seq</th>
-          <th>Textos</th>
-          <th>Latencia worker (p50 / p95)</th>
-          <th>Latencia percibida (p50 / p95)</th>
-          <th>Rotaciones</th>
-          <th>Watchdog reaperturas</th>
-          <th>Errores</th>
-          <th>Traducciones ok:false</th>
-          <th class="col-secundaria">Parciales / 60 s</th>
-          <th class="col-secundaria">Audio enviado (estimación)</th>
-          <th>Espectadores</th>
-        </tr>
-      </thead>
-      <tbody id="cuerpo-tabla">
-        <tr id="fila-vacia"><td colspan="14">Esperando la primera respuesta de <code>/api/sesiones</code>…</td></tr>
-      </tbody>
-    </table>
+  <div id="vista-informativa" class="vista-informativa">
+    <div class="resumen-informativa">
+      <span><b id="resumen-en-vivo">0</b> en vivo</span>
+      <span hidden><b id="resumen-replay">0</b> en replay</span>
+      <span><b id="resumen-atender">0</b> a atender</span>
+      <span><b id="resumen-sanas">0</b> sin problemas</span>
+      <span>último dato: <b id="resumen-hora">—</b></span>
+    </div>
+    <div id="tarjetas" class="tarjetas"></div>
+    <p id="tarjetas-vacio" class="tarjetas-vacio">Esperando la primera respuesta de <code>/api/sesiones</code>…</p>
+  </div>
+
+  <div id="vista-tecnica" class="vista-tecnica">
+    <div class="envoltorio-tabla">
+      <table class="panel">
+        <thead>
+          <tr>
+            <th class="col-sesion">Sesión</th>
+            <th>Idioma</th>
+            <th>Estado</th>
+            <th>Último seq</th>
+            <th>Textos</th>
+            <th>Latencia worker (p50 / p95)</th>
+            <th>Latencia percibida (p50 / p95)</th>
+            <th>Rotaciones</th>
+            <th>Watchdog reaperturas</th>
+            <th>Errores</th>
+            <th>Traducciones ok:false</th>
+            <th class="col-secundaria">Parciales / 60 s</th>
+            <th class="col-secundaria">Audio enviado (estimación)</th>
+            <th>Espectadores</th>
+          </tr>
+        </thead>
+        <tbody id="cuerpo-tabla">
+          <tr id="fila-vacia"><td colspan="14">Esperando la primera respuesta de <code>/api/sesiones</code>…</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <div class="pie">

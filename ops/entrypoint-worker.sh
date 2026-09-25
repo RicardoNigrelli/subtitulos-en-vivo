@@ -10,9 +10,13 @@
 # MODO=replay es un override DURO: aunque el .env tenga una key real, fuerza replay (asi
 # `MODO=replay docker compose up` nunca gasta cuota aunque el env_file cargue la key real).
 #
-# REPLAY: reproduce en BUCLE, uno por proceso en paralelo, todos los casetes *-trad*.jsonl de
-# fixtures/casetes/ (traduccion ya incluida) contra el hub. Cada archivo es una "sesion" propia
-# (session_id = nombre del archivo), asi se ven varias sesiones en simultaneo sin gastar cuota.
+# REPLAY: reproduce en BUCLE, uno por proceso en paralelo, un set fijo de casetes con traduccion ya
+# incluida contra el hub (fixtures/casetes/b8-trad-vivo-*.jsonl + fixtures/casetes/evidencia-25-09/
+# video-vivo-*.jsonl: las tomas del 25/09, casi todas 100% traducidas). Se excluye a proposito
+# fixtures/casetes/b4-trad-vivo-*.jsonl (corrida vieja, ~78% traducido y una costura fea): es lo
+# primero que ve un jurado con `MODO=replay docker compose up`, no hace falta mostrarle la peor
+# corrida (pedido del orquestador 25/09). Cada archivo es una "sesion" propia (session_id = nombre
+# del archivo), asi se ven varias sesiones en simultaneo sin gastar cuota.
 #
 # REAL: worker/README.md (que audio-pipeline escribe este bloque) todavia no existia al escribir
 # este script (ver reportes/ops-b5.md); se usan los flags de reportes/audio-pipeline-b4.md y
@@ -44,11 +48,11 @@ replay_en_bucle() {
     echo "[entrypoint-worker] MODO REPLAY (rotulado; no cumple R17a/R21 por si solo) -> $HUB_URL"
     encontrados=0
     if [ -n "${CASETE_REPLAY:-}" ]; then
-        # Override manual (documentado en .env.example): UN solo casete en bucle, en vez del
-        # descubrimiento automatico de abajo. Util para fijar una sola sesion de demo.
+        # Override manual (documentado en .env.example): UN solo casete en bucle, en vez del set
+        # fijo de abajo. Util para fijar una sola sesion de demo.
         set -- "$CASETE_REPLAY"
     else
-        set -- fixtures/casetes/*-trad*.jsonl
+        set -- fixtures/casetes/b8-trad-vivo-*.jsonl fixtures/casetes/evidencia-25-09/video-vivo-*.jsonl
     fi
     for casete in "$@"; do
         [ -e "$casete" ] || continue

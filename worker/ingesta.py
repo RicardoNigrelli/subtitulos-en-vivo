@@ -24,6 +24,8 @@ from typing import AsyncIterator, Iterable, Iterator
 
 import numpy as np
 
+from worker.seguridad import entorno_subproceso
+
 SR = 16000
 BYTES_POR_MUESTRA = 2
 CHUNK_S = 0.1
@@ -81,7 +83,8 @@ def listar_dispositivos() -> tuple[list[str], str]:
     import re
     ff = shutil.which("ffmpeg") or "ffmpeg"
     r = subprocess.run([ff, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env=entorno_subproceso())
     crudo = (r.stderr or "") + (r.stdout or "")
     nombres = [m.group(1) for m in re.finditer(r'"([^"]+)"\s*\(audio\)', crudo)]
     return nombres, crudo
@@ -122,8 +125,9 @@ async def fuente_ffmpeg(entrada: str, inicio: float = 0.0, duracion: float | Non
                         opciones_entrada: list[str] | None = None) -> AsyncIterator[Chunk]:
     """Chunks de 100 ms desde ffmpeg. Con tiempo_real=True respeta el reloj de pared."""
     cmd = comando_ffmpeg(entrada, inicio, duracion, formato_entrada, opciones_entrada)
+    # B7: ffmpeg recibe un entorno SIN credenciales (worker/seguridad.py)
     proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=entorno_subproceso())
     loop = asyncio.get_running_loop()
     t0_loop = loop.time()
     idx = 0
@@ -159,7 +163,8 @@ async def fuente_ffmpeg(entrada: str, inicio: float = 0.0, duracion: float | Non
 
 def leer_pcm(entrada: str, inicio: float = 0.0, duracion: float | None = None) -> bytes:
     """Decodifica completo (sin tiempo real) a PCM s16le 16 kHz mono."""
-    r = subprocess.run(comando_ffmpeg(entrada, inicio, duracion), capture_output=True, check=True)
+    r = subprocess.run(comando_ffmpeg(entrada, inicio, duracion), capture_output=True, check=True,
+                       env=entorno_subproceso())
     return r.stdout
 
 
@@ -240,7 +245,8 @@ class FuenteReabrible:
             motivo, proc, entregados = None, None, 0
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, **_aislado())
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                    env=entorno_subproceso(), **_aislado())
             except Exception as e:
                 motivo = f"ffmpeg no arranca: {type(e).__name__}: {e}"
             try:

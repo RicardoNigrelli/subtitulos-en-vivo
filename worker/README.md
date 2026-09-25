@@ -206,9 +206,10 @@ no está probado en vivo.
    `.env`). `--key` aplica a las DOS llamadas de la sala: la Live API (conexión inicial y cada
    rotación) y el traductor de texto (`worker/run.py`: `armar_transportes` / `armar_traductor`; hasta el
    25/09 05:46 el traductor usaba siempre `GEMINI_API_KEY`; test `worker/tests/test_key_por_sala.py`).
-   Las reservas de texto entre procesos (`reportes/cuota-texto-reservas.jsonl`) NO distinguen key:
-   siguen siendo un tope conservador COMPARTIDO por todas las salas de la máquina (≤ 12 llamadas por
-   modelo en 60 s entre todas; 14 con un solo modelo sano), aunque cada key tenga su propio cupo. Si la traba es capacidad o
+   Las reservas de texto entre procesos (`reportes/cuota-texto-reservas.jsonl`) se cuentan POR KEY
+   desde el 25/09 (final): ≤ 12 llamadas por (key, modelo) en 60 s (14 con un solo modelo sano); dos
+   salas con `--key` distinta no se limitan entre sí aunque compartan el archivo, dos con la misma sí
+   (ver "Cómo llegar a 5 y 10 salas"). Si la traba es capacidad o
    cola por proyecto, dos proyectos no comparten esa cola. Costo: una key más por sala y su propia
    cuota. [SUPUESTO: audio-pipeline] que la cola es por proyecto: no medido.
 3. **`ATASCO_ARRANQUE_S` (apagado por defecto).** Con N > 0 reabre la conexión que todavía no dio
@@ -318,7 +319,12 @@ raíz lo cargan `worker/gemini.py` (al pedir la key), `worker/emisor.py` y `work
 |---|---|---|
 | `GEMINI_API_KEY` | (obligatoria para el camino real) | key de Gemini; `--key` cambia el NOMBRE de la variable (p.ej. `GEMINI_API_KEY_RESERVA`) |
 | `GEMINI_LIVE_MODEL` | `gemini-3.5-transcribe-live` | modelo de ASR |
-| `GEMINI_TEXT_MODEL` / `GEMINI_TEXT_MODEL_ALT` | `gemini-3.5-flash-lite` / `gemini-3.1-flash-lite` | modelos de traducción (rotan entre sí) |
+| `GEMINI_TEXT_MODEL` / `GEMINI_TEXT_MODEL_ALT` | `gemini-3.5-flash-lite` / `gemini-3.1-flash-lite` | modelos de traducción, por PREFERENCIA (el primero mientras tenga cupo; 25/09) |
+| `TRADUCTOR_ROTAR` | `0` | `1` = rotación 3.5 ↔ 3.1 de antes del 25/09 en vez de preferencia |
+| `TRADUCTOR_MODO` | `inmediato` | `inmediato`: cada `text` se traduce solo y ya si hay margen de cupo; si no, lote 2/4 s y, apretado, 3/8 s. `lote`: siempre 2/4 s (lo de antes). Ver «Latencia» |
+| `TRADUCTOR_INMEDIATO_MAX` / `TRADUCTOR_APRETADO_MAX` | `6` / `9` | reservas en 60 s del modelo menos cargado de la key (tope 12): ≤ 6 inmediato; > 9 lote 3/8 s; entre medio 2/4 s |
+| `TRADUCTOR_CONGESTION_S` | `1` | un lote de la sala esperando cupo más que esto ⇒ lote 3/8 s |
+| `VENTANA_S` | `3` | ventana objetivo (igual que `--ventana-s`); la tolerancia escala (0,8 s a 3 s); el gap 0,7 s no |
 | `GEMINI_SSL_RELAX` | no definida | `1` relaja SÓLO `VERIFY_X509_STRICT` (Avast + Python 3.13); la cadena se sigue verificando |
 | `HUB_TOKEN` | `dev-token` | token de ingesta worker→hub (cambiarlo en un evento) |
 | `HUB_URL` | `ws://localhost:8100/ingest` | hub por defecto de `worker.replay` |
@@ -327,6 +333,9 @@ raíz lo cargan `worker/gemini.py` (al pedir la key), `worker/emisor.py` y `work
 | `CUOTA_BLOQUE_DESDE` | `2026-09-24 13:00:00` | desde cuándo se suma el bloque |
 | `CUOTA_TEXTO_LOG` | `reportes/cuota-texto.log` | una línea por llamada al modelo de texto |
 | `CUOTA_TEXTO_RESERVAS` | `reportes/cuota-texto-reservas.jsonl` | reservas de llamadas al modelo de texto, compartidas entre procesos (ver abajo) |
+| `TRADUCTOR_HEDGE_S` | `2.5` (antes 4) | pedido cubierto: un lote sin respuesta en S segundos se manda TAMBIÉN al otro modelo sano con cupo libre; gana el primero, el otro se cancela. `0` = apagado |
+| `TRADUCTOR_HEDGE_MARGEN` | `3` | el pedido cubierto sólo sale si al otro modelo le quedan al menos N lugares libres en su ventana de 60 s (de esa key): no le quita cupo a lotes nuevos |
+| `OPENBLAS_NUM_THREADS` | `1` (lo fija `worker/run.py` si no está definida) | hilos de OpenBLAS al importar numpy: con 16 hilos el worker comprometía ~504 MB en Windows, con 1, ~22 MB (`reportes/adversario-final-escala.md` §3) |
 | `TRADUCTOR_LOTE_MAX` / `TRADUCTOR_LOTE_S` | `2` / `4` | lote del traductor: N ventanas o S segundos desde la primera pendiente |
 | `TRADUCTOR_RPD_TOPE` | `480` | tope diario de llamadas por modelo de texto |
 | `TRADUCTOR_FALLAS_CORTE` | `3` | fallas seguidas (5xx, timeout, 429) que sacan a un modelo de la rotación |
@@ -351,14 +360,61 @@ un solo modelo sano), apenda una línea y suelta el lock; si no, prueba el otro 
 línea por llamada INICIADA (termine bien o mal):
 
 ```
-{"t": 1790294443.926, "hora": "2026-09-24 21:00:43", "modelo": "gemini-3.1-flash-lite", "pid": 31936,
- "etiqueta": "", "en_ventana": 5, "limite": 12}
+{"t": 1790294443.926, "hora": "2026-09-24 21:00:43", "modelo": "gemini-3.1-flash-lite",
+ "key": "GEMINI_API_KEY", "pid": 31936, "etiqueta": "", "en_ventana": 5, "limite": 12}
 ```
 
-`en_ventana` = reservas de ese modelo en los 60 s previos, contando ésta. `reportes/cuota-texto.log`
+`key` = el NOMBRE de la variable de la key de esa sala (`--key`; nunca el valor). El conteo es por
+(key, modelo): cada key tiene que ser de un PROYECTO distinto de Google AI Studio (el cupo es por
+proyecto; dos keys del mismo proyecto comparten cupo y este conteo sería optimista). Líneas viejas
+sin `key` cuentan como `GEMINI_API_KEY`. `en_ventana` = reservas de esa key y ese modelo en los 60 s
+previos, contando ésta. `reportes/cuota-texto.log`
 no cambia (una línea por llamada TERMINADA: `hora | modelo | items | estado | ms`, más las líneas
 `# cortacircuito`); de ahí sigue saliendo el tope diario. Tests: `pytest worker/tests/test_reservas_texto.py`
 (dos procesos reales contra el mismo archivo).
+
+## Latencia (25/09): traducción inmediata, preferencia 3.5, hedge 2,5 s, ventana 2 s
+
+Mismo clip (`fixtures/audio/clips/nerdearla-en-booch-300s-60s.wav`, EN, una sala por vez, hub propio en
+8193). Casetes en `fixtures/casetes/evidencia-25-09/lat-*.jsonl`. Primera palabra → texto = ventana +
+servicio (la primera palabra de la ventana espera la ventana entera). Percentil nearest-rank.
+
+| Corrida | Config | Textos | Cobertura voz | Servicio p50/p95 | 1.ª palabra→texto p50/p95 | Texto→traducción p50/p95 (ok) | Llamadas texto/min |
+|---|---|---|---|---|---|---|---|
+| A `lat-a-083344` | `TRADUCTOR_MODO=lote`, hedge 4, rotar, ventana 3 | 27 | 1,0 | 0,51 / 0,67 s | 3,06 / 3,81 s | 3,16 / 5,86 s (27/27) | 14,1 |
+| B `lat-b-083344` | inmediato (umbrales 9/11, código intermedio), hedge 2,5, ventana 3 | 15 | 0,969 | 0,80 / 11,48 s | 5,56 / 16,38 s | 2,38 / 6,18 s (15/15) | 11,2 |
+| C `lat-c-083344` | inmediato (9/11, señal de congestión oscilando), hedge 2,5, ventana 2 | 43 | 1,0 | 0,52 / 0,73 s | 2,23 / 2,83 s | 5,34 / 13,82 s (43/43) | 24,1 |
+| D `lat-d-083916` | inmediato **final** (6/9, congestión > 1 s), hedge 2,5, ventana 2, 50 s | 36 | 1,0 | 0,54 / 0,69 s | 2,32 / 2,74 s | 5,26 / 11,80 s (33/36) | 20,2 |
+
+B tuvo UN atasco del server (10 s mudo, rotación, 16 finales) que ensucia su servicio y su ventana: no
+es del traductor (el loop no se traba: `worker/tests/test_loop_no_bloqueado.py`). Con ventana 2 s salen
+~37 textos/min: más que las 24 llamadas/min de una key (12 por modelo), el traductor cae a lotes 3/8 s y
+el traducido llega PEOR (C, D) aunque el original llegue 0,8 s antes. Por eso **el default de ventana
+queda en 3 s** y el de `TRADUCTOR_MODO` en `inmediato`. La corrida con el código final y ventana 3 s
+NO se hizo (cupo de audio del bloque: 4,94 de 5 min).
+
+```
+# medir (sin API)
+python -m worker.medir_latencia fixtures/casetes/evidencia-25-09/lat-*.jsonl
+python -m worker.medir_traduccion fixtures/casetes/evidencia-25-09/lat-*.jsonl
+python docs/resumen_casetes.py fixtures/casetes/evidencia-25-09/lat-*.jsonl
+# reloj falso, limitador y reservas reales: 1 sala/key mayoria inmediato; 3 salas/key sin pasar 12
+python -m pytest worker/tests/test_inmediato.py -q -s
+# corrida (A = TRADUCTOR_MODO=lote TRADUCTOR_HEDGE_S=4 TRADUCTOR_ROTAR=1; C/D = --ventana-s 2)
+python -m worker.run --archivo fixtures/audio/clips/nerdearla-en-booch-300s-60s.wav --sesion lat-x \
+  --lang en --duracion 60 --ventana-s 3 --casete fixtures/casetes/evidencia-25-09/lat-x.jsonl \
+  --hub ws://127.0.0.1:8193/ingest
+```
+
+Simulación con reloj falso (`test_inmediato.py`, cadencia real, modelo [SIM] de 1,2 s): 1 sala/key
+inmediato 41/67 textos solos, texto→traducción p50 1,4 s (lote: 3,2 s), cobertura 1,0; 3 salas/key
+cobertura 0,80–0,86 (lote: 0,77), máximo 12 reservas por (key, modelo) en 60 s. Con umbrales 9/11
+salían 57/67 solos pero 3 salas bajaban a 0,69: por eso 6/9. La simulación NO es determinística
+(interleaving del loop): varía ±0,06 de cobertura entre corridas.
+
+Prompt del traductor: 449 caracteres fijos (~110 tokens estimados por chars/4, no medidos con la API),
+sin glosario ni contexto; no se recortó. `thinking_level="minimal"` confirmado en
+`TransporteGenAI.__init__`.
 
 ## Formato del casete (tres capas)
 
@@ -375,6 +431,61 @@ Línea 1: cabecera `{"casete": 1, "session_id", "lang", "model", "config", "sour
 
 Se escribe con flush por línea: si el proceso muere, el casete vale hasta la última línea. Detalle:
 docstring de `worker/casete.py`.
+
+## Cómo llegar a 5 y 10 salas
+
+Dos cupos distintos, los dos por PROYECTO de Google AI Studio (no por key ni por máquina):
+
+1. **Live API (transcripción):** hasta 7 sesiones concurrentes por proyecto en nivel gratuito (medido
+   una vez antes del evento; la 8.ª falla en el connect con `1011 quota`). Cada sala usa una sesión
+   (dos durante los segundos de solape de una rotación).
+2. **Modelo de texto (traducción):** 15 RPM por modelo y 2 modelos. El worker se queda en 12 por
+   (key, modelo) y una sala pide ~12–13 llamadas por minuto con lotes de 2 ventanas / 4 s. Nivel
+   gratuito: **2 salas por key** con lotes de 2/4 s; **3 salas por key** con lotes de 3/6 s
+   (`TRADUCTOR_LOTE_MAX=3 TRADUCTOR_LOTE_S=6`: ~1/3 menos llamadas, ~2 s más de atraso de la
+   traducción). Tope diario: 500 RPD por modelo, ~1000 llamadas/día por proyecto ≈ 77 min de UNA sala
+   traducida por día con lotes de 2/4 s. Nivel pago: límites más altos, verificar en la vista de límites de AI Studio (la documentación no publica los valores).
+
+Cada key en `.env` tiene que ser de un proyecto DISTINTO. Arranque escalonado (20–30 s entre salas; ver
+arriba). Las reservas de texto comparten el archivo; el conteo es por (key, modelo).
+
+**5 salas con 3 keys (nivel gratuito, lotes de 2/4 s → 2 salas por key):**
+
+```
+# .env: GEMINI_API_KEY, GEMINI_API_KEY_B, GEMINI_API_KEY_C (tres proyectos)
+H=ws://localhost:8080/ingest
+python -m worker.run --fuente url --url udp://0.0.0.0:9001 --sesion sala-1 --lang en --hub $H --key GEMINI_API_KEY   &
+sleep 25; python -m worker.run --fuente url --url udp://0.0.0.0:9002 --sesion sala-2 --lang en --hub $H --key GEMINI_API_KEY   &
+sleep 25; python -m worker.run --fuente url --url udp://0.0.0.0:9003 --sesion sala-3 --lang es --hub $H --key GEMINI_API_KEY_B &
+sleep 25; python -m worker.run --fuente url --url udp://0.0.0.0:9004 --sesion sala-4 --lang en --hub $H --key GEMINI_API_KEY_B &
+sleep 25; python -m worker.run --fuente url --url udp://0.0.0.0:9005 --sesion sala-5 --lang es --hub $H --key GEMINI_API_KEY_C &
+wait
+```
+
+**10 salas:** con 4 keys y lotes de 3/6 s (3 salas por key; la cuarta key con 1) o con 5 keys y lotes de
+2/4 s (2 por key): el mismo bloque con `--key GEMINI_API_KEY_{A..E}` repartidas de a 2 (o de a 3 con
+`TRADUCTOR_LOTE_MAX=3 TRADUCTOR_LOTE_S=6` en el entorno). En Live, 10 sesiones entran en 2 proyectos
+(7 por proyecto). **Nivel pago:** límites más altos que hay que verificar en la vista de límites de AI Studio del proyecto (la documentación no publica los valores); con ellos una sola key puede alcanzar para las 10 en Live y en texto; el límite de 12
+por (key, modelo) del worker hay que subirlo a mano en `worker/traductor.py` (`RPM`, `RPM_SOLO`,
+`TOPE_RPM`) según el RPM del nivel contratado; no se probó.
+
+Simulación [SIM] con el limitador y las reservas reales y demoras sorteadas de casetes reales
+(`python -m worker.tests.sim_salas_traductor --salas N --keys K --duracion 90 --grupo X`, 90 s):
+4 salas / 1 key → 0,667 traducido; 4 salas / 2 keys → 1,0; 2 salas / 1 key → 1,0; 3 salas / 1 key →
+0,818 con lotes 2/4 s y 1,0 con lotes 3/6 s. Corrida REAL del 25/09 08:02 (5 salas × 60 s en
+simultáneo, arranques cada 5 s, 3 salas con `GEMINI_API_KEY` y 2 con `GEMINI_API_KEY_RESERVA`,
+casetes `fixtures/casetes/evidencia-25-09/cinco-*.jsonl`): las 5 conexiones Live abrieron (ningún
+`1011`); traducido 0,78 / 0,74 / 0,50 en las 3 salas de la misma key (8 lotes `sin_cupo`) y 1,0 / 1,0
+en las 2 de la otra (`python -m worker.medir_traduccion fixtures/casetes/evidencia-25-09/cinco-*.jsonl`).
+
+**Fuentes de estas cifras (verificado el 25/09):** "los límites son por proyecto, no por key" está en la
+documentación oficial (`ai.google.dev/gemini-api/docs/rate-limits`: "Rate limits are applied per project,
+not per API key"). Los valores del nivel gratuito (15 RPM y 500 RPD por modelo de texto, 20 000 TPM en
+transcripción) NO están publicados en esa página: se ven en la vista de límites de AI Studio de la cuenta,
+de donde se tomaron el 24/09, y pueden cambiar. Las 7 sesiones Live concurrentes son una medición propia
+(una sola vez, antes del evento), no un número documentado. La duración máxima documentada de una sesión
+Live sólo de audio es 15 min sin compresión; con `gemini-3.5-transcribe-live` observamos cierres a ~283 s,
+que la rotación con solape cubre.
 
 ## Tests
 

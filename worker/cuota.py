@@ -26,7 +26,9 @@ FMT = "%Y-%m-%d %H:%M:%S"
 
 
 def registrar(sesion: str, segundos: float, archivo: str, log: Path = LOG) -> str:
+    from worker.seguridad import sin_credenciales
     log.parent.mkdir(parents=True, exist_ok=True)
+    archivo = sin_credenciales(archivo)        # A2: nunca stream keys ni passphrase en el log
     linea = f"{datetime.now().strftime(FMT)} | {sesion} | {segundos:.1f} | {archivo}"
     with open(log, "a", encoding="utf-8") as f:
         f.write(linea + "\n")

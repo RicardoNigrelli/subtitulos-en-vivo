@@ -46,6 +46,34 @@ Comandos: `.venv/Scripts/python docs/resumen_casetes.py fixtures/casetes/evidenc
 comando de la corrida en `reportes/audio-pipeline-final.md` (no versionado) y en `worker/README.md`, "Cómo llegar a
 5 y 10 salas". Sin investigar: la sala 3 dio 10 textos con el mismo clip que la sala 1 dio 27.
 
+## 1c. Latencia: qué la fija y cómo bajarla (25/09 08:33–08:40)
+
+Una sala, mismo clip (Grady Booch), cuatro configuraciones. "Primera palabra" es el tiempo desde que el
+orador empieza un bloque de voz hasta que su texto está en pantalla; la traducción se suma encima.
+
+| Config | Primera palabra → texto (p50 / p95) | Texto → traducción (p50 / p95) | Traducidas |
+|---|---|---|---|
+| A: ventana 3 s, traducción por lotes (config anterior) | 3,06 / 3,81 s | 3,16 / 5,86 s | 27/27 |
+| B: ventana 3 s, traducción inmediata (hubo un atasco del server) | — | 2,38 / 6,18 s | 15/15 |
+| D: ventana 2 s, traducción inmediata | 2,32 / 2,74 s | 5,26 / 11,80 s | 33/36 |
+
+Qué dicen los números:
+
+- **El original ya va a la par de un intérprete humano** (~3 s; la literatura de interpretación
+  simultánea mide ~2–3 s de décalage). Con ventana de 2 s baja a 2,3 s sin perder texto.
+- **La traducción la fija el cupo de llamadas del modelo de texto, no el modelo.** Con el tope del nivel
+  gratuito (12 llamadas por minuto por modelo y por proyecto), la ventana de 2 s genera más líneas que
+  llamadas disponibles y el traducido empeora; por eso el default quedó en ventana 3 s y traducción
+  inmediata cuando hay margen, lotes cuando no.
+- **En nivel pago ese tope desaparece**: se configuran los límites del proyecto
+  (`TRADUCTOR_RPM`, `TRADUCTOR_TOPE_RPM`) y la ventana de 2 s (`VENTANA_S=2`), y cada línea se traduce
+  sola al instante. Estimación con lo medido (no corrida en nivel pago): 2,3 s del original + 1,2–2,4 s
+  de la llamada al modelo (p50 medido de `gemini-3.5-flash-lite`) ≈ **3,5–4,7 s** para el traducido,
+  contra ~6 s de hoy en nivel gratuito.
+
+Comandos: `.venv/Scripts/python -m worker.medir_latencia fixtures/casetes/evidencia-25-09/lat-*.jsonl` y
+`.venv/Scripts/python -m worker.medir_traduccion fixtures/casetes/evidencia-25-09/lat-*.jsonl`.
+
 ## 2. Corridas fuera de la media: qué pasó y cómo lo cubre el sistema
 
 No todas las corridas salieron como las de arriba. En la toma doble de las 05:16 (dos salas arrancadas en el
@@ -70,6 +98,12 @@ Lo que se midió sobre esos casetes (`reportes/audio-pipeline-doble.md`; comando
   arreglos del worker (nada bloqueante en el loop de envío): 0 reaperturas en las dos salas
   (`doble-en-053010`, `doble-es-053010`: 18 y 20 textos, primer texto +21,1 s y +9,7 s). La corrida larga de
   2 × 580 s tampoco tuvo ninguno.
+
+Lo mismo lo midió un tercero, de forma independiente, y lo publicó en el foro oficial de desarrolladores de
+Gemini ([hilo](https://discuss.ai.google.dev/t/gemini-3-5-live-translate-preview-in-production-paid-tier-measured-concurrency-dashboard-409s-vs-real-409s-silent-stalls-and-session-birth-degradation-data-6-questions/180489)):
+congelamientos de 8 a 51 s con el socket abierto y sin error, en proyectos gratuitos y pagos, y sesiones creadas a
+~1 s de distancia que tardaron 10–12 s en la primera respuesta contra 4–5 s cuando se espaciaron 12 s o más. Es
+el mismo patrón que nuestra toma doble arrancada en el mismo segundo, y la misma mitigación: escalonar.
 
 Cómo se opera para que pase lo menos posible (README, "Qué pasa si…" y "Cómo escalar"): arrancar las salas
 escalonadas 20–30 s, una key o proyecto por sala (`--key`), y dejar activo el watchdog, que ya lo está.

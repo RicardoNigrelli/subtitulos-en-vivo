@@ -208,7 +208,7 @@
       meta.className = 'meta-sesion';
       var badge = document.createElement('span');
       badge.className = 'badge badge--' + (s.state || 'desconocido');
-      badge.textContent = nombreEstado(s.state);
+      badge.textContent = (s.replay && s.state === 'live') ? 'reproduciendo' : nombreEstado(s.state);
       meta.appendChild(badge);
       if (s.replay) {
         var badgeReplay = document.createElement('span');

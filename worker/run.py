@@ -33,15 +33,23 @@ Exit: 0 = hubo texto o parada pedida; 3 = sin texto; 4 = sin presupuesto; 2 = er
 """
 from __future__ import annotations
 
-import argparse
-import asyncio
-import json
-import signal
-import sys
-import time
-from pathlib import Path
+import os
 
-from worker import cuota
+# Adversario final (escala 3): OpenBLAS reserva memoria por hilo al importar numpy (16 hilos: ~504 MB
+# de commit por worker en Windows; con 1 hilo, 22,5 MB). El worker no hace algebra pesada: 1 hilo
+# alcanza. Va ANTES de cualquier import que traiga numpy; si el operador lo define, se respeta.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+import argparse  # noqa: E402
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import signal  # noqa: E402
+import sys  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from worker import cuota  # noqa: E402
+from worker.seguridad import SLUG, sin_credenciales, validar_sesion  # noqa: E402
 from worker.casete import Grabador
 from worker.emisor import Emisor
 from worker.gemini import MODELO_LIVE_DEFAULT
@@ -72,7 +80,7 @@ def _args(argv=None):
     ap.add_argument("--tope-envio-s", type=float, default=None,
                     help="maximo de segundos de audio a enviar en esta corrida")
     ap.add_argument("--key", default="GEMINI_API_KEY", help="NOMBRE de la variable de la key")
-    ap.add_argument("--ventana-s", type=float, default=None, help="ventana objetivo (default 3,0)")
+    ap.add_argument("--ventana-s", type=float, default=None, help="ventana objetivo (default env VENTANA_S o 3,0; tolerancia proporcional)")
     ap.add_argument("--gap-s", type=float, default=None, help="gap end->start (default 0,7)")
     ap.add_argument("--drenaje-s", type=float, default=30.0, help="espera de turnos al fin de la fuente")
     ap.add_argument("--traducir-a", default="auto", help="es|en|none (auto: en->es, es->en)")
@@ -84,6 +92,11 @@ def _args(argv=None):
     ap.add_argument("--transporte", default="gemini",
                     help="gemini | casete:<archivo.jsonl>[:mudo=S] (test, rotulado, sin API)")
     a = ap.parse_args(argv)
+    if not validar_sesion(a.sesion):
+        # M5: el id va al nombre del casete (path traversal) y el hub rechaza todo lo que no cumpla
+        # el patron (se gastaria cuota contra una sala vacia)
+        ap.error(f"--sesion {a.sesion!r} invalida: tiene que cumplir {SLUG.pattern} "
+                 f"(minusculas, digitos, '-' y '_'; hasta 64; empieza con letra o digito)")
     if a.fuente == "archivo" and not a.archivo:
         ap.error("--fuente archivo necesita --archivo")
     if a.fuente == "url" and not (a.url or a.archivo):
@@ -122,8 +135,8 @@ def armar_transportes(a, vocab: list[str]):
 def armar_traductor(a):
     """Traductor de la sala o None (--traducir-a none). Usa la MISMA key que la Live API (--key): "una
     key/proyecto por sala" cubre las dos llamadas (antes el de texto usaba siempre GEMINI_API_KEY).
-    Las reservas de texto entre procesos (reportes/cuota-texto-reservas.jsonl) NO distinguen key:
-    siguen siendo un tope conservador compartido por todas las salas de la maquina."""
+    FINAL 25/09: las reservas de texto entre procesos (reportes/cuota-texto-reservas.jsonl) se cuentan
+    por (key, modelo): la key del traductor es la del transporte (--key)."""
     destino = a.traducir_a
     if destino == "auto":
         destino = "es" if a.lang == "en" else "en"
@@ -163,15 +176,19 @@ async def correr(a) -> int:
     # casete (test) graba en reportes/, nunca en fixtures/
     casete = a.casete or (f"reportes/casete-test-{a.sesion}-{time.strftime('%Y%m%d-%H%M%S')}.jsonl" if es_casete
                           else f"fixtures/casetes/{a.sesion}-{time.strftime('%Y%m%d-%H%M%S')}.jsonl")
-    source = {"file": a.archivo, "url": a.url, "start_s": a.inicio, "dur_s": a.duracion,
+    # A2: ni userinfo ni query ni fragment (stream keys, passphrase, firmas) en session_start, casete,
+    # log ni cuota: el hub publica source y title sin auth y fixtures/casetes/ se versiona
+    valor_publico = sin_credenciales(valor) if a.fuente == "url" else valor
+    source = {"file": sin_credenciales(a.archivo), "url": sin_credenciales(a.url), "start_s": a.inicio, "dur_s": a.duracion,
               "kind": a.fuente, "device": a.dispositivo,
               "agenda": {"file": a.agenda, "charla": a.charla or a.sesion} if a.agenda else None}
-    titulo = a.titulo or (Path(a.archivo).stem if a.fuente == "archivo" else f"{a.fuente}: {valor}")
+    titulo = a.titulo or (Path(a.archivo).stem if a.fuente == "archivo" else f"{a.fuente}: {valor_publico}")
     from google.genai import __version__ as genai_version
     from worker import ventanas as V
     ventana_s = a.ventana_s if a.ventana_s is not None else V.VENTANA_S
     gap_s = a.gap_s if a.gap_s is not None else V.GAP_S
-    cortador = {"ventana_s": ventana_s, "tolerancia_s": V.TOLERANCIA_S, "solape_s": V.SOLAPE_S,
+    tolerancia_s = V.tolerancia_para(ventana_s)
+    cortador = {"ventana_s": ventana_s, "tolerancia_s": tolerancia_s, "solape_s": V.SOLAPE_S,
                 "gap_s": gap_s, "percentil": V.PERCENTIL, "calibracion_s": V.CALIBRACION_S,
                 "chunk_s": 0.1, "chunk_bytes": 3200, "drenaje_s": a.drenaje_s,
                 "turnos": "vad_auto" if a.vad_auto else "manuales",
@@ -204,11 +221,12 @@ async def correr(a) -> int:
         # corta a los N s de audio, sin --duracion no tiene fin propio (Ctrl+C / SIGTERM)
         fuente = FuenteReabrible(entrada, formato, opciones, inicio=a.inicio, max_s=a.duracion or None,
                                  log=lambda s: print(s, file=sys.stderr, flush=True))
-    print(f"[run] fuente {a.fuente}: {' '.join(comando_ffmpeg(entrada, a.inicio, a.duracion, formato, opciones))}",
+    cmd_log = [sin_credenciales(x) for x in comando_ffmpeg(entrada, a.inicio, a.duracion, formato, opciones)]
+    print(f"[run] fuente {a.fuente}: {' '.join(cmd_log)}",
           file=sys.stderr)
     w = SessionWorker(a.sesion, a.lang, tr, fuente, grabador=rec, emisor=emisor, titulo=titulo,
                       source=source, tope_envio_s=tope, espera_final_s=a.drenaje_s, gap_s=gap_s,
-                      cortador=V.Cortador(ventana_s=ventana_s, gap_s=gap_s),
+                      cortador=V.Cortador(ventana_s=ventana_s, tolerancia_s=tolerancia_s, gap_s=gap_s),
                       traductor=traductor, seq_inicial=seq0,
                       log=lambda s: print(s, file=sys.stderr, flush=True),
                       fabrica=None if a.sin_reabrir else fabrica, reabrir=cfg_reabrir,
@@ -239,7 +257,7 @@ async def correr(a) -> int:
             print(f"[run] transporte de casete (test): {seg} s NO van a Gemini, no se registran",
                   file=sys.stderr)
         else:
-            linea = cuota.registrar(a.sesion, seg, valor)
+            linea = cuota.registrar(a.sesion, seg, valor_publico)
             print(f"[run] cuota: {linea}", file=sys.stderr)
         if emisor:
             ok = await emisor.vaciar(3.0)
@@ -265,7 +283,10 @@ async def correr(a) -> int:
                    "a": traductor.a, "llamadas": traductor.n_llamadas, "lotes": traductor.n_lotes,
                    "lotes_ok_false": traductor.n_ok_false, "por_modelo": traductor.por_modelo,
                    "max_en_vuelo": traductor.max_en_vuelo, "timeouts": traductor.n_timeout,
-                   "reintentos": traductor.n_reintentos},
+                   "reintentos": traductor.n_reintentos, "hedge_s": traductor.hedge_s,
+                   "cubiertos": traductor.n_cubiertos, "cubiertos_ganados": traductor.n_cubiertos_ganados,
+                   "cancelados": traductor.n_cancelados, "key": traductor.key,
+                   "modo": traductor.modo, "textos_por_nivel": traductor.textos_por_nivel},
                "dedup": {"recortados": res.dedup_recortados, "descartados": res.dedup_descartados},
                "rotulo": w.rotulo}
     print(json.dumps(resumen, ensure_ascii=False))

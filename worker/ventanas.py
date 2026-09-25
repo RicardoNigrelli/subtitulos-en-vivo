@@ -24,8 +24,18 @@ import numpy as np
 
 from worker.ingesta import CHUNK_S, Chunk, rms_pcm16
 
-VENTANA_S = 3.0
-TOLERANCIA_S = 0.8
+import os as _os
+
+# LATENCIA 25/09: ventana configurable por env VENTANA_S (o --ventana-s); la tolerancia escala con la
+# ventana (0,8 s a 3 s -> 0,53 s a 2 s): tolerancia_para(). El gap de 0,7 s NO escala (sin gap el server
+# descarta turnos).
+VENTANA_S = float(_os.environ.get("VENTANA_S") or 3.0)
+TOLERANCIA_BASE_S = 0.8
+TOLERANCIA_S = round(TOLERANCIA_BASE_S * VENTANA_S / 3.0, 3)
+
+
+def tolerancia_para(ventana_s: float) -> float:
+    return round(TOLERANCIA_BASE_S * float(ventana_s) / 3.0, 3)
 SOLAPE_S = 0.4
 GAP_S = 0.7
 PERCENTIL = 25

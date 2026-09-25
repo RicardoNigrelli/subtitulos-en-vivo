@@ -1,0 +1,32 @@
+[
+  {
+    "id": "sala-1",
+    "titulo": "Charla EN - track principal",
+    "lang": "en",
+    "fuente": {"tipo": "archivo", "valor": "fixtures/audio/clips/nerdearla-en-booch-300s-60s.wav"},
+    "key": "GEMINI_API_KEY",
+    "vocab": "Nerdearla,Grady Booch"
+  },
+  {
+    "id": "sala-2",
+    "titulo": "Charla ES - track principal",
+    "lang": "es",
+    "fuente": {"tipo": "archivo", "valor": "fixtures/audio/clips/nerdearla-es-paez-300s-60s.wav"},
+    "key": "GEMINI_API_KEY",
+    "vocab": "Nerdearla,Nicolás Páez"
+  },
+  {
+    "id": "sala-3",
+    "titulo": "Charla EN - track B (segundo proyecto)",
+    "lang": "en",
+    "fuente": {"tipo": "archivo", "valor": "fixtures/audio/clips/nerdearla-en-booch-300s-60s.wav"},
+    "key": "GEMINI_API_KEY_RESERVA"
+  },
+  {
+    "id": "sala-4",
+    "titulo": "Sala desde stream UDP",
+    "lang": "es",
+    "fuente": {"tipo": "url", "valor": "udp://127.0.0.1:9000"},
+    "key": "GEMINI_API_KEY_RESERVA"
+  }
+]

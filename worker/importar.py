@@ -39,8 +39,9 @@ def _mmss(s: float) -> str:
 
 
 def _yt(*args: str, capturar: bool = True) -> subprocess.CompletedProcess:
+    from worker.seguridad import entorno_subproceso      # B7: yt-dlp sin credenciales
     return subprocess.run([sys.executable, "-m", "yt_dlp", *args], capture_output=capturar,
-                          text=True, encoding="utf-8", errors="replace")
+                          text=True, encoding="utf-8", errors="replace", env=entorno_subproceso())
 
 
 def elegir_pista(info: dict) -> dict | None:
@@ -90,7 +91,9 @@ def cortar(entrada: Path | str, salida: Path, inicio: float, duracion: float) ->
     salida.parent.mkdir(parents=True, exist_ok=True)
     cmd = [ff, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{inicio}", "-t", f"{duracion}",
            "-i", str(entrada), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(salida)]
-    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    from worker.seguridad import entorno_subproceso      # B7: ffmpeg sin credenciales
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env=entorno_subproceso())
     if p.returncode != 0 or not salida.exists():
         raise RuntimeError(f"ffmpeg fallo (exit {p.returncode}): {p.stderr[-400:]}")
 

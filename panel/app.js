@@ -68,8 +68,21 @@
     if (hn === 'localhost' || hn === '127.0.0.1' || hn === '::1') return true;
     return hn === String(location.hostname).toLowerCase();
   }
-  var hubIgnoradoPorSeguridad = !!hubParamCrudo && !hostnamePermitido(hubParamCrudo);
-  var hubParam = (hubParamCrudo && hostnamePermitido(hubParamCrudo)) ? hubParamCrudo : null;
+  // M1 (reportes/adversario-final-seguridad.md): "?hub=localhost:8100@evil.example" pasaba el
+  // chequeo de arriba porque hostnameDe() corta en el ":" y nunca mira el "@": con el parser WHATWG
+  // del WebSocket, esa cadena entera es userinfo y el socket se abre contra evil.example. Se
+  // rechaza ACA, antes de mirar el host: cualquier "@ / \ ? #" (los separadores que un atacante usa
+  // para esconder un host detrás de uno permitido) o un userinfo que new URL() logre extraer.
+  function hubParamSeguro(hostPuerto) {
+    if (!hostPuerto) return false;
+    if (/[@/\\?#]/.test(hostPuerto)) return false;
+    var u;
+    try { u = new URL('http://' + hostPuerto); } catch (e) { return false; }
+    if (u.username || u.password) return false;
+    return hostnamePermitido(hostPuerto);
+  }
+  var hubIgnoradoPorSeguridad = !!hubParamCrudo && !hubParamSeguro(hubParamCrudo);
+  var hubParam = (hubParamCrudo && hubParamSeguro(hubParamCrudo)) ? hubParamCrudo : null;
 
   // Columnas secundarias (parciales/60s, audio estimado): ocultas por defecto para densidad de
   // control room; ?todas=1 las trae (sistema.md, corrección de dirección bloque 10).
@@ -92,6 +105,16 @@
   var MIN_N_PERCENTIL = 10;     // por debajo: "n insuficiente" (brief B3), nunca se inventa un p95
   var VENTANA_PARCIALES_S = 60; // ventana deslizante de "parciales / 60 s" (no es promedio de sesión)
   var WS_BACKOFF_MAX_MS = 10000;
+
+  // Vista informativa (brief Ricardo, M8 de reportes/adversario-final-ux.md): umbrales propios,
+  // documentados también en panel/README.md. NO tocan la vista técnica (SIN_TEXTO_S arriba sigue
+  // siendo el umbral de esa tabla).
+  var UMBRAL_NUNCA_TEXTO_S = 30;      // M8: sala en vivo que jamás mandó `text` -> alarma a los 30 s
+  var UMBRAL_SIN_TEXTO_ALARMA_S = 20; // M8: sala que tenía texto y se calló -> alarma a los 20 s
+  var VENTANA_ROTACION_RECIENTE_S = 60; // "se trabó y se reabrió" se muestra 60 s tras la rotación
+  var UMBRAL_TRAD_MUESTRAS_MIN = 5;     // bajo esto no se alarma por traducción (ruido con pocas muestras)
+  var UMBRAL_TRAD_TASA = 0.15;          // 15 % de fallos en la ventana de 20 traducciones -> alarma
+  var VENTANA_TRAD_N = 20;
 
   // ---------------------------------------------------------------- token (Bearer, client-side, B5)
   function leerToken() {
@@ -209,10 +232,16 @@
       latPercibida: [],        // t_receive - t_captured (sólo mensajes EN VIVO de sesiones no-replay)
 
       rotaciones: 0, rotacionesPorMotivo: {}, ultimaRotacionEn: null, audioLostS: 0,
+      ultimaRotacionMotivo: null, ultimaRotacionAudioLostS: 0, // vista informativa: sólo la ÚLTIMA rotación
       watchdogEventos: 0, watchdogReaperturas: 0, ultimoWatchdogEn: null,
       errores: 0, ultimoErrorEn: null, ultimoErrorDetalle: null,
       traduccionesOkFalse: 0, traduccionesOkTrue: 0, ultimaTraduccionEn: null,
+      traduccionesVentana: [],  // últimos VENTANA_TRAD_N booleanos `ok`, para "traducción fallando (F de N)"
       parcialesTs: [],         // ms de cada `partial` visto en vivo (ventana deslizante)
+
+      primeraVezLive: null,       // Date.now() de cuando esta sesión se vio `live` por primera vez (M8)
+      alarmaSonadaNunca: false,   // edge-trigger del aviso de voz "nunca produjo texto"
+      alarmaSonadaSilencio: false,// edge-trigger del aviso de voz "sin texto hace más de N s"
 
       metricas: null,          // último objeto de /panel-api/metricas para esta sesión (o null)
     };
@@ -259,6 +288,8 @@
         s.ultimaRotacionEn = tHubMs;
         var motivo = (msg.meta && msg.meta.reason) || 'sin motivo';
         s.rotacionesPorMotivo[motivo] = (s.rotacionesPorMotivo[motivo] || 0) + 1;
+        s.ultimaRotacionMotivo = motivo; // vista informativa: sólo la de ESTA rotación, no acumulado
+        s.ultimaRotacionAudioLostS = (msg.meta && typeof msg.meta.audio_lost_s === 'number') ? msg.meta.audio_lost_s : 0;
         // B5: rotation.meta.audio_lost_s (audio que la conexión vieja no cubrió y la nueva no
         // reenvió del todo; sólo motivos atasco/cierre lo traen > 0, ver worker/session.py). Se
         // ACUMULA por sesión, no se reemplaza: cada rotación puede sumar audio perdido distinto.
@@ -293,6 +324,11 @@
       if (!items[i]) continue;
       if (items[i].ok === false) s.traduccionesOkFalse += 1;
       else if (items[i].ok === true) s.traduccionesOkTrue += 1;
+      if (items[i].ok === true || items[i].ok === false) {
+        // vista informativa: ventana de las últimas VENTANA_TRAD_N para "traducción fallando (F de N)"
+        s.traduccionesVentana.push(items[i].ok === true);
+        if (s.traduccionesVentana.length > VENTANA_TRAD_N) s.traduccionesVentana.shift();
+      }
     }
     s.ultimaTraduccionEn = tHubMs;
   }
@@ -425,6 +461,10 @@
         if (resumen.title) s.title = resumen.title;
         if (resumen.replay !== undefined && resumen.replay !== null) s.replay = resumen.replay;
         s.hubState = resumen.state;
+        // M8: hora en que ESTE panel vio la sesión `live` por primera vez (aproximación por poll de
+        // 2 s, no el t_emit real de session_start; suficiente para el umbral de 30 s de la vista
+        // informativa). No se reinicia si el estado oscila entre polls.
+        if (s.hubState === 'live' && s.primeraVezLive == null) s.primeraVezLive = Date.now();
         s.lastSeqHub = resumen.last_seq;
         s.lastTEmitHub = resumen.last_t_emit;
         s.viewers = resumen.viewers || 0;
@@ -500,6 +540,183 @@
     if (!(s.audioLostS > 0)) return motivos;
     var perdido = 'audio perdido ' + s.audioLostS.toFixed(1) + ' s';
     return motivos ? motivos + ' · ' + perdido : perdido;
+  }
+
+  // ---------------------------------------------------------------- vista INFORMATIVA (Ricardo, R8e)
+  // Pedido directo (no técnico): switch arriba con dos vistas; la informativa es una tarjeta por
+  // sala, ORDENADA POR URGENCIA, en lenguaje llano (nada de t_emit/t_captured/seq/ok:false: eso
+  // sigue en la vista técnica de abajo, sin tocar). Reglas de urgencia documentadas en
+  // panel/README.md — ese archivo es la fuente de verdad de los umbrales; si cambian, cambian ahí y
+  // acá a la vez.
+  var NOMBRE_IDIOMA = { en: 'inglés', es: 'español', pt: 'portugués', fr: 'francés', de: 'alemán', it: 'italiano' };
+  function nombreIdioma(codigo) {
+    if (!codigo) return '—';
+    var base = String(codigo).split('-')[0].toLowerCase();
+    return NOMBRE_IDIOMA[base] || codigo;
+  }
+  function fmtIdiomaTraduccion(s) {
+    var origen = nombreIdioma(s.lang);
+    var destinos = (s.translationsLangs || []).filter(function (l) { return l && l !== s.lang; });
+    if (!destinos.length) return origen;
+    return origen + ' → ' + destinos.map(nombreIdioma).join(', ');
+  }
+
+  // Aviso hablado (Web Speech API): sólo para las dos alarmas de M8 (reportes/adversario-final-ux.md),
+  // con corte por edge (dispararAlarma) para que suene UNA vez por episodio, no en cada re-render de
+  // 1 s. Silenciable con el toggle "aviso con voz" de la cabecera (persistido, ver más abajo);
+  // si el navegador no tiene speechSynthesis, se degrada en silencio (la tarjeta ya avisa por texto
+  // y color, nunca depende sólo del audio).
+  function avisoDeVoz(texto) {
+    if (!elToggleSonido || !elToggleSonido.checked) return;
+    if (!('speechSynthesis' in window)) return;
+    try {
+      var u = new SpeechSynthesisUtterance(texto);
+      u.lang = 'es-AR';
+      window.speechSynthesis.speak(u);
+    } catch (e) {
+      console.warn('panel: no se pudo reproducir el aviso de voz', e);
+    }
+  }
+  function dispararAlarma(s, campo, mensaje) {
+    if (s[campo]) return;
+    s[campo] = true;
+    avisoDeVoz(mensaje);
+  }
+
+  // Orden de urgencia (menor = más urgente; usado para ordenar las tarjetas y para "N a atender"):
+  //   0 sin texto (nunca o silencio largo) · 1 se trabó y se reabrió · 2 traducción fallando ·
+  //   3 reconectando · 4 sana (Al día / Replay) · 5 inactiva · 6 terminada.
+  function estadoInformativo(s, ahoraMs) {
+    if (s.hubState === 'ended') {
+      return { urgencia: 6, clase: 'terminada', icono: '■', texto: 'Terminada', accion: null };
+    }
+    var nombreSala = s.title || s.id;
+    // Ojo con el orden: las alarmas de "sin texto" van ANTES del chequeo de `idle` a propósito. Al
+    // cortar el worker de una sesión, el hub la marca `idle` (no manda más `type=text`, pierde la
+    // conexión del productor) MUCHO antes de los 20/30 s de estos umbrales: si `idle` se mirara
+    // primero, la tarjeta diría "Inactiva" (sin urgencia) justo en el caso que hay que atender.
+    // Verificado a mano: `reportes/monitor-final.md` ("cortar el worker").
+    var segsDesdeLive = s.primeraVezLive != null ? Math.floor((ahoraMs - s.primeraVezLive) / 1000) : null;
+
+    if (s.ultimoTextoEn == null && segsDesdeLive != null && segsDesdeLive > UMBRAL_NUNCA_TEXTO_S) {
+      dispararAlarma(s, 'alarmaSonadaNunca',
+        'Atención. La sala ' + nombreSala + ' está en vivo hace más de treinta segundos y todavía no muestra texto.');
+      return {
+        urgencia: 0, clase: 'mudo', icono: '◐',
+        texto: 'Sin texto todavía (hace ' + segsDesdeLive + ' s)',
+        accion: 'Verificar el audio de la sala (¿el micrófono o el archivo está enviando?).'
+      };
+    }
+
+    var silencioS = s.ultimoTextoEn != null ? Math.floor((ahoraMs - s.ultimoTextoEn) / 1000) : null;
+    if (silencioS != null && silencioS > UMBRAL_SIN_TEXTO_ALARMA_S) {
+      dispararAlarma(s, 'alarmaSonadaSilencio',
+        'Atención. La sala ' + nombreSala + ' no muestra texto hace más de ' + UMBRAL_SIN_TEXTO_ALARMA_S + ' segundos.');
+      return {
+        urgencia: 0, clase: 'mudo', icono: '◐',
+        texto: 'Sin texto hace ' + silencioS + ' s',
+        accion: 'Verificar el audio de la sala; si sigue, revisar worker.log.'
+      };
+    }
+    if (silencioS == null || silencioS <= UMBRAL_SIN_TEXTO_ALARMA_S) s.alarmaSonadaSilencio = false; // rearma para el próximo corte
+
+    if (s.hubState === 'idle') {
+      return { urgencia: 5, clase: 'inactiva', icono: '◌', texto: 'Inactiva', accion: null };
+    }
+
+    var rotacionReciente = s.ultimaRotacionEn != null &&
+      ((ahoraMs - s.ultimaRotacionEn) / 1000) <= VENTANA_ROTACION_RECIENTE_S &&
+      (s.ultimaRotacionMotivo === 'atasco' || s.ultimaRotacionMotivo === 'cierre');
+    if (rotacionReciente) {
+      var perdido = s.ultimaRotacionAudioLostS > 0 ? ' (' + Math.round(s.ultimaRotacionAudioLostS) + ' s perdidos)' : '';
+      var accionRotacion = s.ultimaRotacionMotivo === 'atasco'
+        ? 'Se recuperó sola. Si pasa seguido con otra sala del mismo proyecto, arrancarlas con 20 s de diferencia (ver README) y revisar worker.log.'
+        : 'Se recuperó sola. Si pasa seguido, revisar worker.log.';
+      return { urgencia: 1, clase: 'rotacion', icono: '↺', texto: 'Se trabó y se reabrió' + perdido, accion: accionRotacion };
+    }
+
+    var ventana = s.traduccionesVentana || [];
+    var totalVentana = ventana.length;
+    var fallos = ventana.reduce(function (acc, ok) { return acc + (ok === false ? 1 : 0); }, 0);
+    var tasaFallo = totalVentana ? (fallos / totalVentana) : 0;
+    if (totalVentana >= UMBRAL_TRAD_MUESTRAS_MIN && tasaFallo >= UMBRAL_TRAD_TASA) {
+      return {
+        urgencia: 2, clase: 'traduccion', icono: '▲',
+        texto: 'Traducción fallando (' + fallos + ' de ' + totalVentana + ')',
+        accion: 'Ver worker.log; puede ser un límite de cuota de traducción.'
+      };
+    }
+
+    if (s.wsEstado === 'reconectando') {
+      return {
+        urgencia: 3, clase: 'reconectando', icono: '◌', texto: 'Reconectando',
+        accion: 'Esperando reconexión con el servidor. Si sigue más de un minuto, revisar el hub o la red.'
+      };
+    }
+
+    if (s.replay === true) return { urgencia: 4, clase: 'sana', icono: '⟲', texto: 'Replay', accion: null };
+    return { urgencia: 4, clase: 'sana', icono: '●', texto: 'Al día', accion: null };
+  }
+
+  function tarjetaHtml(s, estado) {
+    var badgeReplay = s.replay === true ? '<span class="badge badge-replay">REPLAY</span>' :
+                       (s.replay === false ? '<span class="badge badge-vivo">LIVE</span>' : '');
+    var nombre = esc(s.title || s.id);
+    var accionHtml = estado.accion ? '<p class="tarjeta__accion">Qué hacer: ' + esc(estado.accion) + '</p>' : '';
+    var espectadores = s.viewers || 0;
+    return (
+      '<article class="tarjeta tarjeta--' + estado.clase + '" data-estado="' + estado.clase + '" data-id="' + esc(s.id) + '">' +
+        '<header class="tarjeta__cabecera">' +
+          '<h2 class="tarjeta__nombre">' + nombre + '</h2>' +
+          badgeReplay +
+        '</header>' +
+        '<p class="tarjeta__idioma">' + esc(fmtIdiomaTraduccion(s)) + '</p>' +
+        '<p class="tarjeta__estado"><span class="tarjeta__icono" aria-hidden="true">' + estado.icono + '</span>' +
+          esc(estado.texto) + '</p>' +
+        accionHtml +
+        '<p class="tarjeta__pie">' + espectadores + (espectadores === 1 ? ' espectador' : ' espectadores') + '</p>' +
+      '</article>'
+    );
+  }
+
+  var elTarjetas = document.getElementById('tarjetas');
+  var elTarjetasVacio = document.getElementById('tarjetas-vacio');
+  var elResumenEnVivo = document.getElementById('resumen-en-vivo');
+  var elResumenAtender = document.getElementById('resumen-atender');
+  var elResumenSanas = document.getElementById('resumen-sanas');
+  var elResumenHora = document.getElementById('resumen-hora');
+  var elToggleSonido = document.getElementById('toggle-sonido');
+
+  function renderInformativa(ahoraMs) {
+    if (!elTarjetas) return;
+    var items = ordenFilas.map(function (id) {
+      var s = sesiones[id];
+      return { s: s, estado: estadoInformativo(s, ahoraMs) };
+    });
+    items.sort(function (a, b) { return a.estado.urgencia - b.estado.urgencia; });
+
+    var enVivoN = 0, replayN = 0, atenderN = 0, sanasN = 0, ultimoDatoMs = null;
+    items.forEach(function (it) {
+      if (it.s.hubState === 'live') { if (it.s.replay) replayN += 1; else enVivoN += 1; }
+      if (it.estado.urgencia <= 3) atenderN += 1;
+      if (it.estado.urgencia === 4) sanasN += 1;
+      [it.s.ultimoTextoEn, (it.s.lastTEmitHub != null ? it.s.lastTEmitHub * 1000 : null)].forEach(function (t) {
+        if (t != null && (ultimoDatoMs == null || t > ultimoDatoMs)) ultimoDatoMs = t;
+      });
+    });
+
+    if (elResumenEnVivo) elResumenEnVivo.textContent = String(enVivoN);
+    var elResumenReplay = document.getElementById('resumen-replay');
+    if (elResumenReplay) {
+      elResumenReplay.textContent = String(replayN);
+      elResumenReplay.parentNode.hidden = replayN === 0;
+    }
+    if (elResumenAtender) { elResumenAtender.textContent = String(atenderN); elResumenAtender.classList.toggle('hay', atenderN > 0); }
+    if (elResumenSanas) elResumenSanas.textContent = String(sanasN);
+    if (elResumenHora) elResumenHora.textContent = ultimoDatoMs != null ? fmtHoraMs(ultimoDatoMs) : '—';
+    if (elTarjetasVacio) elTarjetasVacio.hidden = items.length > 0;
+
+    elTarjetas.innerHTML = items.map(function (it) { return tarjetaHtml(it.s, it.estado); }).join('');
   }
 
   function fmtContador(n, ultimoMs, detalle) {
@@ -581,6 +798,7 @@
 
   function render() {
     var ahoraMs = Date.now();
+    renderInformativa(ahoraMs);
     var filaVacia = document.getElementById('fila-vacia');
     if (ordenFilas.length && filaVacia) filaVacia.remove();
     var totalTest = 0;
@@ -660,6 +878,38 @@
     mostrarPruebas = elTogglePruebas.checked;
     render();
   });
+
+  // ---------------------------------------------------------------- switch Informativa / Técnica
+  // Pedido directo de Ricardo: dos vistas, informativa por defecto, persistida en localStorage (no
+  // sessionStorage: si cierra la pestaña y vuelve, que quede en la que dejó). La vista técnica es la
+  // tabla de siempre, sin cambios de fondo; sólo se le suma/saca una clase para mostrarla u ocultarla.
+  var VISTA_KEY = 'panelVista';
+  var elBtnVistaInformativa = document.getElementById('btn-vista-informativa');
+  var elBtnVistaTecnica = document.getElementById('btn-vista-tecnica');
+  function aplicarVista(vista) {
+    var v = vista === 'tecnica' ? 'tecnica' : 'informativa';
+    document.body.setAttribute('data-vista', v);
+    if (elBtnVistaInformativa) elBtnVistaInformativa.setAttribute('aria-selected', String(v === 'informativa'));
+    if (elBtnVistaTecnica) elBtnVistaTecnica.setAttribute('aria-selected', String(v === 'tecnica'));
+    try { localStorage.setItem(VISTA_KEY, v); } catch (e) { /* localStorage no disponible: la vista no persiste, no es fatal */ }
+    ajustarAltoCabecera();
+  }
+  var vistaGuardada = (function () { try { return localStorage.getItem(VISTA_KEY); } catch (e) { return null; } })();
+  aplicarVista(vistaGuardada === 'tecnica' ? 'tecnica' : 'informativa');
+  if (elBtnVistaInformativa) elBtnVistaInformativa.addEventListener('click', function () { aplicarVista('informativa'); });
+  if (elBtnVistaTecnica) elBtnVistaTecnica.addEventListener('click', function () { aplicarVista('tecnica'); });
+
+  // Aviso con voz (M8): silenciable, persistido; por defecto ENCENDIDO (skill ui-subtitulos: el
+  // estado nunca depende sólo de un canal — acá la voz es un extra sobre la tarjeta con texto+color,
+  // apagarla no oculta ninguna alarma visual).
+  var SONIDO_KEY = 'panelSonido';
+  if (elToggleSonido) {
+    var sonidoGuardado = (function () { try { return localStorage.getItem(SONIDO_KEY); } catch (e) { return null; } })();
+    elToggleSonido.checked = sonidoGuardado !== '0';
+    elToggleSonido.addEventListener('change', function () {
+      try { localStorage.setItem(SONIDO_KEY, elToggleSonido.checked ? '1' : '0'); } catch (e) { /* no fatal */ }
+    });
+  }
 
   // ---------------------------------------------------------------- layout: alto de cabecera variable
   // La cabecera ahora tiene dos filas y un desplegable "?" (sistema.md §4): su alto cambia según el
