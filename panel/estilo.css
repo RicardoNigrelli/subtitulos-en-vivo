@@ -800,3 +800,8 @@ body[data-vista="informativa"] .pie { display: none; }
 .salas-fuente-panel[hidden] { display: none; }
 .form-salas[hidden] { display: none; }
 .icono-salas { width: 16px; height: 16px; }
+
+/* token pegado directo en el drawer de Salas (25/09: el aviso solo no llevaba a ningún lado) */
+.salas-token-inline { display: flex; gap: var(--esp-2); margin-top: var(--esp-2); }
+.salas-token-inline[hidden] { display: none; }
+.salas-token-inline input { flex: 1 1 auto; min-width: 0; }

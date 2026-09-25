@@ -1424,7 +1424,9 @@
       if (elFormNuevaSala) elFormNuevaSala.hidden = true;
       return;
     }
-    if (elFormNuevaSala) elFormNuevaSala.hidden = false;
+    if (elFormNuevaSala) elFormNuevaSala.hidden = !!salasEstado.requiereToken;
+    var elTokenInline = document.getElementById('salas-token-inline');
+    if (elTokenInline) elTokenInline.hidden = !salasEstado.requiereToken;
     if (salasEstado.requiereToken) {
       if (elAvisoServicio) elAvisoServicio.hidden = false;
       if (elAvisoServicioTexto) elAvisoServicioTexto.textContent = t('salas_falta_token');
@@ -1451,6 +1453,22 @@
       }
     });
   }
+
+  (function () {
+    var inp = document.getElementById('salas-input-token');
+    var btn = document.getElementById('salas-btn-token');
+    function guardarDesdeSalas() {
+      var v = inp ? inp.value.trim() : '';
+      if (!v) { if (inp) inp.focus(); return; }
+      guardarToken(v);
+      if (elInputToken) elInputToken.value = v;   // Configuración muestra el mismo token
+      if (inp) inp.value = '';
+      pollSesiones();
+      actualizarSalas();
+    }
+    if (btn) btn.addEventListener('click', guardarDesdeSalas);
+    if (inp) inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') guardarDesdeSalas(); });
+  })();
 
   if (elListaSalas) {
     elListaSalas.addEventListener('click', function (e) {
