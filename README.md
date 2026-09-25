@@ -58,7 +58,7 @@ persona elige la sesión y el idioma.
 
 | Qué | Resultado de una corrida real | Cómo reproducirlo |
 |---|---|---|
-| R21: dos sesiones con ASR real en simultáneo, ~11 min de audio cada una | cobertura 1,0 y 1,0 (sin huecos); latencia PERCIBIDA p50 ≈ 0,44 s (0,443 / 0,429 s), p95 ≈ 0,60 s (0,615 / 0,585 s) | ver "Reproducir los números de R21" abajo |
+| R21: dos sesiones con ASR real en simultáneo, ~11 min de audio cada una | cobertura 1,0 y 1,0 (sin huecos); latencia PERCIBIDA p50 ≈ 0,44 s (0,443 / 0,429 s), p95 ≈ 0,60 s (0,615 / 0,585 s), medida desde el FIN de cada bloque de voz de ~3 s (`t_emit − t_captured`); desde la primera palabra del bloque, misma corrida: p50 ≈ 3,0 s, p95 ≈ 4,3 s. En corridas cortas del 25/09 con atascos del server el p95 desde el fin llegó a 5–18 s (`docs/evidencia.md`) | ver "Reproducir los números de R21" abajo |
 | R19: traducción EN→ES / ES→EN en vivo, en paralelo con la transcripción | **RANGO MEDIDO EN TRES CORRIDAS distintas**, no una cifra única: de 71–78 % de bloques traducidos con atraso p50 9–12 s, hasta 100 % con p50 2,6–2,7 s en la corrida con lotes más chicos | ver "Reproducir los números de R19" abajo |
 
 Esto es cobertura, latencia percibida y proporción de bloques traducidos —no una cifra de
@@ -108,7 +108,7 @@ se muestra el RANGO de tres corridas reales, no una sola cifra:
 
 La tercera corrida también coincidió con una latencia mucho mejor del modelo de texto en sí (no sólo
 del lote más chico): no se puede atribuir la mejora completa a `TRADUCTOR_LOTE_S=4` con una sola
-corrida por configuración. Es el número más reciente, no el "verdadero"; el rango completo es el
+corrida por configuración. Es la corrida de referencia con lotes cortos, no el "verdadero": en las tomas reales del 25/09 (`fixtures/casetes/evidencia-25-09/`, cuatro salas de a una) la misma herramienta da p50 3,7 s y p95 12,8 s con 88/90 líneas traducidas, por reintentos tras 5xx o timeout del modelo de texto; el rango completo es el
 dato honesto.
 
 ## Cómo levantar
@@ -351,8 +351,11 @@ La fuerza bruta no alcanza: hay tres cuellos de botella distintos y cada uno se 
    llamadas por modelo por minuto** repartido entre procesos mediante un archivo de reservas con
    lock (detalle en [`worker/README.md`](worker/README.md#llamadas-al-modelo-de-texto-entre-procesos-cuota-texto-reservasjsonl)).
    Verificado con 2 sesiones reales en paralelo: 26 reservas entre 2 procesos, máximo 12 por modelo
-   en cualquier ventana de 60 s (nunca 13); con 3 o más salas por key, este límite —no el de audio—
-   es el primero en exigir lotes más grandes o un nivel pago.
+   en cualquier ventana de 60 s (nunca 13); ese tope se comparte por MÁQUINA (el archivo de reservas
+   `CUOTA_TEXTO_RESERVAS`), no por key: con 2 salas ya se alcanza (≈ 97 % traducido), con 3 quedan ≈ 3 de cada 4
+   líneas traducidas y con 5 la mitad (simulación con el limitador real, `qa/out/adv-final/e4_traductor_sim.py`).
+   Para más salas por máquina: un archivo de reservas por key o proyecto (`CUOTA_TEXTO_RESERVAS` distinto en cada
+   sala, cada una con su key), lotes más grandes (`TRADUCTOR_LOTE_MAX`, `TRADUCTOR_LOTE_S`) o nivel pago.
 2. **Espectadores por sesión.** El hub hace fan-out por sesión + idioma, con una cola propia por
    cliente: uno lento o colgado no afecta a los demás (se lo desconecta con `1013` y reconecta
    solo). No gasta cupo de Gemini — es tráfico entre el hub y los navegadores. Medido con clientes

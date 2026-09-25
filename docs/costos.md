@@ -56,17 +56,18 @@ es tráfico hub↔navegador, no llamadas a Gemini.
 ## Llamadas de texto (traducción EN↔ES) por minuto de audio
 
 El traductor (`worker/traductor.py`) arma un lote por idioma destino cada vez que junta **2 bloques
-de texto o pasan 5 segundos** desde el primer bloque pendiente (lo que ocurra primero):
+de texto o pasan 4 segundos** desde el primer bloque pendiente (lo que ocurra primero):
 
 ```bash
 grep -n "^LOTE_MAX\|^LOTE_S\|^RPM " worker/traductor.py
-# LOTE_MAX = 2
-# LOTE_S = 5.0
+# LOTE_MAX = int(_env_num("TRADUCTOR_LOTE_MAX", 2))
+# LOTE_S = _env_num("TRADUCTOR_LOTE_S", 4.0)
 # RPM = 12
+# (también LOTE_MAX_SOLO = 3 y LOTE_S_SOLO = 8.0: lote más largo cuando un modelo de texto está fuera de servicio)
 ```
 
 ```
-llamadas_de_texto_por_minuto_estimadas (techo)  =  60 s/min / LOTE_S  =  60 / 5  =  12 llamadas/min
+llamadas_de_texto_por_minuto_estimadas (techo)  =  60 s/min / LOTE_S  =  60 / 4  =  15 llamadas/min (el limitador propio lo recorta a 12 por modelo)
    por idioma destino (coincide con el limitador propio de 12 RPM por modelo, mismo archivo)
 ```
 
@@ -122,4 +123,7 @@ Los precios pueden cambiar: volver a consultar la página antes de presupuestar 
 `python -c "m=5*8*60; print(round(m*0.00525,1), round(m*0.004,1), round(m*0.0023,1), round(m*(0.00525+0.004+0.0023),1))"`
 → `12.6 9.6 5.5 27.7`. Es decir: 5 salas × 8 horas = 2400 minutos de audio ⇒ ≈ 12,6 USD de
 transcripción (entrada) + ≈ 9,6 USD de salida de texto + ≈ 5,5 USD de traducción ⇒ **≈ 28 USD por día de
-conferencia** con dos idiomas por sala, sin contar la infraestructura del hub (un contenedor).
+conferencia** con dos idiomas por sala, sin contar la infraestructura del hub (un contenedor). El audio que
+realmente se ENVÍA supera al de la charla en un 15–19 % (solape de ventanas y reenvíos en rotaciones, medido
+sobre los casetes reales: 691,5 y 680,0 s enviados por 580 s de charla, `qa/out/adv-final/e5-costos.log`): con
+eso, ≈ 30,6 USD. Sigue siendo una estimación.
