@@ -1,0 +1,39 @@
+1
+00:00:09,000 --> 00:00:16,273
+Esta es una charla de Nerdearla real, subtitulada y traducida en vivo por un sistema de código abierto que cualquiera puede ejecutar.
+
+2
+00:00:21,500 --> 00:00:26,776
+En una conferencia, cada sala es una charla distinta y no todos hablan el idioma del orador.
+
+3
+00:00:28,500 --> 00:00:37,306
+Subtítulos en vivo escucha cada sala, la transcribe en tiempo real y la traduce. Del inglés al español, del español al inglés y más.
+
+4
+00:00:37,500 --> 00:00:48,256
+Cada sala tiene su propio proceso. El audio se transmite a Gemini Live para su transcripción, el texto se traduce en lotes cortos y un servidor central envía los subtítulos a cada pantalla.
+
+5
+00:00:49,500 --> 00:00:53,476
+La audiencia escanea un código QR y elige una sala y un idioma.
+
+6
+00:00:55,500 --> 00:01:02,912
+Los mismos subtítulos alimentan el proyector de la sala, una superposición transparente para la transmisión en vivo y un panel de operador que supervisa cada sala.
+
+7
+00:01:05,500 --> 00:01:15,467
+Se escala en tres ejes: salas frente a la API, espectadores por sala y un modo de reproducción que ejecuta todo el sistema sin una clave de API.
+
+8
+00:01:16,500 --> 00:01:19,361
+El despliegue se realiza con un comando de docker compose.
+
+9
+00:01:24,500 --> 00:01:33,120
+En una ejecución de casi diez minutos, con dos salas reales al mismo tiempo, ningún fragmento de discurso se quedó sin subtitular y la demora percibida mediana se mantuvo por debajo de medio segundo.
+
+10
+00:01:35,500 --> 00:01:40,869
+Subtítulos en vivo. Código abierto y creado para cualquier conferencia.

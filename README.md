@@ -417,6 +417,9 @@ reportes de bloque del equipo, no versionados por tamaño — lo reproducible es
 - [`PROMPTS.md`](PROMPTS.md) — cómo se construyó este proyecto con agentes durante la vibeathon,
   qué se investigó antes (permitido, R12) y qué se escribió durante (obligatorio, R11a/R11b); es la
   respuesta preparada a X2.
+- [`docs/evidencia.md`](docs/evidencia.md) — las mejores corridas reales (R21 2 × 580 s, R19), las tomas del video y
+  las corridas fuera de la media con su causa medida; cada número con su comando. Casetes en `fixtures/casetes/evidencia-25-09/`.
+- [`docs/video/r14/`](docs/video/r14/README.md) — subtítulos del video hechos con el propio traductor (R14): scripts, entradas y SRT.
 - [`worker/README.md`](worker/README.md) — CLI completa del worker (`worker.run`, `worker.replay`, importador, cuota, medición de traducción), variables de entorno y formato del casete de tres capas.
 - [`docs/costos.md`](docs/costos.md) — estimación de costo por minuto de audio y por sesión.
 - [`hub/README.md`](hub/README.md) y [`contracts/README.md`](contracts/README.md) — protocolo y

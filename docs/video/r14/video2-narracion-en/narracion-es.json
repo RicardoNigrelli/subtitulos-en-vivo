@@ -1,0 +1,72 @@
+[
+  {
+    "clave": "v02",
+    "en": "This is a real Nerdearla talk, captioned and translated live, by an open source system anyone can run.",
+    "es": "Esta es una charla de Nerdearla real, subtitulada y traducida en vivo por un sistema de código abierto que cualquiera puede ejecutar.",
+    "inicio": 9.0,
+    "fin": 16.273
+  },
+  {
+    "clave": "v03",
+    "en": "At a conference, every room is a different talk, and not everyone speaks the speaker's language.",
+    "es": "En una conferencia, cada sala es una charla distinta y no todos hablan el idioma del orador.",
+    "inicio": 21.5,
+    "fin": 26.776
+  },
+  {
+    "clave": "v04",
+    "en": "Subtítulos en vivo listens to each room, transcribes it in real time, and translates it. English to Spanish, Spanish to English, and more.",
+    "es": "Subtítulos en vivo escucha cada sala, la transcribe en tiempo real y la traduce. Del inglés al español, del español al inglés y más.",
+    "inicio": 28.5,
+    "fin": 37.306
+  },
+  {
+    "clave": "v05",
+    "en": "Each room gets its own process. The audio streams to Gemini Live for transcription, the text is translated in short batches, and a central server sends the captions to every screen.",
+    "es": "Cada sala tiene su propio proceso. El audio se transmite a Gemini Live para su transcripción, el texto se traduce en lotes cortos y un servidor central envía los subtítulos a cada pantalla.",
+    "inicio": 37.5,
+    "fin": 48.256
+  },
+  {
+    "clave": "v06",
+    "en": "The audience scans a QR code, and picks a room and a language.",
+    "es": "La audiencia escanea un código QR y elige una sala y un idioma.",
+    "inicio": 49.5,
+    "fin": 53.476
+  },
+  {
+    "clave": "v07",
+    "en": "The same captions drive the room's projector, a transparent overlay for the livestream, and an operator panel that tracks every room.",
+    "es": "Los mismos subtítulos alimentan el proyector de la sala, una superposición transparente para la transmisión en vivo y un panel de operador que supervisa cada sala.",
+    "inicio": 55.5,
+    "fin": 62.912
+  },
+  {
+    "clave": "v08",
+    "en": "It scales on three axes: rooms against the API, viewers per room, and a replay mode that runs the whole system without an API key.",
+    "es": "Se escala en tres ejes: salas frente a la API, espectadores por sala y un modo de reproducción que ejecuta todo el sistema sin una clave de API.",
+    "inicio": 65.5,
+    "fin": 75.467
+  },
+  {
+    "clave": "v09",
+    "en": "Deployment is one docker compose command.",
+    "es": "El despliegue se realiza con un comando de docker compose.",
+    "inicio": 76.5,
+    "fin": 79.361
+  },
+  {
+    "clave": "v10",
+    "en": "In a run of almost ten minutes, with two real rooms at once, no stretch of speech went uncaptioned, and the median perceived delay stayed under half a second.",
+    "es": "En una ejecución de casi diez minutos, con dos salas reales al mismo tiempo, ningún fragmento de discurso se quedó sin subtitular y la demora percibida mediana se mantuvo por debajo de medio segundo.",
+    "inicio": 84.5,
+    "fin": 93.12
+  },
+  {
+    "clave": "v11",
+    "en": "Subtítulos en vivo. Open source, and built for any conference.",
+    "es": "Subtítulos en vivo. Código abierto y creado para cualquier conferencia.",
+    "inicio": 95.5,
+    "fin": 100.869
+  }
+]

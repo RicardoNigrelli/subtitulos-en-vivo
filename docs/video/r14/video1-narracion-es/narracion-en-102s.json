@@ -1,0 +1,72 @@
+[
+  {
+    "clave": "n02",
+    "es": "Nerdearla trae oradores de todo el mundo. Pero no todos en la sala entienden inglés.",
+    "en": "Nerdearla brings speakers from all over the world. But not everyone in the room understands English.",
+    "inicio": 5.5,
+    "fin": 11.659
+  },
+  {
+    "clave": "n03",
+    "es": "Sofi escanea un QR, elige su sala y su idioma.",
+    "en": "Sofi scans a QR code, chooses her room and her language.",
+    "inicio": 14.5,
+    "fin": 19.312
+  },
+  {
+    "clave": "n04",
+    "es": "Y esto no es una animación: es la charla, transcripta y traducida en vivo.",
+    "en": "And this is not an animation: it's the talk, transcribed and translated live.",
+    "inicio": 24.0,
+    "fin": 30.855
+  },
+  {
+    "clave": "n05",
+    "es": "También al revés: del español al inglés.",
+    "en": "Also the other way around: from Spanish to English.",
+    "inicio": 38.5,
+    "fin": 42.337
+  },
+  {
+    "clave": "n06",
+    "es": "Una sala, cinco, diez: cada una con sus subtítulos, al mismo tiempo.",
+    "en": "One room, five, ten: each one with its subtitles, at the same time.",
+    "inicio": 46.5,
+    "fin": 52.241
+  },
+  {
+    "clave": "n07",
+    "es": "El organizador conecta el audio de cada sala y lo pone en marcha con un solo comando.",
+    "en": "The organizer connects the audio of each room and launches it with a single command.",
+    "inicio": 56.5,
+    "fin": 61.823
+  },
+  {
+    "clave": "n08",
+    "es": "Y un panel le avisa si alguna sala se queda muda.",
+    "en": "And a panel notifies them if any room goes mute.",
+    "inicio": 68.5,
+    "fin": 71.919
+  },
+  {
+    "clave": "n09",
+    "es": "Aprende los nombres de la agenda, habla más idiomas y exporta los subtítulos.",
+    "en": "It learns the names from the agenda, speaks more languages, and exports the subtitles.",
+    "inicio": 75.5,
+    "fin": 81.101
+  },
+  {
+    "clave": "n10",
+    "es": "Ah, y los subtítulos en inglés de este video los tradujo el propio proyecto.",
+    "en": "Oh, and the English subtitles of this video were translated by the project itself.",
+    "inicio": 87.5,
+    "fin": 92.265
+  },
+  {
+    "clave": "n11",
+    "es": "Subtítulos en vivo. Código abierto, para cualquier conferencia.",
+    "en": "Live subtitles. Open source, for any conference.",
+    "inicio": 95.0,
+    "fin": 100.23
+  }
+]

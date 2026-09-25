@@ -1,0 +1,39 @@
+1
+00:00:05,500 --> 00:00:11,659
+Nerdearla brings speakers from all over the world. But not everyone in the room understands English.
+
+2
+00:00:14,500 --> 00:00:19,312
+Sofi scans a QR code, chooses her room and her language.
+
+3
+00:00:24,000 --> 00:00:30,855
+And this is not an animation: it's the talk, transcribed and translated live.
+
+4
+00:00:38,500 --> 00:00:42,337
+Also the other way around: from Spanish to English.
+
+5
+00:00:46,500 --> 00:00:52,241
+One room, five, ten: each one with its subtitles, at the same time.
+
+6
+00:00:56,500 --> 00:01:01,823
+The organizer connects the audio of each room and launches it with a single command.
+
+7
+00:01:08,500 --> 00:01:11,919
+And a panel notifies them if any room goes mute.
+
+8
+00:01:15,500 --> 00:01:21,101
+It learns the names from the agenda, speaks more languages, and exports the subtitles.
+
+9
+00:01:27,500 --> 00:01:32,265
+Oh, and the English subtitles of this video were translated by the project itself.
+
+10
+00:01:35,000 --> 00:01:40,230
+Live subtitles. Open source, for any conference.

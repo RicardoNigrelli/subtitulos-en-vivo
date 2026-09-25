@@ -1,0 +1,52 @@
+{
+  "v02": {
+    "en": "This is a real Nerdearla talk, captioned and translated live, by an open source system anyone can run.",
+    "inicio_s": 9.0,
+    "ventana_hasta_s": 16.0
+  },
+  "v03": {
+    "en": "At a conference, every room is a different talk, and not everyone speaks the speaker's language.",
+    "inicio_s": 21.5,
+    "ventana_hasta_s": 28.0
+  },
+  "v04": {
+    "en": "Subtítulos en vivo listens to each room, transcribes it in real time, and translates it. English to Spanish, Spanish to English, and more.",
+    "inicio_s": 28.5,
+    "ventana_hasta_s": 37.0
+  },
+  "v05": {
+    "en": "Each room gets its own process. The audio streams to Gemini Live for transcription, the text is translated in short batches, and a central server sends the captions to every screen.",
+    "inicio_s": 37.5,
+    "ventana_hasta_s": 49.0
+  },
+  "v06": {
+    "en": "The audience scans a QR code, and picks a room and a language.",
+    "inicio_s": 49.5,
+    "ventana_hasta_s": 55.0
+  },
+  "v07": {
+    "en": "The same captions drive the room's projector, a transparent overlay for the livestream, and an operator panel that tracks every room.",
+    "inicio_s": 55.5,
+    "ventana_hasta_s": 65.0
+  },
+  "v08": {
+    "en": "It scales on three axes: rooms against the API, viewers per room, and a replay mode that runs the whole system without an API key.",
+    "inicio_s": 65.5,
+    "ventana_hasta_s": 76.0
+  },
+  "v09": {
+    "en": "Deployment is one docker compose command.",
+    "inicio_s": 76.5,
+    "ventana_hasta_s": 84.0
+  },
+  "v10": {
+    "en": "In a run of almost ten minutes, with two real rooms at once, no stretch of speech went uncaptioned, and the median perceived delay stayed under half a second.",
+    "inicio_s": 84.5,
+    "ventana_hasta_s": 95.0
+  },
+  "v11": {
+    "en": "Subtítulos en vivo. Open source, and built for any conference.",
+    "inicio_s": 95.5,
+    "ventana_hasta_s": 106.0
+  }
+}

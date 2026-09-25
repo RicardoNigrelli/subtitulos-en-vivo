@@ -1,0 +1,52 @@
+{
+  "n02": {
+    "es": "Nerdearla trae oradores de todo el mundo. Pero no todos en la sala entienden inglés.",
+    "inicio_s": 5.5,
+    "ventana_hasta_s": 14.5
+  },
+  "n03": {
+    "es": "Sofi escanea un QR, elige su sala y su idioma.",
+    "inicio_s": 14.5,
+    "ventana_hasta_s": 24.0
+  },
+  "n04": {
+    "es": "Y esto no es una animación: es la charla, transcripta y traducida en vivo.",
+    "inicio_s": 24.0,
+    "ventana_hasta_s": 38.5
+  },
+  "n05": {
+    "es": "También al revés: del español al inglés.",
+    "inicio_s": 38.5,
+    "ventana_hasta_s": 46.5
+  },
+  "n06": {
+    "es": "Una sala, cinco, diez: cada una con sus subtítulos, al mismo tiempo.",
+    "inicio_s": 46.5,
+    "ventana_hasta_s": 56.5
+  },
+  "n07": {
+    "es": "El organizador conecta el audio de cada sala y lo pone en marcha con un solo comando.",
+    "inicio_s": 56.5,
+    "ventana_hasta_s": 68.5
+  },
+  "n08": {
+    "es": "Y un panel le avisa si alguna sala se queda muda.",
+    "inicio_s": 68.5,
+    "ventana_hasta_s": 75.5
+  },
+  "n09": {
+    "es": "Aprende los nombres de la agenda, habla más idiomas y exporta los subtítulos.",
+    "inicio_s": 75.5,
+    "ventana_hasta_s": 87.5
+  },
+  "n10": {
+    "es": "Ah, y los subtítulos en inglés de este video los tradujo el propio proyecto.",
+    "inicio_s": 87.5,
+    "ventana_hasta_s": 95.0
+  },
+  "n11": {
+    "es": "Subtítulos en vivo. Código abierto, para cualquier conferencia.",
+    "inicio_s": 95.0,
+    "ventana_hasta_s": 102.0
+  }
+}
