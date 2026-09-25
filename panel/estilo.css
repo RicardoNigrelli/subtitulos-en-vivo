@@ -1,105 +1,216 @@
-/* estilo.css — panel de produccion (monitor, Bloque 3, R8e)
-   Mismo lenguaje visual que web/estilo.css: fondo #111, texto #E8E8E8 (skill ui-subtitulos).
-   Estado NUNCA solo color: todo estado/contador lleva texto. p50/p95 nunca promedio. */
+/* estilo.css — panel de producción (monitor, Bloque 10, R8e, rediseño control-room)
+   Usa los tokens de tokens.css (docs/design/sistema.md): fondo #111 / texto #E8E8E8 fijos (skill
+   ui-subtitulos), UNA superficie más clara para agrupar (nunca grises nuevos sueltos), jerarquía por
+   OPACIDAD antes que por más color, franja de color en el borde izquierdo para clasificar filas (no
+   la fila entera pintada), sin tarjetas-dentro-de-tarjetas, sin gradientes, sin glassmorphism.
+   Estado NUNCA solo color: todo estado/contador lleva texto. p50/p95 nunca promedio (ver app.js). */
 
-:root { color-scheme: dark; }
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
   padding: 0;
-  background: #111111;
-  color: #E8E8E8;
-  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-  font-size: 14px;
+  background: var(--color-fondo);
+  color: var(--color-texto);
+  font-family: var(--fuente-base);
+  font-size: var(--tam-cuerpo);
+  font-variant-numeric: tabular-nums;
 }
 
+/* Layout de control room: cabecera y pie de tamaño fijo, la TABLA es la única región que scrollea.
+   Esto es lo que arregla el thead flotando a mitad de fila: su sticky ya no depende de medir el
+   alto variable de la cabecera (bug de la iteración anterior), es sticky DENTRO de su propio
+   contenedor con scroll. */
+html { height: 100%; }
+body {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------------------------------------------------------- cabecera */
 .cabecera {
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--esp-2);
+  padding: var(--esp-3) var(--esp-4);
+  background: var(--color-superficie);
+  border-bottom: 1px solid var(--color-borde);
+}
+
+.cabecera__fila {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  row-gap: 6px;
-  padding: 10px 14px;
-  background: #191919;
-  border-bottom: 1px solid #2a2a2a;
+  gap: var(--esp-3);
+  row-gap: var(--esp-2);
 }
 
-.cabecera h1 {
-  font-size: 16px;
+.cabecera__identidad { justify-content: space-between; }
+
+.cabecera__titulo {
   margin: 0;
-  margin-right: 8px;
+  font-size: var(--tam-titulo);
   font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: var(--esp-3);
+  white-space: nowrap;
 }
 
+.cabecera__subtitulo {
+  font-size: var(--tam-diminuto);
+  font-weight: 400;
+  color: var(--color-texto-secundario);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cabecera__estado {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--esp-2);
+}
+
+.cabecera__controles {
+  padding-top: var(--esp-2);
+  border-top: 1px solid var(--color-borde);
+}
+
+/* ---------------------------------------------------------------- barra de estado (sobria)
+   Corrección de dirección (Ricardo, bloque 10): nada de cápsulas/pastillas de color. Texto normal,
+   un punto de estado chico (nunca la única señal: el texto de al lado siempre dice el estado en
+   palabras), separado por un borde fino a la izquierda entre ítems — no fondo, no borde propio. */
 .chip {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 12px;
-  border: 1px solid #444;
-  background: #222;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: var(--esp-3);
+  border-left: 1px solid var(--color-borde);
+  font-size: var(--tam-chico);
+  color: var(--color-texto-secundario);
+  white-space: nowrap;
 }
-.chip--ok { border-color: #2e7d32; color: #9ce39c; }
-.chip--mal { border-color: #a33; color: #ff9c9c; }
-.chip--warn { border-color: #8a6d1f; color: #e0c064; }
+.cabecera__estado .chip:first-child { padding-left: 0; border-left: none; }
+.chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-texto-silenciado);
+}
+.chip--ok { color: var(--color-texto); }
+.chip--ok::before { background: var(--color-exito); }
+.chip--mal { color: var(--color-texto); }
+.chip--mal::before { background: var(--color-error); }
+.chip--warn { color: var(--color-aviso); }
+.chip--warn::before { background: var(--color-aviso); }
 
+.chip[hidden] {
+  /* el atributo hidden y .chip tienen la misma especificidad que la regla .chip de abajo: sin esto
+     .chip (display:inline-flex) le gana al display:none del UA y el chip de seguridad quedaría
+     visible siempre, incluso sin ningún ?hub= rechazado (mismo patrón que web/estilo.css). */
+  display: none;
+}
+
+/* ---------------------------------------------------------------- token y toggle */
 .token-caja {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  border: 1px solid #444;
-  background: #222;
-  font-size: 12px;
+  gap: var(--esp-1);
+  font-size: var(--tam-chico);
+  color: var(--color-texto-secundario);
 }
-.token-caja label { color: #a8a8a8; }
+.token-caja label { color: var(--color-texto-secundario); }
+.token-caja label code { color: var(--color-texto-secundario); }
 .token-caja input {
   width: 130px;
-  background: #111;
-  color: #E8E8E8;
-  border: 1px solid #444;
-  border-radius: 4px;
-  padding: 2px 5px;
-  font-size: 12px;
-  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  background: var(--color-fondo);
+  color: var(--color-texto);
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-chico);
+  padding: 2px 6px;
+  font-size: var(--tam-chico);
+  font-family: inherit;
 }
+.token-caja input:focus-visible { outline: 2px solid var(--color-link); outline-offset: 1px; }
 .token-caja button {
-  background: #2a2a2a;
-  color: #E8E8E8;
-  border: 1px solid #555;
-  border-radius: 4px;
-  padding: 2px 7px;
-  font-size: 11px;
+  background: var(--color-superficie);
+  color: var(--color-texto);
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-chico);
+  padding: 3px 9px;
+  font-size: var(--tam-diminuto);
   cursor: pointer;
+  transition: background var(--dur-rapida) var(--easing-estandar);
 }
-.token-caja button:hover { background: #333; }
+.token-caja button:hover { background: var(--color-superficie-alta); }
+.token-caja button:focus-visible { outline: 2px solid var(--color-link); outline-offset: 1px; }
 
 .toggle-pruebas {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #cfcfcf;
+  gap: 6px;
+  font-size: var(--tam-chico);
+  color: var(--color-texto-secundario);
   cursor: pointer;
   user-select: none;
 }
 
-.leyenda {
-  padding: 8px 14px;
-  font-size: 12px;
-  color: #a8a8a8;
-  border-bottom: 1px solid #222;
+/* ---------------------------------------------------------------- ayuda ("?" desplegable)
+   El párrafo largo de explicación vive acá adentro, colapsado por defecto (nativo <details>, sin
+   JS): sistema.md §4 "párrafo de ayuda en un desplegable". */
+.ayuda { font-size: var(--tam-chico); color: var(--color-texto-secundario); }
+.ayuda__boton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--color-borde);
+  background: var(--color-superficie-alta);
+  color: var(--color-texto-secundario);
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none; /* algunos navegadores agregan un triángulo por defecto */
 }
-.leyenda code { color: #cfcfcf; }
+.ayuda__boton::-webkit-details-marker { display: none; }
+.ayuda__boton:hover { color: var(--color-texto); border-color: var(--color-texto-secundario); }
+.ayuda__boton:focus-visible { outline: 2px solid var(--color-link); outline-offset: 2px; }
+.ayuda[open] .ayuda__boton { color: var(--color-texto); background: var(--color-superficie); }
+.ayuda__contenido {
+  margin-top: var(--esp-2);
+  padding: var(--esp-3);
+  max-width: 72ch;
+  background: var(--color-superficie-alta);
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-medio);
+  line-height: 1.5;
+}
+.ayuda__contenido code { color: var(--color-texto); font-family: var(--fuente-mono); }
 
+/* ---------------------------------------------------------------- aviso de conectividad */
+.aviso {
+  margin: var(--esp-3) var(--esp-4) 0;
+  padding: var(--esp-2) var(--esp-3);
+  border: 1px solid var(--color-error-borde);
+  background: var(--color-error-fondo);
+  color: var(--color-error);
+  border-radius: var(--radio-medio);
+  font-size: var(--tam-chico);
+  display: none;
+}
+.aviso.visible { display: block; }
+
+/* ---------------------------------------------------------------- tabla */
 .envoltorio-tabla {
-  overflow-x: auto;
-  padding: 0 0 24px 0;
+  flex: 1 1 auto;
+  min-height: 0; /* imprescindible para que un hijo flex pueda scrollear en vez de empujar el alto */
+  overflow: auto;
 }
 
 table.panel {
@@ -110,8 +221,8 @@ table.panel {
 }
 
 table.panel th, table.panel td {
-  padding: 6px 10px;
-  border-bottom: 1px solid #232323;
+  padding: var(--esp-2) var(--esp-3);
+  border-bottom: 1px solid var(--color-borde);
   text-align: left;
   vertical-align: top;
   white-space: nowrap;
@@ -119,84 +230,127 @@ table.panel th, table.panel td {
 
 table.panel thead th {
   position: sticky;
-  top: 41px; /* debajo de .cabecera */
-  background: #171717;
-  border-bottom: 1px solid #333;
-  font-size: 11px;
+  top: 0; /* relativo a .envoltorio-tabla (su propio contenedor con scroll), no a la página */
+  background: var(--color-superficie);
+  border-bottom: 1px solid var(--color-borde);
+  font-size: var(--tam-diminuto);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: #b7b7b7;
+  letter-spacing: 0.05em;
+  color: var(--color-texto-secundario);
   z-index: 5;
 }
 
 table.panel td.col-sesion, table.panel th.col-sesion {
   position: sticky;
   left: 0;
-  background: #111111;
+  background: var(--color-fondo);
   z-index: 4;
   min-width: 190px;
   white-space: normal;
+  border-left: 3px solid transparent;
 }
-table.panel thead th.col-sesion { background: #171717; z-index: 6; }
+table.panel thead th.col-sesion { background: var(--color-superficie); z-index: 6; border-left-color: transparent; }
 
-table.panel tbody tr:hover td { background: #1a1a1a; }
-table.panel tbody tr:hover td.col-sesion { background: #1a1a1a; }
+/* Franja de color por ESTADO de la fila (sistema.md §2, ref. Master Control Room / Manufacturing
+   Dashboard): un borde en vez de pintar toda la fila. Vive en la celda pegajosa para que se vea
+   incluso con scroll horizontal. El texto de la columna Estado sigue siendo la fuente de verdad. */
+table.panel tbody tr[data-estado="live"] td.col-sesion { border-left-color: var(--color-exito); }
+table.panel tbody tr[data-estado="idle"] td.col-sesion { border-left-color: var(--color-aviso); }
+table.panel tbody tr[data-estado="mudo"] td.col-sesion { border-left-color: var(--color-error); }
+table.panel tbody tr[data-estado="ended"] td.col-sesion { border-left-color: var(--color-texto-silenciado); }
+table.panel tbody tr[data-estado="waiting"] td.col-sesion { border-left-color: var(--color-borde); }
 
-.sesion-id { font-weight: 600; }
-.sesion-titulo { display: block; color: #9a9a9a; font-size: 12px; white-space: normal; max-width: 240px; }
+table.panel tbody tr:hover td { background: var(--color-superficie); }
+table.panel tbody tr:hover td.col-sesion { background: var(--color-superficie); }
 
+.sesion-id { font-weight: 600; font-family: var(--fuente-mono); }
+.sesion-titulo {
+  display: block;
+  color: var(--color-texto-secundario);
+  font-size: var(--tam-chico);
+  white-space: normal;
+  max-width: 240px;
+}
+
+/* ---------------------------------------------------------------- rótulos LIVE / REPLAY / TEST */
+/* Rótulos LIVE/REPLAY/TEST: texto en versalitas, borde 1px SIN relleno, todos del mismo gris salvo
+   LIVE que lleva el único acento de color del sistema (corrección de dirección, bloque 10: nada de
+   insignias de colores variados tipo badge de SaaS). */
 .badge {
   display: inline-block;
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 11px;
+  padding: 0 5px;
+  font-size: var(--tam-diminuto);
   font-weight: 600;
+  letter-spacing: 0.06em;
   margin-left: 4px;
-  border: 1px solid #555;
+  border: 1px solid var(--color-borde);
+  color: var(--color-texto-secundario);
+  background: transparent;
 }
-.badge-replay { color: #ffd479; border-color: #7a6224; background: #2a2210; }
-.badge-vivo { color: #79c6ff; border-color: #244a6b; background: #0f2233; }
-.badge-test { color: #ff9c9c; border-color: #6b2424; background: #2a1010; }
+.badge-vivo { color: var(--color-acento); border-color: var(--color-acento); }
+.badge-replay { color: var(--color-texto-secundario); border-color: var(--color-borde); }
+.badge-test { color: var(--color-texto-secundario); border-color: var(--color-borde); }
 
 table.panel tbody tr.fila-oculta { display: none; }
 
-.estado { font-weight: 600; }
-.estado::before {
-  content: "\25CF"; /* circulo: refuerzo visual, el texto de al lado es lo que cuenta */
-  margin-right: 5px;
-  font-size: 10px;
-}
-.estado--live::before { color: #4caf50; }
-.estado--idle::before { color: #d0a000; }
-.estado--ended::before { color: #777; }
-.estado--waiting::before { color: #555; }
-.estado--mudo::before { color: #e04b4b; }
-.estado-sub { display: block; font-size: 11px; color: #c98; margin-top: 1px; }
+/* ---------------------------------------------------------------- semáforos de estado (texto + color) */
+/* Corrección de dirección (bloque 10): sin puntito de color por fila; el ESTADO es la única celda
+   de estado y se lee por el TEXTO ("en vivo" / "sin texto hace N s" / "terminada" / "inactiva" /
+   "esperando datos"). mudo se resalta sólo con el color del propio texto, nunca sólo con un ícono. */
+.estado { font-weight: 600; color: var(--color-texto); }
+.estado--mudo { color: var(--color-error); }
+.estado--ended, .estado--waiting { color: var(--color-texto-secundario); font-weight: 400; }
 
-.n-insuf { color: #888; font-style: italic; }
+.n-insuf { color: var(--color-texto-silenciado); font-style: italic; }
 .num { display: block; }
-.num-sub { display: block; font-size: 11px; color: #999; }
+.num-sub { display: block; font-size: var(--tam-diminuto); color: var(--color-texto-secundario); }
+
+/* par p50/p95 + sparkline en la misma línea (sistema.md §4: el sparkline es un adorno, nunca
+   reemplaza el texto del par p50/p95). */
+.lat-par { display: flex; align-items: center; gap: 8px; }
+.sparkline { flex: none; display: block; }
+.sparkline polyline {
+  fill: none;
+  stroke: var(--color-texto-secundario);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+table.panel tbody tr[data-estado="mudo"] .sparkline polyline { stroke: var(--color-error); }
 
 .contador { font-weight: 600; }
-.contador-detalle { display: block; font-size: 11px; color: #999; white-space: normal; max-width: 220px; }
-.contador-cero { color: #666; font-weight: 400; }
+.contador-detalle { display: block; font-size: var(--tam-diminuto); color: var(--color-texto-secundario); white-space: normal; max-width: 240px; }
+.contador-cero { color: var(--color-texto-silenciado); font-weight: 400; }
 
-.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+/* motivo de rotación: punto de color clasificador + texto "motivo:n" (nunca sólo el punto) */
+.motivo { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; }
+.motivo::before { content: ""; width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--color-texto-silenciado); }
+.motivo--cierre::before { background: var(--color-error); }
+.motivo--atasco::before { background: var(--color-atencion); }
+.motivo--preventiva::before { background: var(--color-aviso); }
+.motivo--goaway::before { background: var(--color-replay); }
+.motivo--otro::before { background: var(--color-texto-silenciado); }
+
+/* Un solo tipo de letra en toda la tabla (la del sistema); .mono sólo alinea cifras con
+   tabular-nums, ya no cambia de familia (la monoespaciada queda reservada a session_id). */
+.mono { font-variant-numeric: tabular-nums; }
+
+.col-secundaria { display: none; }
+:root.mostrar-todas .col-secundaria { display: table-cell; }
 
 .pie {
-  padding: 8px 14px 24px;
-  font-size: 12px;
-  color: #888;
+  flex: none;
+  padding: var(--esp-2) var(--esp-4) var(--esp-6);
+  font-size: var(--tam-chico);
+  color: var(--color-texto-silenciado);
 }
 
-.aviso {
-  margin: 10px 14px;
-  padding: 8px 10px;
-  border: 1px solid #7a3b3b;
-  background: #2a1414;
-  color: #ffb3b3;
-  border-radius: 4px;
-  font-size: 12px;
-  display: none;
+/* ---------------------------------------------------------------- responsive
+   1080p: la tabla ancha (min-width 1500px) entra con margen en .envoltorio-tabla. Tablet/notebook
+   angosto: la cabecera se arma en dos filas con flex-wrap (identidad / controles) para que el token
+   y el toggle no se corten nunca; la tabla sigue con scroll horizontal propio (no de toda la
+   página), ya cubierto por .envoltorio-tabla. */
+@media (max-width: 900px) {
+  .cabecera__identidad { justify-content: flex-start; }
+  .cabecera__titulo { flex-basis: 100%; }
 }
-.aviso.visible { display: block; }

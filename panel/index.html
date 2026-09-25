@@ -4,42 +4,60 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Panel de producción — vibeathon</title>
+<link rel="stylesheet" href="tokens.css">
 <link rel="stylesheet" href="estilo.css">
 </head>
 <body>
   <header class="cabecera">
-    <h1>Panel de producción</h1>
-    <span id="chip-hub" class="chip">hub: conectando…</span>
-    <span id="chip-metricas" class="chip">métricas: sin token</span>
-    <span id="ultima-actualizacion" class="chip">sin datos aún</span>
-    <span class="token-caja">
-      <label for="input-token">token <code>/api/metricas</code></label>
-      <input type="password" id="input-token" placeholder="HUB_TOKEN" autocomplete="off" spellcheck="false">
-      <button type="button" id="btn-token-guardar">guardar</button>
-      <button type="button" id="btn-token-borrar">borrar</button>
-    </span>
-    <label class="toggle-pruebas" for="toggle-pruebas">
-      <input type="checkbox" id="toggle-pruebas"> mostrar pruebas
-    </label>
-    <span id="chip-pruebas-ocultas" class="chip">sin sesiones TEST</span>
+    <div class="cabecera__fila cabecera__identidad">
+      <h1 class="cabecera__titulo">Panel de producción<span class="cabecera__subtitulo">control de sesiones en vivo</span></h1>
+      <div class="cabecera__estado" role="status" aria-live="polite">
+        <span id="chip-hub" class="chip">hub: conectando…</span>
+        <span id="chip-metricas" class="chip">métricas: sin token</span>
+        <span id="ultima-actualizacion" class="chip">sin datos aún</span>
+        <span id="chip-conexion" class="chip">conexión panel: —</span>
+        <span id="chip-hub-seguridad" class="chip chip--warn" hidden></span>
+      </div>
+    </div>
+    <div class="cabecera__fila cabecera__controles">
+      <span class="token-caja">
+        <label for="input-token">token <code>/api/metricas</code></label>
+        <input type="password" id="input-token" placeholder="HUB_TOKEN" autocomplete="off" spellcheck="false">
+        <button type="button" id="btn-token-guardar">guardar</button>
+        <button type="button" id="btn-token-borrar">borrar</button>
+      </span>
+      <label class="toggle-pruebas" for="toggle-pruebas">
+        <input type="checkbox" id="toggle-pruebas"> mostrar pruebas
+      </label>
+      <span id="chip-pruebas-ocultas" class="chip">sin sesiones TEST</span>
+      <details class="ayuda">
+        <summary class="ayuda__boton" aria-label="Cómo leer este panel">?</summary>
+        <div class="ayuda__contenido">
+          Estado <code>live</code> con más de <code>15 s</code> sin un <code>type=text</code> nuevo se muestra
+          como "sin texto hace N s" (umbral documentado, brief B3). p50/p95 = <b>nearest-rank</b>, nunca promedio;
+          con menos de <code>10</code> muestras se marca "n insuficiente". El trazo junto al p50/p95 es un
+          <b>sparkline</b> de las últimas 20 muestras: es un adorno, no reemplaza los números. "grabada" =
+          <code>t_emit − t_captured</code> tal como quedó en el casete (sesiones <code>replay:true</code>); en
+          sesiones en vivo esa misma resta es la latencia real del worker y se agrega además la
+          <b>percibida</b> = <code>t_receive − t_captured</code> medida en el WebSocket propio de este panel.
+          "Parciales/60 s" es una ventana deslizante, no un promedio de sesión completa. Segundos de audio:
+          <b>estimación</b> (viene de <code>heartbeat.meta.audio_seconds_sent</code> del worker, sólo visible con
+          token vía <code>Authorization: Bearer</code> a <code>/api/metricas</code>; sin token esa columna dice
+          "sin token" y el resto de la fila sigue funcionando). El token se pega UNA vez arriba, se guarda en
+          <code>sessionStorage</code> (nunca en la URL ni en la query string) y viaja sólo en la cabecera de la
+          petición; <code>?hub=</code> sólo se acepta si apunta a localhost/127.0.0.1/el mismo host que sirve
+          esta página — cualquier otro valor se ignora y se avisa arriba, para no filtrar el token a un host
+          ajeno. Sesiones con <code>test:true</code> (fixtures/transporte de casete, no ASR en vivo) llevan el
+          rótulo <b>TEST</b> y están OCULTAS por defecto: "mostrar pruebas" las trae de vuelta.
+          <code>rotation.meta.audio_lost_s</code>, cuando el worker lo manda, se acumula por sesión y aparece
+          junto a "Rotaciones"; el color de cada motivo (cierre/atasco/preventiva/goaway) es un clasificador
+          visual, el texto del motivo siempre está al lado. La franja de color a la izquierda de cada fila
+          resume el estado de esa sesión (vivo/mudo/idle/ended/esperando), igual que el texto de la columna
+          Estado.
+        </div>
+      </details>
+    </div>
   </header>
-
-  <div class="leyenda">
-    Estado <code>live</code> con más de <code>15 s</code> sin un <code>type=text</code> nuevo se muestra
-    como "sin texto hace N s" (umbral documentado, brief B3). p50/p95 = <b>nearest-rank</b>, nunca promedio;
-    con menos de <code>10</code> muestras se marca "n insuficiente". "grabada" = <code>t_emit − t_captured</code>
-    tal como quedó en el casete (sesiones <code>replay:true</code>); en sesiones en vivo esa misma resta es la
-    latencia real del worker y se agrega además la <b>percibida</b> = <code>t_receive − t_captured</code> medida
-    en el WebSocket propio de este panel. "Parciales/60 s" es una ventana deslizante, no un promedio de sesión
-    completa. Segundos de audio: <b>estimación</b> (viene de <code>heartbeat.meta.audio_seconds_sent</code> del
-    worker, sólo visible con token vía <code>Authorization: Bearer</code> a <code>/api/metricas</code>; sin
-    token esa columna dice "sin token" y el resto de la fila sigue funcionando). El token se pega UNA vez acá
-    arriba, se guarda en <code>sessionStorage</code> (nunca en la URL ni en la query string) y viaja sólo en la
-    cabecera de la petición. Sesiones con <code>test:true</code> (fixtures/transporte de casete, no ASR en
-    vivo) llevan el rótulo <b>TEST</b> y están OCULTAS por defecto: "mostrar pruebas" las trae de vuelta.
-    <code>rotation.meta.audio_lost_s</code>, cuando el worker lo manda, se acumula por sesión y aparece junto
-    a "Rotaciones".
-  </div>
 
   <div id="aviso-hub" class="aviso"></div>
 
@@ -50,7 +68,6 @@
           <th class="col-sesion">Sesión</th>
           <th>Idioma</th>
           <th>Estado</th>
-          <th>Monitor (WS propio)</th>
           <th>Último seq</th>
           <th>Textos</th>
           <th>Latencia worker (p50 / p95)</th>
@@ -59,13 +76,13 @@
           <th>Watchdog reaperturas</th>
           <th>Errores</th>
           <th>Traducciones ok:false</th>
-          <th>Parciales / 60 s</th>
-          <th>Audio enviado (estimación)</th>
+          <th class="col-secundaria">Parciales / 60 s</th>
+          <th class="col-secundaria">Audio enviado (estimación)</th>
           <th>Espectadores</th>
         </tr>
       </thead>
       <tbody id="cuerpo-tabla">
-        <tr id="fila-vacia"><td colspan="15">Esperando la primera respuesta de <code>/api/sesiones</code>…</td></tr>
+        <tr id="fila-vacia"><td colspan="14">Esperando la primera respuesta de <code>/api/sesiones</code>…</td></tr>
       </tbody>
     </table>
   </div>
@@ -73,8 +90,8 @@
   <div class="pie">
     Fuente: <span id="pie-hub-url">—</span> · refresco de <code>/api/sesiones</code> cada 2 s ·
     reconciliación de historial cada 2 s · re-render cada 1 s. Override de hub: agregá
-    <code>?hub=host:puerto</code> a esta URL. Consola del navegador sin errores es parte de la evidencia
-    de cierre (ver <code>reportes/monitor-b3.md</code>).
+    <code>?hub=host:puerto</code> a esta URL (sólo localhost/127.0.0.1/este mismo host). Consola del
+    navegador sin errores es parte de la evidencia de cierre (ver <code>reportes/monitor-b10.md</code>).
   </div>
 
   <script src="app.js"></script>

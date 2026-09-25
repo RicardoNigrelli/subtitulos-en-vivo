@@ -33,7 +33,35 @@
   var params = new URLSearchParams(location.search);
   var sessionId = parsePath();
   var lang = params.get('lang') || 'en';
-  var hubParam = params.get('hub');
+
+  // ---------- B10 (seguridad, aviso del orquestador): ?hub= sólo admite localhost/127.0.0.1/
+  // [::1]/el propio location.hostname. Sin esto, un enlace armado por un tercero con
+  // ?hub=evil.example podría hacer que esta pestaña mande fetch/WebSocket a un host arbitrario
+  // (la vista no maneja token, pero igual no hay razón para hablarle a un host que no pedimos
+  // nosotros). Fuera de esos hosts: se ignora (como si no hubiera ?hub=) y se avisa en un chip
+  // aparte (#chip-hub-invalido) + consola, nunca en silencio.
+  function nombreHost(hostPuerto) {
+    var m = /^\[([^\]]+)\](?::\d+)?$/.exec(hostPuerto); // [::1] o [::1]:8100
+    if (m) return m[1];
+    var partes = hostPuerto.split(':');
+    return partes.length <= 2 ? partes[0] : hostPuerto; // ipv6 pelado (sin corchetes): se compara entero
+  }
+  function hubHostPermitido(hostPuerto) {
+    var host = nombreHost(hostPuerto).toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' ||
+      host === location.hostname.toLowerCase();
+  }
+  var hubParamCrudo = params.get('hub');
+  var hubParam = null;
+  var hubIgnorado = false;
+  if (hubParamCrudo) {
+    if (hubHostPermitido(hubParamCrudo)) {
+      hubParam = hubParamCrudo;
+    } else {
+      hubIgnorado = true;
+      console.warn('[seguridad] ?hub= ignorado (host no permitido, ni localhost ni ' + location.hostname + '):', hubParamCrudo);
+    }
+  }
 
   // ---------- B4: mismo origen si la sirve el hub, sino el hub de dev en :8100 ----------
   // La única señal confiable del lado cliente es el PUERTO: web/servir.py (este agente, dev)
@@ -64,6 +92,7 @@
   var elTitulo = document.getElementById('titulo-sesion');
   var elSelectorIdioma = document.getElementById('selector-idioma');
   var elVolverVivo = document.getElementById('volver-vivo');
+  var elChipHubInvalido = document.getElementById('chip-hub-invalido');
 
   // ---------- constantes B4 (documentadas donde se usan; las de tiempo son [SUPUESTO: frontend]
   // salvo la de 250ms/1s de latido y la de 120s de traducción pendiente, que vienen del brief) ----------
@@ -793,6 +822,45 @@
     backoffMs = Math.min(backoffMs * 2, BACKOFF_MAX);
   }
 
+  // ---------- Modo proyección (Bloque 10, C5): pantalla completa para proyectar en la sala.
+  // CSS puro (body.modo-proyeccion, ver estilo.css) + este flag: no reescribe texto ya pintado,
+  // no cambia ids/clases existentes, sólo agrega/quita una clase en <body> y persiste la
+  // preferencia (best-effort, nunca bloqueante si localStorage falla).
+  // `?modo=obs` (pedido del orquestador, integración OBS/vMix R8a) es un modo aparte, NO
+  // interactivo, pensado para una fuente de navegador que quema los subtítulos en el stream: si
+  // está presente, gana y no se engancha el botón/atajo de proyección (ver web/README.md).
+  var elBotonProyeccion = document.getElementById('boton-proyeccion');
+  var LS_CLAVE_PROYECCION = 'subtitulos-modo-proyeccion';
+
+  function leerPreferenciaProyeccion() {
+    try { return localStorage.getItem(LS_CLAVE_PROYECCION) === '1'; } catch (e) { return false; }
+  }
+  function guardarPreferenciaProyeccion(activo) {
+    try { localStorage.setItem(LS_CLAVE_PROYECCION, activo ? '1' : '0'); } catch (e) { /* nunca bloqueante */ }
+  }
+  function setModoProyeccion(activo) {
+    document.body.classList.toggle('modo-proyeccion', activo);
+    if (elBotonProyeccion) elBotonProyeccion.setAttribute('aria-pressed', activo ? 'true' : 'false');
+    guardarPreferenciaProyeccion(activo);
+  }
+  function toggleModoProyeccion() {
+    setModoProyeccion(!document.body.classList.contains('modo-proyeccion'));
+  }
+
+  if (params.get('modo') === 'obs') {
+    document.body.classList.add('modo-obs');
+  } else {
+    if (elBotonProyeccion) elBotonProyeccion.addEventListener('click', toggleModoProyeccion);
+    window.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'p' && ev.key !== 'P') return;
+      var t = ev.target;
+      var enCampo = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      if (enCampo || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      toggleModoProyeccion();
+    });
+    setModoProyeccion(params.get('modo') === 'proyeccion' || leerPreferenciaProyeccion());
+  }
+
   // ---------- arranque ----------
   if (!sessionId) {
     var aviso = document.createElement('p');
@@ -804,6 +872,7 @@
     actualizarTitulo();
     cargarTituloInicial();
     setChip('reconectando'); // estado inicial: se está por intentar la primera conexión
+    if (hubIgnorado && elChipHubInvalido) elChipHubInvalido.hidden = false;
     window.addEventListener('scroll', alScrollear, { passive: true });
     if (elVolverVivo) elVolverVivo.addEventListener('click', volverAlVivo);
     tickTimer = setInterval(tick, 250);

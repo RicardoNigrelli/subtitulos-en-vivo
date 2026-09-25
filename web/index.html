@@ -4,12 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nerdearla — Subtítulos en vivo</title>
+<link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/estilo.css">
 </head>
 <body class="pagina-indice">
 <header class="cabecera-indice">
-  <h1>Sesiones en vivo</h1>
-  <p class="ayuda">Elegí una sesión y un idioma. Sin login, sin app.</p>
+  <div class="marca-indice">
+    <h1>Nerdearla — Subtítulos en vivo</h1>
+    <p class="ayuda">Elegí una sesión y un idioma. Sin login, sin app.</p>
+    <p id="aviso-hub-ignorado" class="aviso-hub-ignorado" hidden>Se ignoró un hub externo en el enlace (?hub=): sólo se admite localhost o este mismo host.</p>
+  </div>
+  <p class="indicacion-qr">Escaneá el QR de tu sala</p>
 </header>
 <main id="lista-sesiones" class="lista-sesiones">
   <p class="estado-carga">Buscando sesiones…</p>
@@ -22,7 +27,32 @@
   'use strict';
 
   var params = new URLSearchParams(location.search);
-  var hubParam = params.get('hub');
+
+  // B10 (seguridad, aviso del orquestador): mismo chequeo que app.js — ?hub= sólo admite
+  // localhost/127.0.0.1/[::1]/el propio location.hostname, para que un enlace armado por un
+  // tercero no pueda hacer que esta página le pida la lista de sesiones a un host arbitrario.
+  function nombreHost(hostPuerto) {
+    var m = /^\[([^\]]+)\](?::\d+)?$/.exec(hostPuerto);
+    if (m) return m[1];
+    var partes = hostPuerto.split(':');
+    return partes.length <= 2 ? partes[0] : hostPuerto;
+  }
+  function hubHostPermitido(hostPuerto) {
+    var host = nombreHost(hostPuerto).toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' ||
+      host === location.hostname.toLowerCase();
+  }
+  var hubParamCrudo = params.get('hub');
+  var hubParam = null;
+  if (hubParamCrudo) {
+    if (hubHostPermitido(hubParamCrudo)) {
+      hubParam = hubParamCrudo;
+    } else {
+      console.warn('[seguridad] ?hub= ignorado (host no permitido):', hubParamCrudo);
+      var avisoHub = document.getElementById('aviso-hub-ignorado');
+      if (avisoHub) avisoHub.hidden = false;
+    }
+  }
   // B4: mismo origen si esta pagina la sirve el propio hub (hub/estaticos.py); si la sirve
   // web/servir.py (puerto de dev 8101) el hub de dev sigue en :8100. Mismo criterio que app.js
   // (ver su comentario "calcularOrigen"): el puerto es la unica señal confiable del lado cliente.
@@ -132,9 +162,21 @@
   // Sesiones de prueba (test:true, del transporte de casete o ejemplos del contrato) se ocultan
   // salvo que la URL traiga ?test=1. Agregado por el orquestador al cierre de B4.
   var mostrarTest = new URLSearchParams(location.search).get('test') === '1';
+
+  // sistema.md §1/§2 (ref. "Security Operations Dashboard"): jerarquía por URGENCIA, no
+  // alfabética/orden de llegada — una sesión en vivo importa más que una finalizada.
+  var PRIORIDAD_ESTADO = { live: 0, idle: 1, ended: 2 };
+  function prioridad(s) {
+    var p = PRIORIDAD_ESTADO[s.state];
+    return (typeof p === 'number') ? p : 3;
+  }
+
   function render(sesiones) {
     if (!mostrarTest && sesiones) {
       sesiones = sesiones.filter(function (s) { return !s.test; });
+    }
+    if (sesiones) {
+      sesiones = sesiones.slice().sort(function (a, b) { return prioridad(a) - prioridad(b); });
     }
     cont.textContent = '';
     if (!sesiones || sesiones.length === 0) {
@@ -147,6 +189,10 @@
     sesiones.forEach(function (s) {
       var tarjeta = document.createElement('article');
       tarjeta.className = 'tarjeta-sesion';
+      // Franja de color en el borde izquierdo por estado (sistema.md §2 ref. "Master Control
+      // Room"): un acento, no la tarjeta entera pintada. El REPLAY manda sobre el estado (ya es
+      // lo más saliente del badge de arriba).
+      tarjeta.classList.add('tarjeta-sesion--' + (s.replay ? 'replay' : (s.state || 'desconocido')));
 
       var h2 = document.createElement('h2');
       h2.textContent = s.title || s.session_id;

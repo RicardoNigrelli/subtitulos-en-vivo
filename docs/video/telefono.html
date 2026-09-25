@@ -1,0 +1,126 @@
+<!doctype html>
+<!--
+  Mockup de telefono para el video final (planos 2, 3, 10, 12 del Guion A, ver
+  docs/video/guion-final.md). Un marco de telefono en CSS puro (sin imagenes de stock, sin
+  plantilla) con un <iframe> real adentro apuntando a la vista de sesion servida por web/
+  (misma maquina, http://localhost:8101/...). Pensado para grabarse a 1920x1080: los telefonos
+  quedan centrados sobre un fondo neutro oscuro.
+
+  Uso:
+    docs/video/telefono.html?url=http://localhost:8101/s/<id>?lang=es
+    docs/video/telefono.html?url=<...>&url2=<...>   -> dos telefonos lado a lado (plano 10)
+
+  Nota de seguridad (mismo criterio que web/app.js y web/index.html): este mockup es SOLO para
+  grabar localmente; no valida ?url= porque no se publica, se abre a mano en esta maquina.
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup telefono — grabacion</title>
+<style>
+  :root {
+    color-scheme: dark;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(120% 140% at 50% 20%, #23242b 0%, #131319 55%, #0a0a0d 100%);
+    overflow: hidden;
+    font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+  }
+  /* Pensado para grabarse con la ventana a 1920x1080 (el escenario llena el viewport y centra
+     los telefonos con flexbox, asi que tambien se ve centrado si se prueba en una ventana mas
+     chica, p.ej. este panel de preview). */
+  .escenario {
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 96px;
+  }
+  .telefono {
+    position: relative;
+    width: 390px;
+    height: 844px;
+    background: #0c0c0e;
+    border-radius: 54px;
+    box-shadow:
+      0 0 0 2px #2a2b32,
+      0 30px 60px -15px rgba(0, 0, 0, 0.7),
+      0 10px 24px rgba(0, 0, 0, 0.5);
+    padding: 14px;
+    box-sizing: border-box;
+  }
+  .telefono__pantalla {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    border-radius: 38px;
+    overflow: hidden;
+  }
+  .telefono__notch {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 120px;
+    height: 26px;
+    background: #0c0c0e;
+    border-radius: 0 0 16px 16px;
+    z-index: 5;
+  }
+  .telefono__pantalla iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+    background: #fff;
+  }
+  /* sombra de contacto suave sobre el fondo, para que no "flote" (pedido: sin look de plantilla) */
+  .telefono::after {
+    content: "";
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    bottom: -26px;
+    height: 30px;
+    background: radial-gradient(closest-side, rgba(0, 0, 0, 0.55), transparent 70%);
+    filter: blur(2px);
+  }
+</style>
+</head>
+<body>
+  <div class="escenario" id="escenario"></div>
+  <script>
+    (function () {
+      "use strict";
+      var params = new URLSearchParams(location.search);
+      var urls = [params.get("url"), params.get("url2")].filter(Boolean);
+      var escenario = document.getElementById("escenario");
+      if (urls.length === 0) {
+        escenario.innerHTML = '<p style="color:#ddd;font-size:22px">Falta ?url= (y opcional &url2=)</p>';
+        return;
+      }
+      urls.forEach(function (u) {
+        var telefono = document.createElement("div");
+        telefono.className = "telefono";
+        var pantalla = document.createElement("div");
+        pantalla.className = "telefono__pantalla";
+        var notch = document.createElement("div");
+        notch.className = "telefono__notch";
+        var iframe = document.createElement("iframe");
+        iframe.src = u;
+        pantalla.appendChild(iframe);
+        pantalla.appendChild(notch);
+        telefono.appendChild(pantalla);
+        escenario.appendChild(telefono);
+      });
+    })();
+  </script>
+</body>
+</html>

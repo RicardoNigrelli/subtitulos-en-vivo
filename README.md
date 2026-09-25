@@ -139,6 +139,10 @@ monitoreo (`/panel/`). **El modo replay reproduce sesiones grabadas: no cumple R
 solo** (no es audio en vivo); sirve para mostrar el pipeline completo (hub + vista + panel +
 fan-out) sin credenciales ni costo (eje 3 de escalabilidad, ver más abajo).
 
+La imagen (`ops/Dockerfile`) corre hub y worker con un usuario sin privilegios (`app`, uid 10001),
+no root. Desde este commit, los servidores de desarrollo (`web/servir.py`, `panel/servir.py`)
+bindean `127.0.0.1` por defecto y sólo escuchan en la LAN si se pasa `--host 0.0.0.0` a propósito.
+
 ### Manual, con venv
 
 ```bash

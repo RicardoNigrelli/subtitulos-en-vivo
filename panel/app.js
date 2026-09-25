@@ -11,23 +11,28 @@
 //   - WS público /ws/<session_id> (sin token, igual que cualquier espectador): stream en vivo de
 //     TODOS los tipos salvo el heartbeat del worker (el hub no lo reenvía a audiencia). Es la única
 //     fuente para `partial`, `translation` y para la latencia PERCIBIDA (t_receive - t_captured).
-//   - GET /api/metricas: requiere `Authorization: Bearer <HUB_TOKEN>` (hub/README.md). Servido por
-//     panel/servir.py (dev, 8102): pasa por SU proxy `/panel-api/metricas`, que agrega el Bearer del
-//     lado del servidor (token de `.env`, el navegador no lo ve). Servido por el hub directo
-//     (`--panel`, cualquier otro puerto: 8080 producción, 8195 en B8) ESE proxy no existe (hub/README
-//     "el proxy /panel-api/metricas de panel/servir.py NO existe en el hub") y el panel manda el
-//     Bearer él mismo (B8: `fetchMetricas()`) con el token que tipeó el operador UNA vez en el campo
-//     de la cabecera; queda en `sessionStorage` (NUNCA en la query string ni en la URL: skill
-//     ui-subtitulos "Token"); sin token no se llama al endpoint y las celdas que dependen de él
-//     (audio estimado) y el chip dicen "sin token". El resto del panel (rotaciones, watchdog,
-//     errores, ok:false, parciales/min, viewers) sale de /api/sesiones y del WS público, sin token.
+//   - GET /api/metricas: requiere `Authorization: Bearer <HUB_TOKEN>` (hub/README.md). El panel
+//     SIEMPRE la pide directo a `HTTP_BASE` con el Bearer que tipeó el operador (sessionStorage,
+//     NUNCA en la query string ni en la URL: skill ui-subtitulos "Token"); sin token no se llama al
+//     endpoint y las celdas que dependen de él (audio estimado) y el chip dicen "sin token". Hasta
+//     B9 `panel/servir.py` (8102) tenía un proxy `/panel-api/metricas` que agregaba el Bearer real
+//     del lado del servidor: ELIMINADO en B10 (hallazgo ALTO, `reportes/seguridad.md` #1: SSRF +
+//     fuga del token vía `?hub=` sin validar). Ahora 8102 y el hub sirviendo el panel directo
+//     (`--panel`, 8080/8195/etc.) se comportan IGUAL: el operador tipea el token una vez. El resto
+//     del panel (rotaciones, watchdog, errores, ok:false, parciales/min, viewers) sale de
+//     /api/sesiones y del WS público, sin token.
 //
 // B5: resolución de origen del hub — MISMO PATRÓN que web/app.js (frontend), mismo razonamiento: la
 // única señal confiable del lado cliente es el puerto. `panel/servir.py` (dev, este agente) siempre
 // corre en 8102; cualquier otro origen (el hub sirviendo `--panel panel` en su propio puerto, p. ej.
 // 8080 o uno de prueba) se interpreta como "me sirve el hub" y habla a `location.host` directo.
-// `?hub=host:puerto` pisa esto siempre. [SUPUESTO: monitor, siguiendo la convención ya usada por
-// frontend en B4] no hay forma de saberlo con certeza sin una vuelta previa.
+// `?hub=host:puerto` pisa esto — DESDE B10 sólo si el host es localhost/127.0.0.1/[::1] o el mismo
+// `location.hostname` (hallazgo ALTO #2 de `reportes/seguridad.md`: un link `?hub=atacante.example`
+// hacía que el navegador del operador mandara su Bearer real a un host arbitrario). Cualquier otro
+// valor se IGNORA (se sigue la resolución same-origin/8100 de siempre) y la cabecera muestra un
+// aviso con texto (`#chip-hub-seguridad`), nunca sólo en consola. [SUPUESTO: monitor, siguiendo la
+// convención ya usada por frontend en B4] no hay forma de saber con certeza el origen sin una vuelta
+// previa; la validación de abajo es la que decide, no una adivinanza.
 //
 // B5/B8: sesiones `test:true` (fixtures `contracts/ejemplos/`, transporte de casete sin API — NO son
 // ASR en vivo) llevan el rótulo TEST junto al idioma y están ocultas por defecto (fila-oculta, CSS);
@@ -44,7 +49,32 @@
 (function () {
   // ---------------------------------------------------------------- configuración
   var params = new URLSearchParams(location.search);
-  var hubParam = params.get('hub');
+  var hubParamCrudo = params.get('hub');
+
+  // B10 (seguridad, reportes/seguridad.md hallazgo ALTO #2): `?hub=` sólo se acepta si apunta a
+  // localhost/127.0.0.1/[::1] o al mismo host que sirve esta página. Cualquier otro valor se
+  // ignora COMPLETO (nunca se arma HTTP_BASE/WS_BASE con él, nunca se le manda el Bearer) y queda
+  // registrado en `hubIgnoradoPorSeguridad` para avisar en la cabecera con texto.
+  function hostnameDe(hostPuerto) {
+    if (!hostPuerto) return '';
+    var m = String(hostPuerto).match(/^\[([^\]]+)\](?::\d+)?$/); // [::1]:puerto
+    if (m) return m[1].toLowerCase();
+    var idx = String(hostPuerto).lastIndexOf(':');
+    return (idx > -1 ? String(hostPuerto).slice(0, idx) : String(hostPuerto)).toLowerCase();
+  }
+  function hostnamePermitido(hostPuerto) {
+    var hn = hostnameDe(hostPuerto);
+    if (!hn) return false;
+    if (hn === 'localhost' || hn === '127.0.0.1' || hn === '::1') return true;
+    return hn === String(location.hostname).toLowerCase();
+  }
+  var hubIgnoradoPorSeguridad = !!hubParamCrudo && !hostnamePermitido(hubParamCrudo);
+  var hubParam = (hubParamCrudo && hostnamePermitido(hubParamCrudo)) ? hubParamCrudo : null;
+
+  // Columnas secundarias (parciales/60s, audio estimado): ocultas por defecto para densidad de
+  // control room; ?todas=1 las trae (sistema.md, corrección de dirección bloque 10).
+  var mostrarTodas = params.get('todas') === '1';
+  if (mostrarTodas) document.documentElement.classList.add('mostrar-todas');
 
   var PUERTO_DEV_PANEL = '8102';
   var mismoOrigen = !hubParam && location.protocol !== 'file:' && location.port !== PUERTO_DEV_PANEL;
@@ -76,18 +106,13 @@
     }
   }
 
-  // B8: si esta pagina la sirve panel/servir.py (dev, puerto 8102) existe SU proxy autenticado
-  // panel-api/metricas (token server-side leido de .env, ver panel/servir.py). Si la sirve el HUB
-  // directo (--panel, cualquier otro puerto: 8080 produccion, 8195 este bloque) ESE proxy NO existe
-  // (hub/README.md: "el proxy /panel-api/metricas de panel/servir.py NO existe en el hub") y hay que
-  // pedir GET /api/metricas con Authorization: Bearer nosotros mismos, con el token que tipeo el
-  // operador (leerToken(), sessionStorage; NUNCA en la query string, skill ui-subtitulos "Token").
-  var METRICAS_VIA_PROXY_SERVIR = location.port === PUERTO_DEV_PANEL && location.protocol !== 'file:';
-
+  // B10 (seguridad): SIEMPRE pedimos GET /api/metricas nosotros mismos con Authorization: Bearer y
+  // el token que tipeó el operador (leerToken(), sessionStorage; NUNCA en la query string, skill
+  // ui-subtitulos "Token"). Antes, si esta página la servía panel/servir.py (8102), existía un
+  // proxy server-side `/panel-api/metricas` que agregaba el HUB_TOKEN real sin que el operador lo
+  // tipeara: ELIMINADO (reportes/seguridad.md hallazgo ALTO #1, SSRF + fuga de token vía `?hub=`
+  // sin validar). Mismo camino sirva quien sirva el panel.
   function fetchMetricas() {
-    if (METRICAS_VIA_PROXY_SERVIR) {
-      return fetch('panel-api/metricas?hub=' + encodeURIComponent(hubHost));
-    }
     var tok = leerToken();
     if (!tok) return Promise.reject(new Error('SIN_TOKEN'));
     return fetch(HTTP_BASE + '/api/metricas', { headers: { Authorization: 'Bearer ' + tok } });
@@ -128,13 +153,37 @@
     return { n: v.length, p50: pct(v, 50), p95: pct(v, 95) };
   }
 
-  function fmtResumenLatencia(r) {
+  function fmtResumenLatencia(r, sparkHtml) {
+    var spark = sparkHtml || '';
     if (r.n === 0) return '<span class="n-insuf">sin muestras</span>';
     if (r.n < MIN_N_PERCENTIL) {
-      return '<span class="n-insuf">n insuficiente (n=' + r.n + ')</span>';
+      return '<span class="lat-par"><span class="n-insuf">n insuficiente (n=' + r.n + ')</span>' + spark + '</span>';
     }
-    return '<span class="num">p50 ' + fmtSeg(r.p50) + ' · p95 ' + fmtSeg(r.p95) + '</span>' +
+    return '<span class="lat-par"><span class="num">p50 ' + fmtSeg(r.p50) + ' · p95 ' + fmtSeg(r.p95) + '</span>' +
+           spark + '</span>' +
            '<span class="num-sub">n=' + r.n + '</span>';
+  }
+
+  // Innovación (sistema.md §4): sparkline de latencia por sesión, SVG inline sin librerías, con los
+  // últimos N valores YA guardados por aplicarMensaje (s.latGrabada / s.latPercibida, orden
+  // cronológico). Es un ADORNO adicional: la regla "p50/p95 siempre, nunca promedio" la sigue
+  // cumpliendo fmtResumenLatencia arriba; esto no reemplaza esos números, sólo agrega la forma.
+  var SPARK_N = 20, SPARK_W = 60, SPARK_H = 16, SPARK_PAD = 2;
+  function sparklineSvg(valoresCronologicos) {
+    var vals = (valoresCronologicos || []).filter(function (v) { return typeof v === 'number' && isFinite(v); });
+    vals = vals.slice(-SPARK_N);
+    if (vals.length < 2) return '';
+    var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+    var rango = (max - min) || 1;
+    var pts = vals.map(function (v, i) {
+      var x = (i / (vals.length - 1)) * SPARK_W;
+      var y = SPARK_H - SPARK_PAD - ((v - min) / rango) * (SPARK_H - SPARK_PAD * 2);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    var titulo = 'últimas ' + vals.length + ' muestras: ' + fmtSeg(min) + ' a ' + fmtSeg(max);
+    return '<svg class="sparkline" width="' + SPARK_W + '" height="' + SPARK_H + '" viewBox="0 0 ' +
+           SPARK_W + ' ' + SPARK_H + '" aria-hidden="true" focusable="false"><title>' + esc(titulo) +
+           '</title><polyline points="' + pts + '"></polyline></svg>';
   }
 
   // ---------------------------------------------------------------- estado en memoria (por sesión)
@@ -340,6 +389,20 @@
   var elPieHubUrl = document.getElementById('pie-hub-url');
   elPieHubUrl.textContent = HTTP_BASE + ' (WS ' + WS_BASE + ')';
 
+  // B10 (seguridad): aviso PERSISTENTE en la cabecera (con texto, no sólo color) cuando `?hub=` se
+  // ignoró; no usa marcarAviso() porque ese banner se limpia solo en cada poll exitoso y este aviso
+  // tiene que seguir visible mientras la URL siga teniendo el `?hub=` rechazado.
+  var elChipConexion = document.getElementById('chip-conexion');
+  var elChipHubSeguridad = document.getElementById('chip-hub-seguridad');
+  if (elChipHubSeguridad) {
+    if (hubIgnoradoPorSeguridad) {
+      elChipHubSeguridad.textContent = 'hub externo ignorado por seguridad: "' + hubParamCrudo + '"';
+      elChipHubSeguridad.hidden = false;
+    } else {
+      elChipHubSeguridad.hidden = true;
+    }
+  }
+
   var metricasGlobal = null;
 
   function marcarAviso(msg) {
@@ -404,22 +467,30 @@
   // ---------------------------------------------------------------- render
   function estadoDe(s, ahoraMs) {
     var base = s.hubState || 'waiting';
-    if (base === 'ended') return { clase: 'ended', texto: 'ended' };
-    if (base === 'idle') return { clase: 'idle', texto: 'idle' };
+    if (base === 'ended') return { clase: 'ended', texto: 'terminada' };
+    if (base === 'idle') return { clase: 'idle', texto: 'inactiva' };
     if (base === 'waiting') return { clase: 'waiting', texto: 'esperando datos' };
     // live:
-    if (s.ultimoTextoEn == null) return { clase: 'live', texto: 'live (sin texto todavía)' };
+    if (s.ultimoTextoEn == null) return { clase: 'live', texto: 'en vivo (sin texto todavía)' };
     var silencioS = (ahoraMs - s.ultimoTextoEn) / 1000;
     if (silencioS > SIN_TEXTO_S) {
       return { clase: 'mudo', texto: 'sin texto hace ' + Math.floor(silencioS) + ' s' };
     }
-    return { clase: 'live', texto: 'live' };
+    return { clase: 'live', texto: 'en vivo' };
   }
 
+  // Franja de color por motivo de rotación (sistema.md §2 ref. Master Control Room: color como
+  // clasificador, siempre con texto al lado — nunca el punto solo). Motivos sin mapeo (cualquier
+  // string que mande el worker) caen en el modificador neutro "otro", no se pierden.
+  var MOTIVO_CLASE = { cierre: 'motivo--cierre', atasco: 'motivo--atasco',
+                        preventiva: 'motivo--preventiva', goaway: 'motivo--goaway' };
   function fmtDetalleMotivos(mapa) {
     var claves = Object.keys(mapa);
     if (!claves.length) return '';
-    return claves.sort().map(function (k) { return esc(k) + ':' + mapa[k]; }).join(' · ');
+    return claves.sort().map(function (k) {
+      var clase = MOTIVO_CLASE[k] || 'motivo--otro';
+      return '<span class="motivo ' + clase + '">' + esc(k) + ':' + mapa[k] + '</span>';
+    }).join(' ');
   }
 
   // B8: audio_lost_s acumulado (B5 ya lo sumaba en aplicarMensaje, pero no se mostraba en ninguna
@@ -457,24 +528,23 @@
     return html;
   }
 
-  function filaHtml(s, ahoraMs) {
-    var estado = estadoDe(s, ahoraMs);
+  function filaHtml(s, ahoraMs, estado) {
     var lang = s.lang || '—';
     var badgeReplay = s.replay === true ? '<span class="badge badge-replay">REPLAY</span>' :
-                       (s.replay === false ? '<span class="badge badge-vivo">EN VIVO</span>' : '');
+                       (s.replay === false ? '<span class="badge badge-vivo">LIVE</span>' : '');
     var badgeTest = s.test === true ? '<span class="badge badge-test">TEST</span>' : '';
     var destinos = s.translationsLangs && s.translationsLangs.length ?
       '<span class="num-sub">trad: ' + esc(s.translationsLangs.join(', ')) + '</span>' : '';
 
     var etiquetaLatWorker = s.replay === true ? 'grabada (t_emit − t_captured)' : 't_emit − t_captured';
     var latWorkerHtml = '<span class="num-sub">' + etiquetaLatWorker + '</span>' +
-                        fmtResumenLatencia(resumenLatencia(s.latGrabada));
+                        fmtResumenLatencia(resumenLatencia(s.latGrabada), sparklineSvg(s.latGrabada));
     var latPercibidaHtml;
     if (s.replay === true) {
       latPercibidaHtml = '<span class="n-insuf">no aplica (replay)</span>';
     } else {
       latPercibidaHtml = '<span class="num-sub">t_receive − t_captured (WS propio)</span>' +
-                          fmtResumenLatencia(resumenLatencia(s.latPercibida));
+                          fmtResumenLatencia(resumenLatencia(s.latPercibida), sparklineSvg(s.latPercibida));
     }
 
     var viewersHtml = String(s.viewers || 0);
@@ -490,7 +560,6 @@
         (s.title ? '<span class="sesion-titulo">' + esc(s.title) + '</span>' : '') + '</td>' +
       '<td>' + esc(lang) + ' ' + badgeReplay + badgeTest + destinos + '</td>' +
       '<td class="estado estado--' + estado.clase + '">' + esc(estado.texto) + '</td>' +
-      '<td>' + esc(s.wsEstado) + '</td>' +
       '<td class="mono">' + (s.lastSeqHub == null ? '—' : s.lastSeqHub) +
         '<span class="num-sub">' + (s.lastTEmitHub ? fmtHoraMs(s.lastTEmitHub * 1000) : '—') + '</span></td>' +
       '<td class="mono">' + s.textos + '</td>' +
@@ -502,8 +571,8 @@
       '<td>' + fmtContador(s.errores, s.ultimoErrorEn, s.ultimoErrorDetalle ? esc(s.ultimoErrorDetalle) : '') + '</td>' +
       '<td>' + fmtContador(s.traduccionesOkFalse, s.ultimaTraduccionEn,
                  s.traduccionesOkTrue ? ('ok:true = ' + s.traduccionesOkTrue) : '') + '</td>' +
-      '<td class="mono">' + fmtParcialesPorMinuto(s, ahoraMs) + '</td>' +
-      '<td>' + fmtAudioEstimado(s) + '</td>' +
+      '<td class="mono col-secundaria">' + fmtParcialesPorMinuto(s, ahoraMs) + '</td>' +
+      '<td class="col-secundaria">' + fmtAudioEstimado(s) + '</td>' +
       '<td class="mono">' + viewersHtml + '</td>'
     );
   }
@@ -523,7 +592,12 @@
         tr.id = 'fila-' + cssEscape(id);
         elCuerpo.appendChild(tr);
       }
-      tr.innerHTML = filaHtml(s, ahoraMs);
+      var estado = estadoDe(s, ahoraMs);
+      tr.innerHTML = filaHtml(s, ahoraMs, estado);
+      // sistema.md §2 ref. Master Control Room + Manufacturing Dashboard: franja de color en el
+      // borde izquierdo de la fila segun estado (nunca la fila entera pintada; el texto del estado
+      // sigue siendo la fuente, esto es sólo agrupación visual rápida), vía CSS con data-estado.
+      tr.dataset.estado = estado.clase;
       // B8: sesiones test:true (brief B5/B8, skill ui-subtitulos): ocultas por defecto, el
       // toggle "mostrar pruebas" las trae de vuelta; nunca se pierden, sólo se ocultan (CSS).
       if (s.test === true) {
@@ -537,6 +611,16 @@
       elChipPruebasOcultas.textContent = totalTest === 0 ? 'sin sesiones TEST' :
         (totalTest + (totalTest === 1 ? ' sesión TEST' : ' sesiones TEST') +
          (mostrarPruebas ? ' (mostradas)' : ' (ocultas; "mostrar pruebas" las trae)'));
+    }
+    // Corrección de dirección (bloque 10): la conexión WS del PANEL a cada sesión es un dato del
+    // PANEL, no un estado de la sesión (mostrarlo por fila confundía "terminada" con "en vivo" en
+    // la misma línea). Se agrega UNA vez en la barra de estado, agregado sobre todas las filas.
+    if (elChipConexion) {
+      var totalFilas = ordenFilas.length;
+      var enVivo = ordenFilas.reduce(function (acc, id) {
+        return acc + (sesiones[id].wsEstado === 'en vivo' ? 1 : 0);
+      }, 0);
+      elChipConexion.textContent = 'conexión panel: ' + enVivo + '/' + totalFilas + ' en vivo';
     }
   }
 
@@ -576,6 +660,28 @@
     mostrarPruebas = elTogglePruebas.checked;
     render();
   });
+
+  // ---------------------------------------------------------------- layout: alto de cabecera variable
+  // La cabecera ahora tiene dos filas y un desplegable "?" (sistema.md §4): su alto cambia según el
+  // ancho de pantalla (flex-wrap) y según si "?" está abierto. En vez de un número de píxeles fijo
+  // para anclar el thead sticky de la tabla debajo (frágil: se superpone o deja un hueco), se mide
+  // el alto real y se publica como variable CSS.
+  var elCabecera = document.querySelector('.cabecera');
+  function ajustarAltoCabecera() {
+    if (!elCabecera) return;
+    document.documentElement.style.setProperty('--cabecera-alto', elCabecera.offsetHeight + 'px');
+  }
+  if (elCabecera) {
+    ajustarAltoCabecera();
+    window.addEventListener('resize', ajustarAltoCabecera);
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(ajustarAltoCabecera).observe(elCabecera);
+    } else {
+      document.querySelectorAll('.ayuda').forEach(function (d) {
+        d.addEventListener('toggle', ajustarAltoCabecera);
+      });
+    }
+  }
 
   // ---------------------------------------------------------------- arranque
   pollSesiones();

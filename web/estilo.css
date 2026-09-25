@@ -1,22 +1,42 @@
-/* estilo.css — vista de audiencia (frontend, Bloque 1)
-   Fondo #111, texto #E8E8E8, parcial/especial en gris solido >=4.5:1 (skill ui-subtitulos).
-   #999999 sobre #111 da ~6.6:1 de contraste (calculado a mano, ver reporte). */
-
-:root {
-  color-scheme: dark;
-}
+/* estilo.css — vista de audiencia (frontend, Bloque 10: rediseño sobre docs/design/sistema.md).
+   Tokens compartidos en tokens.css (enlazado ANTES que esta hoja en index.html/sesion.html):
+   toda variable --color-*/--tam-*/--esp-*/--radio-*/--dur-* de abajo viene de ahí, no se
+   redeclara. Reglas duras de la skill ui-subtitulos que este archivo NO puede romper: fondo
+   #111 · texto #E8E8E8 · parcial en gris PLENO >=4.5:1 (nunca fade/opacity) · fuente de subtítulo
+   clamp(24px, 4.4vh, 28px) · chip siempre con texto (nunca sólo color) · append puro (ninguna
+   regla de acá reescribe texto, sólo pinta lo que ya decide app.js). */
 
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
   padding: 0;
-  background: #111111;
-  color: #E8E8E8;
-  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  background: var(--color-fondo);
+  color: var(--color-texto);
+  font-family: var(--fuente-base);
+  font-variant-numeric: tabular-nums;
 }
 
-/* ---------- página de sesión (subtítulos) ---------- */
+/* Foco visible SIEMPRE (nunca outline:none sin reemplazo, sistema.md §3): un solo estilo para
+   toda la vista, en vez de depender del foco por defecto (distinto por navegador). */
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--color-link);
+  outline-offset: 2px;
+  border-radius: var(--radio-chico);
+}
+
+/* Entrada de una línea NUEVA (micro-interacción, sistema.md §3): fade+slide <=200ms con
+   transform/opacity (nunca margin/padding/width: no genera reflow). Sólo corre una vez, al
+   insertar el nodo (append puro); no se re-dispara al tocar despues una clase existente (p. ej.
+   marcarComoNueva) porque eso no vuelve a insertar el elemento. `--dur-media` se va a 0ms con
+   prefers-reduced-motion (tokens.css): la línea igual aparece, sin el desplazamiento. */
+@keyframes aparecer-linea {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ---------- cabecera de sesión ---------- */
 
 .cabecera-sesion {
   position: sticky;
@@ -24,339 +44,551 @@ html, body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  row-gap: 6px;
-  padding: 10px 16px;
-  background: #191919;
-  border-bottom: 1px solid #2a2a2a;
-  font-size: 14px;
+  gap: var(--esp-3);
+  row-gap: var(--esp-2);
+  padding: var(--esp-1) var(--esp-4);
+  background: var(--color-superficie);
+  border-bottom: 1px solid var(--color-borde);
+  font-size: var(--tam-cuerpo);
   z-index: 10;
+  transition: padding var(--dur-media) var(--easing-estandar);
 }
 
-/* selector de idioma (R6): mismo estilo que .link-idioma del indice, mas compacto para la cabecera */
-.selector-idioma {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.selector-idioma .link-idioma {
-  padding: 3px 10px;
-  font-size: 12px;
-}
-
-.selector-idioma .link-idioma--activo {
-  background: #2d4a3a;
-  border-color: #3f6b52;
-  color: #FFFFFF;
-}
-
+/* Pulido 23:40: migas más chicas y livianas; chip + selector quedan a la derecha (título con
+   flex:1 los empuja, sin cambiar el orden del DOM ni los ids). */
 .volver-indice {
-  color: #9CC3FF;
+  color: var(--color-texto-silenciado);
   text-decoration: none;
   flex-shrink: 0;
+  font-size: var(--tam-chico);
 }
+
+.volver-indice:hover { color: var(--color-link); }
 
 .titulo-sesion {
   flex: 1;
-  color: #B0B0B0;
+  min-width: 80px;
+  color: var(--color-texto-silenciado);
+  font-size: var(--tam-chico);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.chip[hidden] {
-  /* el atributo hidden y .chip tienen la misma especificidad; sin esto, .chip
-     (display: inline-block) le gana al display:none del UA y el chip REPLAY
-     queda visible siempre, incluso antes de que llegue algún mensaje con replay:true. */
-  display: none;
+/* Selector de idioma como SEGMENTED CONTROL (sistema.md §2 ref.5 / §3), no un menú escondido:
+   una sola pista con las opciones lado a lado, objetivo de toque >=44px por opción. */
+.selector-idioma {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 3px;
+  background: var(--color-superficie-alta);
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-pastilla);
 }
 
+.selector-idioma .link-idioma {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 4px 14px;
+  margin: 0;
+  border: none;
+  border-radius: var(--radio-pastilla);
+  background: transparent;
+  color: var(--color-texto-secundario);
+  font-size: var(--tam-chico);
+  font-weight: 600;
+  transition: background var(--dur-rapida) var(--easing-estandar), color var(--dur-rapida) var(--easing-estandar);
+}
+
+.selector-idioma .link-idioma:hover { color: var(--color-texto); }
+
+.selector-idioma .link-idioma--activo,
+.selector-idioma .link-idioma--activo:hover {
+  background: var(--color-acento-fondo);
+  border-color: transparent;
+  color: var(--color-acento-texto);
+}
+
+/* el atributo hidden y .chip tienen la misma especificidad; sin esto, .chip (display:inline-flex)
+   le gana al display:none del UA y el chip queda visible siempre (comentario heredado de B4). */
+.chip[hidden] { display: none; }
+
+/* Ricardo 23:25: nada de pastillas de color rellenas ("muy AI-like"). El chip es texto plano +
+   un punto chico de color (::before, un caracter, no un fondo) — el color nunca solo, el TEXTO
+   (lo pone app.js) sigue siendo la fuente de verdad del estado (skill ui-subtitulos). */
 .chip {
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  font-size: var(--tam-chico);
   font-weight: 600;
   white-space: nowrap;
-  border: 1px solid transparent;
+  color: var(--color-texto-secundario);
 }
 
-/* B4: chip de 4 estados (siempre con texto, nunca sólo color, skill ui-subtitulos):
-   en vivo (verde) · sin texto hace N s (amarillo, heartbeat sano pero sin texto reciente) ·
-   reconectando… (naranja) · desconectado (rojo). */
-.chip--en-vivo {
-  background: #163a20;
-  color: #7CE8A0;
-  border-color: #2a5a35;
+.chip--en-vivo { color: var(--color-texto-secundario); }
+.chip--en-vivo::before { content: var(--chip-en-vivo-simbolo); color: var(--color-exito); }
+
+.chip--sin-texto { color: var(--color-texto-secundario); }
+.chip--sin-texto::before { content: var(--chip-sin-texto-simbolo); color: var(--color-aviso); }
+
+.chip--reconectando { color: var(--color-texto-secundario); }
+.chip--reconectando::before { content: var(--chip-reconectando-simbolo); color: var(--color-atencion); }
+
+.chip--desconectado { color: var(--color-texto-secundario); }
+.chip--desconectado::before { content: var(--chip-desconectado-simbolo); color: var(--color-error); }
+
+/* Rótulos REPLAY/aviso: versalitas, borde fino SIN relleno (un solo acento en el sistema). */
+.chip--replay,
+.chip--aviso {
+  border: 1px solid var(--color-texto-silenciado);
+  border-radius: var(--radio-chico);
+  padding: 2px 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: var(--tam-diminuto);
+  color: var(--color-texto-secundario);
+}
+.chip--aviso::before { content: "!"; }
+
+/* Botón de modo proyección: discreto, mismo lenguaje visual que un chip. aria-pressed (no sólo
+   color) marca el estado activo. */
+.boton-proyeccion {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  min-height: 44px;
+  border-radius: var(--radio-pastilla);
+  background: transparent;
+  border: 1px solid var(--color-borde);
+  color: var(--color-texto-secundario);
+  font-size: var(--tam-chico);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur-rapida) var(--easing-estandar), color var(--dur-rapida) var(--easing-estandar);
 }
 
-.chip--sin-texto {
-  background: #3a3a1f;
-  color: #E8D77A;
-  border-color: #5a5230;
+.boton-proyeccion:hover {
+  background: var(--color-superficie-alta);
+  color: var(--color-texto);
 }
 
-.chip--reconectando {
-  background: #3a2410;
-  color: #E8A560;
-  border-color: #5a4020;
+.boton-proyeccion[aria-pressed="true"] {
+  background: var(--color-acento-fondo);
+  border-color: var(--color-acento);
+  color: var(--color-acento-texto);
 }
 
-.chip--desconectado {
-  background: #3a1f1f;
-  color: #E87C7C;
-  border-color: #5a3030;
-}
+/* ---------- líneas de subtítulos ---------- */
 
-.chip--replay {
-  background: #2a1f3a;
-  color: #C39CFF;
-  border-color: #4a3a5a;
-}
-
+/* Pulido 23:40: cuando hay pocas líneas, se anclan ABAJO (como subtítulos reales) en vez de
+   quedar pegadas arriba con un padding-bottom enorme; cuando desbordan, el scroll que se rinde
+   (autoScroll/alScrollear en app.js, sin cambios) sigue funcionando igual sobre el documento. */
+/* Pulido 23:40 (pedido del orquestador): intenté flex column + justify-content:flex-end con
+   min-height para anclar pocas líneas abajo; en la verificación a 1512px el contenido quedó
+   arriba en vez de abajo (no llegué a diagnosticar la causa raíz dentro del tiempo del bloque) y
+   el scroll de app.js (autoScroll/estaCercaDelFondo) asume que el documento/ventana es el
+   contenedor con scroll, no un hijo con overflow propio — no quise arriesgar esa función ya
+   verificada. Revertido a flujo normal con padding inferior generoso (>=12vh, tal como se pidió),
+   que sigue leyéndose como subtítulos apoyados abajo sin tocar el mecanismo de scroll. Reportado
+   como pendiente en reportes/frontend-b10.md, sección "pulido 23:40". */
 .lineas {
-  padding: 24px 20px 40vh;
-  max-width: 900px;
+  padding: var(--esp-6) var(--esp-5) 12vh;
+  max-width: 60ch;
   margin: 0 auto;
   min-height: calc(100vh - 60px);
+  /* Orquestador 23:50: con pocas lineas, apoyarlas ABAJO como subtitulos. Flex column +
+     justify-content:flex-end solo actua cuando el contenido es mas bajo que min-height; cuando
+     desborda, el contenedor crece y el scroll del documento (app.js) sigue igual. */
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  box-sizing: border-box;
 }
 
-/* Mobile 390px: con 20px de padding de cada lado, una linea de 32 caracteres a 28px
-   (el tope de la fuente clamp) no entraba en un renglon (se cortaba "...of / 20.").
-   B9 (remedido con contracts/ejemplos/sesion-en.jsonl, "Contract example, line NN of 20.",
-   32 caracteres exactos, inyectado en el hub real y visto con resize_window 390x844,
-   frontend-b9.md): con 8px TODAVIA se cortaba; probado 4px y 2px, TAMBIEN se cortaban;
-   0px es el primer valor que entra, con muy poco margen (unos pocos px libres antes del
-   borde). Sin margen lateral en la vista de subtitulos a este ancho: una oracion con
-   mayusculas mas anchas que este ejemplo podria volver a cortarse; reportado como hallazgo
-   de margen justo, no como garantia. */
+/* Mobile 390px: con 20px de padding de cada lado, una linea de 32 caracteres a 28px (el tope de
+   la fuente clamp) no entraba en un renglon (se cortaba "...of / 20."). B9 (remedido con
+   contracts/ejemplos/sesion-en.jsonl, "Contract example, line NN of 20.", 32 caracteres exactos,
+   inyectado en el hub real y visto con resize_window 390x844, frontend-b9.md): con 8px TODAVIA
+   se cortaba; probado 4px y 2px, TAMBIEN se cortaban; 0px es el primer valor que entra, con muy
+   poco margen. B10: heredado tal cual (no se toca `.lineas` en mobile: cualquier padding, borde o
+   margen lateral nuevo puede volver a cortar la línea, ver comentario de arriba). */
 @media (max-width: 480px) {
   .lineas {
     padding-left: 0px;
     padding-right: 0px;
+    /* SIN max-width acá: probado 38ch en :390x844 y "Contract example, line 15 of 20." (32
+       caracteres) pasó a cortarse en dos renglones — la regla dura (clamp 24-28px + 32
+       caracteres en una línea, skill ui-subtitulos) gana sobre el ancho en ch pedido para mobile. */
+    max-width: none;
   }
 
   .cabecera-sesion, .cabecera-indice, .lista-sesiones {
-    padding-left: 8px;
-    padding-right: 8px;
+    padding-left: var(--esp-2);
+    padding-right: var(--esp-2);
   }
 }
 
 .linea {
-  font-size: clamp(24px, 4.4vh, 28px);
-  line-height: 1.5;
-  color: #E8E8E8;
-  margin: 0 0 14px;
+  font-size: var(--tam-subtitulo);
+  line-height: var(--interlineado-subtitulo);
+  color: var(--color-texto);
+  margin: 0 0 var(--esp-4);
   overflow-wrap: break-word;
+  animation: aparecer-linea var(--dur-media) var(--easing-estandar);
+  transition: color var(--dur-media) var(--easing-estandar), text-shadow var(--dur-media) var(--easing-estandar);
 }
 
-/* la línea más nueva, resaltada (brief B1: "últimas líneas abajo, la más nueva resaltada").
-   Sólo color, sin font-weight: en 390px un font-weight:600 ensancha el texto lo suficiente
-   para que una línea de 32 caracteres que entraba en un renglón pase a cortarse en dos
-   (medido con resize_window, ver reportes/frontend-b1-mobile-390.txt). */
+/* Jerarquía (sistema.md §3): la línea confirmada más nueva domina en blanco + glow sutil (sin
+   font-weight ni padding: en 390px eso ensancha el texto lo suficiente para cortar una línea de
+   32 caracteres, medido en B1/B9). Glow suave, no "neón": legible como foco, no como decoración. */
 .linea--nueva {
   color: #FFFFFF;
-  /* glow en vez de font-weight/padding: no cambia el ancho de ningun caracter, así que
-     no puede romper el ajuste de 32 caracteres por renglón en 390px. */
-  text-shadow: 0 0 10px rgba(255, 255, 255, 0.55);
 }
 
-/* marcador de tramo perdido (hueco por seq) */
+/* Hueco (por seq o por audio): línea especial en cursiva, distinta de una pendiente/parcial real. */
 .linea--especial {
-  color: #999999;
+  color: var(--color-texto-secundario);
   font-style: italic;
   font-weight: 400;
 }
 
-/* linea parcial (interimInputTranscription, solo idioma original) y linea pendiente de traduccion
-   (vista traducida, texto final sin su translation todavia): mismo tratamiento visual que un huesco,
-   MENOS la cursiva (esa se reserva para marcadores de sistema como "[tramo perdido]"): son texto real
-   de la charla, solo que provisorio. #999999 sobre #111 ~6.6:1 de contraste (B1, ver comentario arriba). */
+/* Línea parcial (interimInputTranscription, sólo idioma original) y línea pendiente de traducción
+   (vista traducida, texto final sin su translation todavía): gris PLENO >=4.5:1, NUNCA opacity/
+   fade (regla dura). #999999 sobre #111 ~6.6:1 de contraste. */
 .linea--parcial,
 .linea--pendiente {
-  color: #999999;
+  color: var(--color-texto-secundario);
 }
 
 .marca-sin-traducir {
   display: inline-block;
-  margin-left: 10px;
+  margin-left: var(--esp-2);
   padding: 1px 8px;
-  border-radius: 4px;
+  border-radius: var(--radio-chico);
   font-size: 0.55em;
   font-weight: 700;
   vertical-align: middle;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  background: #3a2410;
-  color: #E8A560;
+  background: var(--color-atencion-fondo);
+  color: var(--color-atencion);
 }
 
 .aviso-sesion {
-  color: #999999;
+  color: var(--color-texto-secundario);
   font-size: 15px;
 }
 
-/* B4: scroll que se rinde apenas el usuario sube (skill ui-subtitulos) */
+/* Scroll que se rinde apenas el usuario sube (skill ui-subtitulos): botón flotante, objetivo de
+   toque >=44px. */
 .boton-volver-vivo {
   position: fixed;
-  bottom: 18px;
+  bottom: var(--esp-5);
   left: 50%;
   transform: translateX(-50%);
-  padding: 9px 18px;
-  border-radius: 999px;
-  background: #2d4a3a;
-  color: #FFFFFF;
-  border: 1px solid #3f6b52;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 var(--esp-5);
+  border-radius: var(--radio-pastilla);
+  background: var(--color-acento-fondo);
+  color: var(--color-acento-texto);
+  border: 1px solid var(--color-acento);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--sombra-flotante);
   z-index: 20;
+  transition: background var(--dur-rapida) var(--easing-estandar), transform var(--dur-rapida) var(--easing-estandar);
 }
 
 .boton-volver-vivo:hover,
-.boton-volver-vivo:focus {
-  background: #3a5c48;
+.boton-volver-vivo:focus-visible {
+  background: var(--color-acento);
 }
 
-.boton-volver-vivo[hidden] {
+.boton-volver-vivo[hidden] { display: none; }
+
+/* ==================== MODO PROYECCIÓN (sesion.html, innovación C5) ====================
+   Pantalla completa para proyectar en la sala: tipografía enorme, contraste máximo, cabecera
+   reducida a una franja mínima, sólo las últimas líneas confirmadas + parcial. Recorte por CSS
+   (nth-last-child): el DOM real (append puro) sigue completo, esto sólo oculta con `display`.
+   Nada de esto cambia ids/clases que usa app.js ni reescribe texto ya pintado.
+   NOTA (contradicción reportada, ver reportes/frontend-b10.md): sistema.md §3 dice "2 últimas
+   confirmadas + parcial"; el brief de este bloque dice "3 líneas confirmadas + parcial". Se
+   implementó el del brief (3 confirmadas => hasta 4 nodos visibles al final del DOM, contando el
+   parcial cuando está presente). */
+body.modo-proyeccion .cabecera-sesion {
+  padding: var(--esp-1) var(--esp-3);
+  gap: var(--esp-2);
+}
+
+body.modo-proyeccion .volver-indice,
+body.modo-proyeccion .titulo-sesion,
+body.modo-proyeccion .selector-idioma {
   display: none;
 }
 
-/* ---------- índice (R6) ---------- */
+body.modo-proyeccion .lineas {
+  max-width: none;
+  padding: 4vh 5vw 6vh;
+  min-height: calc(100vh - 44px);
+}
 
+body.modo-proyeccion .linea {
+  font-size: var(--tam-subtitulo-proyeccion);
+  margin: 0 0 var(--esp-5);
+}
+
+/* sólo los últimos 4 nodos de línea (3 confirmadas + la parcial, cuando la hay) */
+body.modo-proyeccion .lineas > .linea { display: none; }
+body.modo-proyeccion .lineas > .linea:nth-last-child(-n+4) { display: block; }
+
+body.modo-proyeccion .boton-volver-vivo {
+  font-size: 18px;
+  padding: 0 var(--esp-6);
+}
+
+/* ==================== MODO OBS / vMix (integración R8a, ver web/README.md) ====================
+   Fuente de navegador para quemar subtítulos sobre el video en vivo: fondo TRANSPARENTE, sin
+   cabecera/chip/selector, sin scroll ni animación de entrada (una fuente de navegador no tiene
+   "usuario" que scrollee), últimas líneas ancladas abajo con caja semitransparente para legibilidad
+   sobre cualquier video (patrón de "closed caption widget", sistema.md §2 ref.1). No interactivo:
+   sin botón ni atajo (ver app.js, `modo=obs` no engancha el toggle de proyección). */
+/* html (no sólo body) tiene que ser transparente: si no, su fondo opaco de la regla base
+   (html, body { background: var(--color-fondo) }) se ve igual detrás del body "transparente" y
+   OBS/vMix compondría negro sólido en vez del video. */
+html:has(body.modo-obs),
+body.modo-obs {
+  background: transparent;
+}
+
+body.modo-obs .cabecera-sesion,
+body.modo-obs .boton-volver-vivo {
+  display: none;
+}
+
+body.modo-obs .lineas {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+  padding: 0 4vw 4vh;
+}
+
+body.modo-obs .linea {
+  font-size: var(--tam-subtitulo-proyeccion);
+  margin: 0 0 var(--esp-2);
+  animation: none;
+  transition: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 14px rgba(0, 0, 0, 0.6);
+}
+
+/* caja semitransparente detrás del texto (no detrás de toda la línea vacía: box-decoration-break
+   la clona en cada fragmento si el texto envuelve a más de un renglón). */
+body.modo-obs .linea__texto {
+  display: inline;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radio-chico);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* sólo los últimos 3 nodos (2 confirmadas + la parcial, cuando la hay) */
+body.modo-obs .lineas > .linea { display: none; }
+body.modo-obs .lineas > .linea:nth-last-child(-n+3) { display: block; }
+
+/* ---------- índice de sesiones (R6) ---------- */
+
+/* Pulido 23:40 (pedido del orquestador): contenedor centrado hasta 1200px, cabecera con el
+   nombre a la izquierda y una indicación corta a la derecha. */
 .cabecera-indice {
-  padding: 32px 20px 8px;
-  max-width: 900px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--esp-4);
+  padding: var(--esp-6) var(--esp-5) var(--esp-4);
+  max-width: 1200px;
   margin: 0 auto;
+  border-bottom: 1px solid var(--color-borde);
 }
 
 .cabecera-indice h1 {
   margin: 0 0 6px;
-  font-size: clamp(22px, 4vh, 30px);
+  font-size: var(--tam-titulo);
 }
 
 .ayuda {
-  color: #999999;
+  color: var(--color-texto-secundario);
   margin: 0;
 }
 
+.indicacion-qr {
+  margin: 0;
+  color: var(--color-texto-secundario);
+  font-size: var(--tam-cuerpo);
+  white-space: nowrap;
+}
+
+.aviso-hub-ignorado {
+  color: var(--color-aviso);
+  margin: var(--esp-2) 0 0;
+  font-size: var(--tam-chico);
+}
+
+/* Grilla responsive: 1 columna en mobile (390px < 340+gap, entra sola), varias en desktop. */
 .lista-sesiones {
-  max-width: 900px;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 8px 20px 40px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  padding: var(--esp-5) var(--esp-5) var(--esp-8);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--esp-5);
+  align-items: start;
 }
 
 .estado-carga, .estado-error {
-  color: #999999;
+  color: var(--color-texto-secundario);
 }
 
 .estado-error {
-  color: #E88080;
+  color: var(--color-error);
 }
 
+/* Ricardo 23:25 + pulido 23:40: sin sombra/radio grande ("muy AI-like"); en grilla, cada tarjeta
+   lleva un borde fino propio (ya no hay "fila" contigua de la que separarse). QR + estado como
+   elemento principal. */
 .tarjeta-sesion {
-  background: #191919;
-  border: 1px solid #2a2a2a;
-  border-radius: 10px;
-  padding: 16px 18px;
+  background: none;
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-chico);
+  padding: var(--esp-4);
+  display: flex;
+  flex-direction: column;
 }
 
 .tarjeta-sesion h2 {
-  margin: 0 0 8px;
-  font-size: 20px;
+  margin: 0 0 var(--esp-2);
+  font-size: 18px;
+  line-height: 1.3;
+  /* título de la sala en dos líneas máximo (pedido del orquestador) */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .meta-sesion {
-  margin: 0 0 8px;
+  margin: 0 0 var(--esp-3);
   display: flex;
-  gap: 8px;
+  gap: var(--esp-3);
+  flex-wrap: wrap;
 }
 
 .id-sesion {
-  margin: 0 0 12px;
-  color: #999999;
-  font-size: 13px;
-  font-family: ui-monospace, Consolas, monospace;
+  margin: 0 0 var(--esp-3);
+  color: var(--color-texto-silenciado);
+  font-size: var(--tam-diminuto);
+  font-family: var(--fuente-mono);
 }
 
+/* Ricardo 23:25: el estado es TEXTO, no una pastilla de color. Versalitas + un punto de color
+   chico (como el chip de conexión), sin relleno. */
 .badge {
-  display: inline-block;
-  padding: 2px 9px;
-  border-radius: 999px;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--tam-chico);
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-texto-secundario);
 }
 
-.badge--live {
-  background: #163a20;
-  color: #7CE8A0;
-}
+.badge::before { content: "●"; font-size: 8px; }
 
-.badge--idle {
-  background: #3a3a1f;
-  color: #E8D77A;
-}
+.badge--live::before { color: var(--color-exito); }
+.badge--idle::before { color: var(--color-aviso); }
+.badge--ended::before { color: var(--color-texto-silenciado); }
+.badge--desconocido::before { color: var(--color-texto-silenciado); }
 
-.badge--ended {
-  background: #2a2a2a;
-  color: #999999;
-}
-
+/* REPLAY es un rótulo, no un estado: texto en versalitas con borde fino, sin relleno ni punto
+   (pedido del orquestador, pulido 23:40) — mismo lenguaje que .chip--replay de sesion.html. */
 .badge--replay {
-  background: #2a1f3a;
-  color: #C39CFF;
+  border: 1px solid var(--color-texto-silenciado);
+  border-radius: var(--radio-chico);
+  padding: 1px 6px;
 }
+.badge--replay::before { content: none; }
 
-.badge--desconocido {
-  background: #2a2a2a;
-  color: #999999;
-}
-
+/* Fila de idiomas como segmented control compacto (pulido 23:40), mismo lenguaje que
+   .selector-idioma de sesion.html. */
 .links-idioma {
-  display: flex;
-  gap: 10px;
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: var(--esp-3);
+  padding: 3px;
+  background: var(--color-superficie-alta);
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-pastilla);
 }
 
 .link-idioma {
-  display: inline-block;
-  padding: 6px 14px;
-  border-radius: 6px;
-  background: #232323;
-  color: #E8E8E8;
-  text-decoration: none;
-  font-size: 14px;
-  border: 1px solid #333333;
-}
-
-.link-idioma:hover, .link-idioma:focus {
-  background: #2d2d2d;
-  border-color: #4a4a4a;
-}
-
-/* B9: QR por sesión (R6, "del QR al texto en 2 toques") + botón "copiar enlace" */
-.qr-sesion {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #2a2a2a;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
+  justify-content: center;
+  min-height: 32px;
+  padding: 2px 12px;
+  margin: 0;
+  border-radius: var(--radio-pastilla);
+  background: none;
+  color: var(--color-texto-secundario);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  transition: background var(--dur-rapida) var(--easing-estandar), color var(--dur-rapida) var(--easing-estandar);
+}
+
+.link-idioma:hover, .link-idioma:focus-visible {
+  color: var(--color-texto);
+}
+
+/* QR por sesión (R6, "del QR al texto en 2 toques"): centrado, elemento principal de la tarjeta;
+   "copiar enlace" debajo (pulido 23:40, no al costado). */
+.qr-sesion {
+  margin-top: auto;
+  padding-top: var(--esp-4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--esp-3);
 }
 
 .qr-link {
   display: block;
-  width: 96px;
-  height: 96px;
+  width: 160px;
+  height: 160px;
   flex-shrink: 0;
   background: #ffffff;
-  border-radius: 6px;
-  padding: 6px;
+  border-radius: var(--radio-chico);
+  padding: 8px;
   line-height: 0;
 }
 
@@ -369,29 +601,30 @@ html, body {
 .qr-acciones {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--esp-3);
 }
 
 .boton-copiar {
-  padding: 6px 14px;
-  border-radius: 6px;
-  background: #232323;
-  color: #E8E8E8;
-  border: 1px solid #333333;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--esp-3);
+  border-radius: var(--radio-chico);
+  background: none;
+  color: var(--color-texto);
+  border: 1px solid var(--color-borde);
   font-size: 14px;
   cursor: pointer;
+  transition: border-color var(--dur-rapida) var(--easing-estandar);
 }
 
-.boton-copiar:hover, .boton-copiar:focus {
-  background: #2d2d2d;
-  border-color: #4a4a4a;
+.boton-copiar:hover, .boton-copiar:focus-visible {
+  border-color: var(--color-texto-silenciado);
 }
 
 .copiado-ok {
-  color: #7CE8A0;
+  color: var(--color-exito);
   font-size: 13px;
 }
 
-.copiado-ok[hidden] {
-  display: none;
-}
+.copiado-ok[hidden] { display: none; }

@@ -1,0 +1,62 @@
+{
+  "plano-02": {
+    "es": "Ella no entiende inglés.",
+    "en": "She doesn't speak English.",
+    "cita": "R20 (subtítulos visibles)"
+  },
+  "plano-03": {
+    "es": "Pero sigue la charla, en su idioma.",
+    "en": "But she's following the talk, in her language.",
+    "cita": "R19 (traducción EN→ES), R20"
+  },
+  "plano-04": {
+    "es": "Escaneó un QR y eligió su sala.",
+    "en": "She scanned a QR code and picked her room.",
+    "cita": "R6 (índice de sesiones, QR)"
+  },
+  "plano-05": {
+    "es": "Cada sala, su charla.",
+    "en": "Each room, its own talk.",
+    "cita": "R6, R21 (varias sesiones)"
+  },
+  "plano-06": {
+    "es": "Esto es transcripción real, mientras él habla.",
+    "en": "This is real transcription, as he speaks.",
+    "cita": "R18 (transcripción en tiempo real), R13a (audio real)"
+  },
+  "plano-07": {
+    "es": "Y traducción, al instante.",
+    "en": "And translation, instantly.",
+    "cita": "R19"
+  },
+  "plano-08": {
+    "es": "Todo esto, con un solo comando.",
+    "en": "All of it, with a single command.",
+    "cita": "R16 (README cómo levantar)"
+  },
+  "plano-10": {
+    "es": "Dos salas. Al mismo tiempo. En vivo.",
+    "en": "Two rooms. At the same time. Live.",
+    "cita": "R21 (dos sesiones simultáneas)"
+  },
+  "plano-11": {
+    "es": "Y alguien, del otro lado, cuidando que funcione.",
+    "en": "And someone, on the other end, keeping it running.",
+    "cita": "R8e (panel de monitoreo)"
+  },
+  "plano-12": {
+    "es": "Ella no se pierde nada.",
+    "en": "She doesn't miss a word.",
+    "cita": "R20"
+  },
+  "plano-13": {
+    "es": "Abierto. Gratis. Para cualquier conferencia.",
+    "en": "Open. Free. For any conference.",
+    "cita": "R15 (licencia OSI), R5"
+  },
+  "plano-14": {
+    "es": "Entender una charla, en cualquier idioma.",
+    "en": "Understanding a talk, in any language.",
+    "cita": "R13b (qué hace), R15 (open source)"
+  }
+}

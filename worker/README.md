@@ -43,7 +43,7 @@ Verificar el rótulo: `grep -n "SOURCE_REPLAY\|\[TEST\] \|REPLAY" worker/transpo
 --ventana-s S         ventana objetivo del cortador
 --gap-s S             gap entre activity_end y el siguiente activity_start
 --drenaje-s S         espera de turnos pendientes al fin de la fuente
---traducir-a X        es | en | none (auto: en→es, es→en)
+--traducir-a X        codigo ISO del idioma destino (es, en, pt...) | none | auto (en→es, es→en)
 --timeout-trad-s S    timeout por llamada del traductor
 --vad-auto            VAD automático del server (sin turnos manuales; sólo para el A/B)
 --sin-reabrir         desactiva la reapertura con solape (una sola conexión)
@@ -51,6 +51,20 @@ Verificar el rótulo: `grep -n "SOURCE_REPLAY\|\[TEST\] \|REPLAY" worker/transpo
 ```
 
 Defaults exactos: `python -m worker.run --help` y `grep -n "add_argument" worker/run.py`.
+
+**Qué idiomas acepta cada flag.**
+
+- `--lang {en,es}`: idioma de ORIGEN que recibe el modelo Live (`contracts/esquema.json#lang_origen`,
+  congelado por R18 a español/inglés). Verificado HOY con ASR real: `en` y `es` (ver filas R17a+R18 y
+  CHECKPOINT de `ESTADO.md`). Otros códigos: la API los rechazaría o el `argparse` los corta antes
+  (`choices=["en", "es"]`); no probados, no se afirma que funcionen.
+- `--traducir-a` / `worker.traducir_casete --a`: idioma DESTINO de la traducción, GENÉRICO por código
+  ISO (`contracts/esquema.json#lang_destino`, patrón `^[a-z]{2}(-[A-Z]{2})?$`: `es`, `en`, `pt`,
+  `pt-BR`...; no es una lista cerrada de `{es,en}`). `worker/traductor.py` (`IDIOMAS`) le da un nombre
+  legible al prompt si lo conoce (`en`, `es`, `pt`) y usa el código tal cual si no; Gemini lo traduce
+  igual. R19 obliga EN→ES; ES→EN sale gratis (R14); **`pt` verificado offline contra un casete real**
+  (B10: `reportes/audio-pipeline-b10-pt.md`). Otros códigos ISO: no verificados con una llamada real,
+  pero el camino no distingue idiomas, así que no hay motivo para que sólo fallen ellos.
 
 Ejemplo real (gasta cuota de audio):
 
@@ -145,14 +159,22 @@ sin entregar; 2 = casete inválido. No genera texto propio: todo sale del casete
 ## `python -m worker.traducir_casete` — traducción offline de un casete
 
 ```
-python -m worker.traducir_casete CASETE --a {es,en} [--salida X] [--timeout-s S]
+python -m worker.traducir_casete CASETE --a CODIGO [--salida X] [--timeout-s S]
                                  [--sin-parciales] [--reintentos N]
 ```
 
+`--a` es un código ISO del idioma destino, GENÉRICO (no `choices=["es","en"]`): cualquier valor que
+matchee `contracts/esquema.json#lang_destino` (`^[a-z]{2}(-[A-Z]{2})?$`, p.ej. `es`, `en`, `pt`,
+`pt-BR`); otro formato corta el CLI antes de llamar a la API (`worker.traducir_casete.lang_destino`).
 Lee los `text` del casete, arma los lotes con la misma regla que el worker en vivo
 (`worker.traductor.Lotes`) y hace llamadas reales al modelo de texto (cuentan en
 `CUOTA_TEXTO_LOG`). Escribe `<nombre>-trad.jsonl` = original + `translation` intercalados con
 `meta.source.offline: true`. Exit 0 = escrito; 2 = casete sin textos.
+
+```
+.venv/Scripts/python -m worker.traducir_casete fixtures/casetes/b1-es-60s.jsonl --a pt \
+  --salida fixtures/casetes/b1-es-60s-trad-pt.jsonl
+```
 
 ## `python -m worker.importar` — audios de prueba (R17b)
 

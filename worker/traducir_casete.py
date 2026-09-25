@@ -2,7 +2,12 @@
 
     python -m worker.traducir_casete fixtures/casetes/b1-en-60s-rederivado.jsonl --a es
     python -m worker.traducir_casete fixtures/casetes/b1-es-60s.jsonl --a en
+    python -m worker.traducir_casete fixtures/casetes/b1-es-60s.jsonl --a pt --salida x-trad-pt.jsonl
 
+- `--a` es GENERICO por idioma destino: cualquier codigo que matchee lang_destino de
+  contracts/esquema.json (`^[a-z]{2}(-[A-Z]{2})?$`, ej. es, en, pt, pt-BR), no una lista cerrada.
+  worker/traductor.py arma el prompt con el nombre del idioma si lo conoce (worker.traductor.IDIOMAS)
+  o con el codigo tal cual si no (Gemini lo entiende igual: probado con pt).
 - Lee las lineas `emit` de tipo `text`, arma los lotes con la MISMA regla que el worker en vivo
   (worker.traductor.Lotes: LOTE_MAX textos o LOTE_S s desde el primero pendiente; ver worker/traductor.py) y hace UNA llamada real
   por lote (worker.traductor.Traductor: limitador 12 RPM por modelo, rotacion, contador en
@@ -19,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -27,6 +33,19 @@ from worker.casete import leer
 from worker.contrato import mensaje
 from worker.rederivar import parciales_de
 from worker.traductor import (TIMEOUT_S, Lotes, Traductor, TransporteTexto, meta_traduccion)
+
+# Mismo patron que contracts/esquema.json #/$defs/lang_destino: CUALQUIER codigo ISO de 2 letras,
+# con region opcional (es, en, pt, pt-BR...). El traductor es generico por idioma destino (R19
+# obliga EN->ES; ES->EN y cualquier otro par salen del mismo camino, ver worker/traductor.py IDIOMAS).
+LANG_DESTINO_RE = re.compile(r"^[a-z]{2}(-[A-Z]{2})?$")
+
+
+def lang_destino(valor: str) -> str:
+    """type= de argparse para --a: valida el FORMATO (no una lista cerrada de idiomas)."""
+    if not LANG_DESTINO_RE.match(valor):
+        raise argparse.ArgumentTypeError(
+            f"{valor!r}: codigo de idioma destino invalido (formato esperado: es, en, pt, pt-BR...)")
+    return valor
 
 
 def lotes_de(textos: list[tuple[int, str, float]], t_fin: float, lotes: Optional[Lotes] = None):
@@ -121,6 +140,19 @@ def pares(path: str) -> dict:
             "cabecera_traduccion": cab.get("traduccion"), "pares": out}
 
 
+def construir_parser() -> argparse.ArgumentParser:
+    """Parser del CLI, separado de main() para poder probarlo (--a) SIN llamar a la API."""
+    ap = argparse.ArgumentParser(prog="python -m worker.traducir_casete")
+    ap.add_argument("casete")
+    ap.add_argument("--a", required=True, type=lang_destino,
+                    help="codigo ISO del idioma destino (es, en, pt, pt-BR...; ver lang_destino)")
+    ap.add_argument("--salida", default=None)
+    ap.add_argument("--timeout-s", type=float, default=TIMEOUT_S)
+    ap.add_argument("--sin-parciales", action="store_true")
+    ap.add_argument("--reintentos", type=int, default=1)
+    return ap
+
+
 def main(argv=None) -> int:
     if argv is None and len(sys.argv) > 1 and sys.argv[1] == "--pares":
         try:
@@ -130,13 +162,7 @@ def main(argv=None) -> int:
         for c in sys.argv[2:]:
             print(json.dumps(pares(c), ensure_ascii=False))
         return 0
-    ap = argparse.ArgumentParser(prog="python -m worker.traducir_casete")
-    ap.add_argument("casete")
-    ap.add_argument("--a", required=True, choices=["es", "en"])
-    ap.add_argument("--salida", default=None)
-    ap.add_argument("--timeout-s", type=float, default=TIMEOUT_S)
-    ap.add_argument("--sin-parciales", action="store_true")
-    ap.add_argument("--reintentos", type=int, default=1)
+    ap = construir_parser()
     x = ap.parse_args(argv)
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

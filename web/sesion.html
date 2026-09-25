@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Subtítulos en vivo</title>
+<link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/estilo.css">
 </head>
 <body class="pagina-sesion">
@@ -11,8 +12,12 @@
   <a href="/" class="volver-indice">&larr; sesiones</a>
   <span id="titulo-sesion" class="titulo-sesion"></span>
   <nav id="selector-idioma" class="selector-idioma" aria-label="Elegir idioma"></nav>
+  <span id="chip-hub-invalido" class="chip chip--aviso" hidden>hub externo ignorado</span>
   <span id="chip-replay" class="chip chip--replay" hidden>REPLAY</span>
   <span id="chip-conexion" class="chip chip--reconectando">reconectando…</span>
+  <button id="boton-proyeccion" class="boton-proyeccion" type="button" aria-pressed="false" title="Modo proyección (tecla p)">
+    <span aria-hidden="true">&#10530;</span> proyección
+  </button>
 </header>
 <main id="lineas" class="lineas" aria-live="polite"></main>
 <button id="volver-vivo" class="boton-volver-vivo" type="button" hidden>&darr; volver al vivo</button>

@@ -1,4 +1,6 @@
-"""Traductor por LOTES del texto final (R19; generico por idioma destino: EN->ES y ES->EN).
+"""Traductor por LOTES del texto final (R19; generico por idioma destino: EN->ES y ES->EN obligan;
+cualquier otro codigo ISO sale del mismo camino via --a/--traducir-a, ej. pt R8b "mas idiomas";
+verificado B10 con pt offline contra fixtures/casetes/, ver worker/traducir_casete.py).
 
 Skill gemini-live: traduccion en dos pasos (Live transcribe; un modelo de texto traduce el final).
 Diseno B2 (ESTADO.md, Decisiones):
@@ -83,7 +85,9 @@ RPD_TOPE = int(os.environ.get("TRADUCTOR_RPD_TOPE", 480))
 BACKOFF_MIN = 1.0
 BACKOFF_MAX = 30.0
 FMT = "%Y-%m-%d %H:%M:%S"
-IDIOMAS = {"en": "English", "es": "Spanish"}
+# Nombres para el prompt (mejora la calidad); GENERICO por codigo: un idioma que no este aca igual
+# funciona, prompt_lote cae al codigo ISO tal cual (IDIOMAS.get(x, x)), Gemini lo entiende.
+IDIOMAS = {"en": "English", "es": "Spanish", "pt": "Portuguese"}
 
 
 def _env_num(nombre: str, defecto: float) -> float:

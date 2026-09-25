@@ -47,12 +47,12 @@ def _cargar_env(env_path: Path) -> None:
             os.environ[clave] = valor.strip()
 
 
-def pedir_tts(texto: str, api_key: str, voice_id: str, model_id: str, version: str, lang: str) -> bytes:
+def pedir_tts(texto: str, api_key: str, voice_id: str, model_id: str, version: str, lang: str, velocidad: str = "fast") -> bytes:
     cuerpo = json.dumps(
         {
             "model_id": model_id,
             "transcript": texto,
-            "voice": {"mode": "id", "id": voice_id},
+            "voice": {"mode": "id", "id": voice_id, "__experimental_controls": {"speed": velocidad}},  # Ricardo 22:50: "un poco mas rapida"
             "output_format": {"container": "wav", "encoding": "pcm_s16le", "sample_rate": 44100},
             "language": lang,
         }
@@ -75,7 +75,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--textos", default=str(RAIZ / "docs/video/narracion_textos.json"))
     ap.add_argument("--salida-dir", default=str(RAIZ / "reportes/video/narracion_wav"))
-    ap.add_argument("--voice-id", default="4853bafa-52cc-48c8-86a1-1edf8c76e429")
+    ap.add_argument("--velocidad", default="fast", choices=["slow", "normal", "fast"], help="control de velocidad de Cartesia (default fast)")
+    ap.add_argument("--voice-id", default="a7beff01-8f8b-4809-bfe6-e2166e57e0c2")  # Iria (Ricardo, 24/09 22:45)
     ap.add_argument("--model-id", default="sonic-2")
     ap.add_argument("--version", default="2024-06-10")
     ap.add_argument("--lang", default="es", help="codigo de idioma para Cartesia (es/en)")
@@ -99,7 +100,7 @@ def main() -> int:
             continue
         destino = salida_dir / f"{clave}.wav"
         try:
-            audio = pedir_tts(item[args.campo], api_key, args.voice_id, args.model_id, args.version, args.lang)
+            audio = pedir_tts(item[args.campo], api_key, args.voice_id, args.model_id, args.version, args.lang, args.velocidad)
         except urllib.error.HTTPError as e:
             cuerpo = e.read().decode("utf-8", errors="replace")[:300]
             print(f"FALLO {clave}: HTTP {e.code} {cuerpo}", file=sys.stderr)

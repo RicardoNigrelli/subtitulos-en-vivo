@@ -1,6 +1,7 @@
 """Tests del traductor por lotes (B2). Unit tests con un TRANSPORTE FALSO ROTULADO: no es el camino
 real (el camino real es worker.traductor.TransporteGenAI) y no genera texto que parezca de Gemini:
 devuelve "[FALSO-es] <entrada>" para que sea evidente en cualquier salida."""
+import argparse
 import asyncio
 import json
 from pathlib import Path
@@ -252,3 +253,42 @@ def test_translation_sin_modelo_valida_contra_el_contrato():
 def test_lote_default_sale_de_traductor_lote_s():
     from worker import traductor as T
     assert (Lotes().maximo, Lotes().ventana_s) == (T.LOTE_MAX, T.LOTE_S)
+
+
+# ---- B10: --a generico (no una lista cerrada de {es,en}) ----
+def test_lang_destino_acepta_cualquier_iso_y_rechaza_formato_invalido():
+    from worker.traducir_casete import lang_destino
+    assert lang_destino("es") == "es" and lang_destino("en") == "en"
+    assert lang_destino("pt") == "pt" and lang_destino("pt-BR") == "pt-BR"       # R8b: mas idiomas
+    for malo in ("por", "PT", "p", "pt_BR", "pt-br", ""):
+        with pytest.raises(argparse.ArgumentTypeError):
+            lang_destino(malo)
+
+
+def test_cli_parser_real_acepta_a_pt_y_rechaza_invalido_sin_llamar_api():
+    """Prueba el parser REAL de main() (construir_parser), no una copia: si alguien reintroduce
+    choices=["es","en"] en --a, este test lo detecta."""
+    from worker.traducir_casete import construir_parser
+    ap = construir_parser()
+    ns = ap.parse_args(["x.jsonl", "--a", "pt"])
+    assert ns.a == "pt"
+    with pytest.raises(SystemExit):
+        ap.parse_args(["x.jsonl", "--a", "not-a-lang"])
+
+
+def test_traducir_casete_a_pt_generico_transporte_falso(tmp_path):
+    """El mismo casete real (ES) traducido a PT: no hay ningun camino especial para {es,en} adentro
+    de traducir_casete/Traductor, y el mensaje resultante valida contra el contrato congelado
+    (lang_destino admite cualquier codigo de 2 letras, ver contracts/esquema.json)."""
+    from contracts import errores
+    src = CASETES / "b1-es-60s.jsonl"
+    out = tmp_path / "x-trad-pt.jsonl"
+    t, tr = _trad(tmp_path, [])
+    r = asyncio.run(traducir_casete(str(src), "pt", str(out), traductor=t))
+    assert r["a"] == "pt" and r["items_ok"] == r["textos"] == 14
+    lineas = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
+    cab, evs = lineas[0], lineas[1:]
+    assert cab["traduccion"]["lang_to"] == "pt"
+    trads = [e for e in evs if e["dir"] == "emit" and e["kind"] == "translation"]
+    assert trads and all(e["payload"]["meta"]["lang_to"] == "pt" for e in trads)
+    assert all(errores(e["payload"]) == [] for e in trads)      # contrato congelado, sin cambios

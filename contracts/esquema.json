@@ -247,7 +247,8 @@
         "properties": {
           "text": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 4000
           },
           "audio_start": {
             "type": "number"
@@ -430,6 +431,7 @@
         "properties": {
           "text": {
             "type": "string",
+            "maxLength": 4000,
             "description": "Texto PROVISORIO (interimInputTranscription) en el idioma original. Puede ser vacio."
           }
         }
@@ -533,7 +535,8 @@
         "properties": {
           "text": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 4000
           }
         }
       },
