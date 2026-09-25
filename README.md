@@ -313,6 +313,7 @@ hilo de Discord citado arriba). Filas con lo medido en una corrida real o deduci
 | Se recarga la pantalla de la sala | La captura sigue: worker y pantalla son procesos separados. Al reconectar, la vista pinta las últimas líneas guardadas y pide por historial lo que se perdió. | Por diseño (separación worker/web); `reportes/verificacion-final.md` no tiene una fila que mida específicamente una recarga de pantalla (sí mide la reconexión del hub, ítem 5b) |
 | Se pierde audio unos segundos en una rotación | El panel lo muestra acumulado (`audio_lost_s`) y la vista marca, en el lugar exacto, "[tramo sin texto: N s]". | `reportes/frontend-b4-huecos.txt` |
 | Gemini deja de cerrar turnos a mitad de sesión (comportamiento del server, observado en corridas reales) | El watchdog de atasco reabre la conexión con solape y reenvía hasta 15 s de audio; la pérdida queda acotada. Medido el 25/09 en cinco corridas reales: 0 s de voz sin texto en tres (incluida la de 2 × 11 min) y 11–15 s en dos cortas. | `qa/out/smoke-b5r.log`, `qa/out/gate2/` (2 × 60 s, 25/09 02:15); comando: `python qa/smoke.py --sesiones 2 --duracion 60 ...` |
+| Dos o más salas del mismo proyecto de Google Cloud al mismo tiempo | Funciona (2 × 11 min reales sin huecos, `qa/out/smoke-b5r.log`), pero el 25/09 observamos que los atascos del server son más frecuentes con dos sesiones simultáneas de la misma key que con una (`reportes/video/vivo/`, `reportes/doble/`: cadencia de envío nuestra a tiempo, offset del server sin avanzar). Mitigaciones: escalonar el arranque de las salas 20–30 s, una key o proyecto por sala (ver Cómo escalar), y el watchdog que reabre. | `python -m worker.cadencia <casete>` (mide si el audio salió a tiempo) |
 | Se acaba la cuota o falla la key | El worker no falla en silencio: si falta la key corta con un mensaje claro (`GEMINI_API_KEY no esta definida en .env ni en el entorno`); ante un envío o una conexión que fallan, registra el error y, si no logra reabrir, termina. El sistema puede arrancar igual en modo replay, rotulado como tal, para pruebas y demos; para producción, nivel pago de Gemini o repartir sesiones entre varios proyectos (estimación de costo en `docs/costos.md`). Por diseño: no se forzó una cuota agotada real en esta vibeathon. | `worker/gemini.py` (función `api_key`); `worker/session.py` (`_caida`, `_SinReabrir`); `ops/entrypoint-worker.sh` (cae a replay si falta la key); `docs/costos.md` |
 | Stream virtual sin traducción propia (idea del staff: vMix) | Una fuente de navegador POR IDIOMA, `?modo=obs&lang=xx`, fondo transparente sobre el video, dos líneas abajo. | `reportes/obs-transparencia.md` y captura `reportes/obs-transparencia.png` (verificado sobre video real en OBS el 25/09) |
 
@@ -341,7 +342,10 @@ La fuerza bruta no alcanza: hay tres cuellos de botella distintos y cada uno se 
    vibeathon se midieron **7 sesiones concurrentes** con ese cupo; en esta entrega el MVP corrió
    **2 sesiones reales de ~11 min en simultáneo** (tabla de arriba). Para más salas que las que
    entran en el nivel gratuito: pasar a un **nivel pago** de Gemini, o repartir sesiones entre
-   **varios proyectos de Google Cloud** (cada uno con su propia `GEMINI_API_KEY` y su propio cupo).
+   **varios proyectos de Google Cloud** (cada uno con su propia `GEMINI_API_KEY` y su propio cupo;
+   cada sala elige la suya con `python -m worker.run --key GEMINI_API_KEY_B ...`, donde el valor es el
+   NOMBRE de la variable en `.env`). Con dos salas del mismo proyecto vimos más atascos del server que
+   con una (fila "Dos o más salas" de "Qué pasa si…"): escalonar el arranque 20–30 s o una key por sala.
    El segundo modelo que traduce el texto (R19, no es la Live API) comparte cupo entre TODAS las
    sesiones de una misma key: 15 RPM por modelo en el nivel gratuito, con un tope propio de **12
    llamadas por modelo por minuto** repartido entre procesos mediante un archivo de reservas con

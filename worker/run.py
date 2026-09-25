@@ -101,6 +101,39 @@ def entrada_de(a) -> tuple[str, str | None, list[str], str]:
     return ent, fmt, extra, valor
 
 
+def armar_transportes(a, vocab: list[str]):
+    """(transporte inicial, fabrica(corte_s)) de la sala. Live: la conexion inicial y CADA rotacion
+    usan --key (a.key). Casete: transporte de test rotulado, sin API."""
+    if a.transporte.startswith("casete:"):
+        from worker.transporte_casete import FabricaCasete
+        fab_casete = FabricaCasete.desde_spec(a.transporte)
+        fab_casete.turnos = not a.vad_auto
+        tr = fab_casete(0.0)
+
+        def fabrica(corte_s: float):
+            return fab_casete(corte_s)
+        return tr, fabrica
+
+    def fabrica(corte_s: float):
+        return TransporteGemini(a.modelo, a.lang, vocab, nombre_key=a.key, auto_vad=a.vad_auto)
+    return fabrica(0.0), fabrica
+
+
+def armar_traductor(a):
+    """Traductor de la sala o None (--traducir-a none). Usa la MISMA key que la Live API (--key): "una
+    key/proyecto por sala" cubre las dos llamadas (antes el de texto usaba siempre GEMINI_API_KEY).
+    Las reservas de texto entre procesos (reportes/cuota-texto-reservas.jsonl) NO distinguen key:
+    siguen siendo un tope conservador compartido por todas las salas de la maquina."""
+    destino = a.traducir_a
+    if destino == "auto":
+        destino = "es" if a.lang == "en" else "en"
+    if not destino or destino == "none":
+        return None
+    from worker.traductor import Traductor, TransporteGenAI
+    return Traductor(a.lang, destino, timeout_s=a.timeout_trad_s,
+                     transporte=TransporteGenAI(nombre_key=a.key))
+
+
 async def correr(a) -> int:
     es_casete = a.transporte.startswith("casete:")
     # sala: mic/url sin --duracion corre sin limite; la cuota del bloque (guarda de desarrollo) no la
@@ -125,19 +158,7 @@ async def correr(a) -> int:
         print(f"[run] glosario de {a.agenda} ({a.charla or a.sesion}): {len(vocab)} terminos "
               f"-> custom_vocabulary", file=sys.stderr)
     entrada, formato, opciones, valor = entrada_de(a)
-    if es_casete:
-        from worker.transporte_casete import FabricaCasete
-        fab_casete = FabricaCasete.desde_spec(a.transporte)
-        fab_casete.turnos = not a.vad_auto
-        tr = fab_casete(0.0)
-
-        def fabrica(corte_s: float):
-            return fab_casete(corte_s)
-    else:
-        tr = TransporteGemini(a.modelo, a.lang, vocab, nombre_key=a.key, auto_vad=a.vad_auto)
-
-        def fabrica(corte_s: float):
-            return TransporteGemini(a.modelo, a.lang, vocab, nombre_key=a.key, auto_vad=a.vad_auto)
+    tr, fabrica = armar_transportes(a, vocab)
     # sin --casete: el camino real graba en fixtures/casetes/ (casete de evidencia); el transporte de
     # casete (test) graba en reportes/, nunca en fixtures/
     casete = a.casete or (f"reportes/casete-test-{a.sesion}-{time.strftime('%Y%m%d-%H%M%S')}.jsonl" if es_casete
@@ -158,13 +179,7 @@ async def correr(a) -> int:
     from worker.session import ConfigReabrir
     cfg_reabrir = ConfigReabrir.desde_env()
     cortador["cfg_reabrir"] = vars(cfg_reabrir)
-    destino = a.traducir_a
-    if destino == "auto":
-        destino = "es" if a.lang == "en" else "en"
-    traductor = None
-    if destino and destino != "none":
-        from worker.traductor import Traductor
-        traductor = Traductor(a.lang, destino, timeout_s=a.timeout_trad_s)
+    traductor = armar_traductor(a)
     rec = Grabador(casete, {"session_id": a.sesion, "lang": a.lang, "model": a.modelo,
                             "config": tr.config_enviada()["config"], "source": source,
                             "title": titulo, "cortador": cortador,

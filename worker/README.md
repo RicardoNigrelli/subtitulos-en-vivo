@@ -185,6 +185,46 @@ Verificación sin API (0 min): `.venv/Scripts/python -m pytest worker/tests/test
 (parada con señal simulada; fuente UDP real que se corta y vuelve; `worker.run` como proceso aparte
 con `--transporte casete:`, corte y vuelta del stream UDP y señal real al final).
 
+### Varias salas a la vez: cuando el server se traba (mitigaciones operativas)
+
+Lo medido (`reportes/audio-pipeline-doble.md`, `python -m worker.cadencia <casete>`, sin API): con DOS
+`worker.run` simultáneos, 4 de 4 salas con atasco tuvieron el envío sano hasta el primer pedido de
+reapertura (el pautado de la fuente iba 0,013–0,016 s tarde como máximo) y el traductor ni había
+reservado en la corrida 05:16. Lo que se trabó fue el server: en `sala-a-051619` y `sala-b-051619`, la
+conexión c1 dio 17 y 31 mensajes, 0 textos, y el único `audioOffset` fue "0s" (nunca cerró el primer
+turno); en la doble de 01:00 (`vf2-en`/`vf2-es`) el offset se congeló en 25,8 y 21,2 s en las dos salas
+a la vez. La doble de ayer 16:50 (2 × 11 min, misma config enviada al server) y la de hoy 05:30 (2 × 60 s)
+no se trabaron: es intermitente. No sabemos por qué pasa más con dos sesiones; lo de abajo es operación,
+no está probado en vivo.
+
+1. **Escalonar el arranque de las salas 20–30 s.** En los dos pares trabados, las dos salas
+   arrancaron en el mismo segundo (05:16:20,755 / 05:16:20,772; 01:00:37,189 las dos) y la traba
+   empezó en los primeros 3–27 s de la conexión (el pedido de reapertura, a +25–52 s). Arrancar la
+   sala B 20–30 s después de la A evita que las dos atraviesen a la vez ese tramo inicial. Costo: ninguno (la sala B
+   empieza a transcribir 20–30 s más tarde).
+2. **Una key/proyecto de Google AI Studio por sala** (`--key NOMBRE_VAR`, p. ej. `GEMINI_API_KEY_B` en
+   `.env`). `--key` aplica a las DOS llamadas de la sala: la Live API (conexión inicial y cada
+   rotación) y el traductor de texto (`worker/run.py`: `armar_transportes` / `armar_traductor`; hasta el
+   25/09 05:46 el traductor usaba siempre `GEMINI_API_KEY`; test `worker/tests/test_key_por_sala.py`).
+   Las reservas de texto entre procesos (`reportes/cuota-texto-reservas.jsonl`) NO distinguen key:
+   siguen siendo un tope conservador COMPARTIDO por todas las salas de la máquina (≤ 12 llamadas por
+   modelo en 60 s entre todas; 14 con un solo modelo sano), aunque cada key tenga su propio cupo. Si la traba es capacidad o
+   cola por proyecto, dos proyectos no comparten esa cola. Costo: una key más por sala y su propia
+   cuota. [SUPUESTO: audio-pipeline] que la cola es por proyecto: no medido.
+3. **`ATASCO_ARRANQUE_S` (apagado por defecto).** Con N > 0 reabre la conexión que todavía no dio
+   NINGÚN final después de N s de audio propio con voz pendiente (backoff: se duplica en cada atasco
+   seguido). En `sala-a/b-051619` la reapertura llegó a +25,2 s ("mudo") y +30,8 s ("atraso"); c1
+   ya llevaba 10 s de audio enviado a +12,7 / +12,5 s (contado desde las ventanas del casete), así que
+   con `ATASCO_ARRANQUE_S=10` el pedido hubiese salido 12–18 s antes (estimación sobre el casete, no
+   corrida). Queda apagado porque sólo se probó en replay
+   (`reportes/audio-pipeline-gate.md`) y un server que tarda en dar el primer final pero no está
+   trabado se reabriría de más. Para activarlo en una sala: `ATASCO_ARRANQUE_S=10 python -m worker.run ...`.
+
+Además (arreglado el 25/09, no era la causa): la reserva entre procesos del traductor y la creación del
+cliente genai (traductor y cada `conectar()` de Gemini, 3,2–3,3 s medidos con carga) corrían en el loop
+y podían frenar el envío; ahora van a un hilo (`asyncio.to_thread`). Tests:
+`worker/tests/test_loop_no_bloqueado.py` y `worker/tests/test_conectar_no_bloquea.py`.
+
 ## Glosario desde la agenda (R8c): `--agenda`
 
 `fixtures/agenda.json` (formato completo en el docstring de `worker/glosario.py`):

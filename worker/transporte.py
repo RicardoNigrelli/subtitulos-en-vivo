@@ -16,6 +16,7 @@ Config Gemini (google-genai 2.25.0, verificada con `types.*.model_fields` el 24/
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import AsyncIterator, Optional, Protocol
 
@@ -55,6 +56,15 @@ def config_a_dict(cfg) -> dict:
     return cfg.model_dump(mode="json", exclude_none=True)
 
 
+async def crear_cliente(nombre_key: str = "GEMINI_API_KEY"):
+    """Cliente genai FUERA del loop (asyncio.to_thread). Crearlo (httpx + contexto SSL + bundle de CA)
+    tarda 3,2-3,3 s medidos con carga (reportes/audio-pipeline-doble.md, punto 8) y en 215550c corria
+    en el loop en CADA conexion: en una rotacion congelaba el pautado de la fuente, el envio y el
+    drenaje de la conexion vieja. Test: worker/tests/test_conectar_no_bloquea.py."""
+    from worker.gemini import cliente
+    return await asyncio.to_thread(cliente, nombre_key)
+
+
 class TransporteGemini:
     """Transporte real. Lee los frames crudos del websocket (no el objeto parseado del SDK)."""
 
@@ -75,9 +85,7 @@ class TransporteGemini:
         return {"model": self.modelo, "config": config_a_dict(self.cfg)}
 
     async def conectar(self) -> dict:
-        from worker.gemini import cliente
-
-        c = cliente(self.nombre_key)
+        c = await crear_cliente(self.nombre_key)
         self._cm = c.aio.live.connect(model=self.modelo, config=self.cfg)
         self._session = await self._cm.__aenter__()
         # El SDK consume el primer frame (setupComplete) dentro de connect(): se devuelve lo que

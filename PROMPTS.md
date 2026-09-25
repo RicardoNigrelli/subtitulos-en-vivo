@@ -168,7 +168,7 @@ Escrito por el orquestador al cierre, para responder a X2 sin maquillaje.
   contrato. **Quedaron pendientes** los topes de clientes por IP y de sesiones por productor en el hub: `backend` los
   estaba escribiendo cuando el segundo límite de uso (23:05) lo cortó; sus cambios a medias colgaban los tests y el
   orquestador los revirtió. Está documentado como limitación conocida en el README.
-- **Tests (estado al 25/09 02:00):** worker 88 y hub 41 en verde. El test de fan-out que "colgaba" tenía dos causas
+- **Tests (estado al 25/09 06:00):** worker 95 y hub 41 en verde. El test de fan-out que "colgaba" tenía dos causas
   propias del test, encontradas en la madrugada: una cola de 10 mensajes que atrapaba también al cliente vivo, y
   mensajes de 62 KB que el contrato (ahora con `maxLength: 4000`) rechaza correctamente.
 - **Video final (PENDIENTE al 25/09 02:00; Ricardo no autoriza grabar hasta un funcionamiento total verificado):**
@@ -195,3 +195,11 @@ umbral (10/4) se probó en replay, salió peor y se revirtió a 22/8, que es el 
 Se sumaron, por el hilo de Discord del staff de Nerdearla: modo sala (correr sin límite, parar limpio, reabrir la
 fuente si se cae el cable), la tabla "Qué pasa si…" y la verificación de `?modo=obs` transparente sobre video en OBS.
 El orquestador se equivocó una vez en voz alta (atribuyó el fan-out al `maxLength`) y lo sondeó antes de afirmarlo.
+
+A las 05:20 la sesión que grababa el video vio que con DOS salas reales a la vez las dos rotaban por atasco y con una
+sola ninguna. El orquestador propuso una causa propia (el lock de reservas del traductor trabando el envío de audio);
+audio-pipeline la contrastó con los casetes y la descartó con números (`python -m worker.cadencia <casete>`: el audio
+salió a tiempo, 0,016 s de atraso máximo, y el server no devolvió texto ni movió su offset). Se arreglaron igual tres
+cosas que bloqueaban el loop sin ser la causa (reserva y clientes de Gemini creados fuera del loop, con tests que lo
+miden) y se descubrió y corrigió que `--key` no llegaba al traductor de texto. El README lleva la salvedad en
+"Qué pasa si…" y en "Cómo escalar"; el video se grabó con una sala por vez y lo dice.

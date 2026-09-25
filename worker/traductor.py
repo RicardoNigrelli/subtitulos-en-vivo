@@ -262,7 +262,9 @@ class TransporteGenAI:
         from google.genai import errors, types
         if self._c is None:
             from worker.gemini import cliente
-            self._c = cliente(self.nombre_key)
+            # doble (25/09): crear el cliente (httpx + contexto SSL) frenaba el loop ~0,7-0,9 s en la
+            # primera traduccion; va a un hilo para no atrasar el pautado de la fuente
+            self._c = await asyncio.to_thread(cliente, self.nombre_key)
         kw = {}
         if self.thinking_level:
             kw["thinking_config"] = types.ThinkingConfig(thinking_level=self.thinking_level)
@@ -461,6 +463,17 @@ class Limitador:
         except TimeoutError:
             return False                   # lock trabado: no llamar ahora, reintentar en 0,5 s
 
+    async def _reservar_async(self, modelo: str, limite: float) -> bool:
+        """Doble (25/09): la reserva toma un LOCK DE ARCHIVO con espera activa (time.sleep, hasta
+        LockArchivo.timeout_s) y lee la cola del archivo: va a un hilo (asyncio.to_thread) para que
+        NUNCA frene el loop donde corren el pautado de la fuente y el envio de audio."""
+        if self.reservas is None:
+            return True
+        try:
+            return await asyncio.to_thread(self.reservas.reservar, modelo, int(limite))
+        except TimeoutError:
+            return False
+
     def espera(self, modelo: str) -> float:
         """Segundos hasta que `modelo` pueda llamar (inf si agoto el tope diario)."""
         e = self.m[modelo]
@@ -498,7 +511,7 @@ class Limitador:
             for wn, _, n in esperas:        # el primero libre que consiga RESERVA entre procesos
                 if wn > 0:
                     break
-                if self._reservar(n, rpm):
+                if await self._reservar_async(n, rpm):
                     e = self.m[n]
                     e.tokens -= 1
                     e.hoy += 1
