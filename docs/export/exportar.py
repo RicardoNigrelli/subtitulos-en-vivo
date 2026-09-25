@@ -153,6 +153,38 @@ def _ts_vtt(s: float) -> str:
     return _ts_srt(s).replace(",", ".")
 
 
+def _cargar_offset_map(path: Path) -> list[dict]:
+    """[{"desde":.., "hasta":.., "offset":..}, ...] en la linea de tiempo del audio FUENTE
+    (`audio_start`/`audio_end` del casete/hub tal cual). Pensado para alinear un SRT generado a
+    partir de un audio "de trabajo" (p.ej. narracion concatenada) con la posicion real de cada
+    tramo en un video final editado (docs/video/componer.py escribe este mapa a partir de su
+    propio timeline: ver `corte-v2-timeline.json` -> `narracion_offsets`)."""
+    datos = json.loads(Path(path).read_text(encoding="utf-8"))
+    return sorted(datos, key=lambda r: r["desde"])
+
+
+def _offset_para(t: float, mapa: list[dict]) -> float:
+    for r in mapa:
+        if r["desde"] <= t < r["hasta"]:
+            return r["offset"]
+    if not mapa:
+        return 0.0
+    return mapa[0]["offset"] if t < mapa[0]["desde"] else mapa[-1]["offset"]
+
+
+def _aplicar_offset_map(msgs: list[dict], mapa: list[dict]) -> list[dict]:
+    salida = []
+    for m in msgs:
+        ini, fin = _rango(m)
+        centro = (ini + fin) / 2
+        off = _offset_para(centro, mapa)
+        m2 = dict(m)
+        m2["audio_start"] = ini + off
+        m2["audio_end"] = fin + off
+        salida.append(m2)
+    return salida
+
+
 def _rango(m: dict) -> tuple[float, float]:
     ini, fin = float(m["audio_start"]), float(m["audio_end"])
     if fin <= ini:
@@ -201,6 +233,9 @@ def main(argv: list[str] | None = None) -> int:
                      help="es|en: idioma de salida pedido. Default: idioma original de la sesion")
     ap.add_argument("--salida", default=None,
                      help="ruta de salida. Default: docs/export/ejemplos/<base>[-<lang>].<formato>")
+    ap.add_argument("--offset-map", default=None,
+                     help="JSON [{desde,hasta,offset}] para correr audio_start/audio_end "
+                          "(alinear un audio de trabajo con su posicion real en un video editado)")
     args = ap.parse_args(argv)
 
     if args.hub and not args.sesion:
@@ -218,6 +253,9 @@ def main(argv: list[str] | None = None) -> int:
     if not msgs:
         print("ERROR: no hay mensajes type=text en la fuente indicada", file=sys.stderr)
         return 1
+
+    if args.offset_map:
+        msgs = _aplicar_offset_map(msgs, _cargar_offset_map(Path(args.offset_map)))
 
     salida_texto = GENERADORES[args.formato](msgs, args.lang)
 

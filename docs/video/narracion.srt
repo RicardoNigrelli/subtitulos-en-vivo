@@ -1,0 +1,136 @@
+1
+00:00:00,000 --> 00:00:02,200
+live conference subtitles
+
+2
+00:00:01,800 --> 00:00:04,000
+with Gemini
+
+3
+00:00:03,600 --> 00:00:08,000
+real audio from a Nerdearla talk, two rooms in parallel.
+
+4
+00:00:07,600 --> 00:00:09,800
+from any cell phone,
+
+5
+00:00:09,400 --> 00:00:12,400
+without installing anything. Each room
+
+6
+00:00:12,799 --> 00:00:15,299
+sends its audio to a worker.
+
+7
+00:00:14,899 --> 00:00:17,699
+that talks to the Gemini AI Live API.
+
+8
+00:00:17,299 --> 00:00:19,599
+on screen.
+
+9
+00:00:19,199 --> 00:00:21,399
+the English session
+
+10
+00:00:20,999 --> 00:00:24,799
+The subtitles appear with a medium delay of
+
+11
+00:00:24,399 --> 00:00:27,999
+full from end to end in half a second in our test with two sessions.
+
+12
+00:00:30,078 --> 00:00:33,478
+the attendees scan a QR code
+
+13
+00:00:33,078 --> 00:00:36,478
+and they choose their room and language from a simple index.
+
+14
+00:00:36,078 --> 00:00:38,978
+without login, without installing anything
+
+15
+00:00:38,578 --> 00:00:40,978
+Nerdearla works in any browser.
+
+16
+00:00:41,221 --> 00:00:43,421
+dor. This track is in Spanish
+
+17
+00:00:43,021 --> 00:00:46,821
+Today is a replay recorded earlier with the same
+
+18
+00:00:46,421 --> 00:00:50,121
+exact pipeline, it is not live speech recognition.
+
+19
+00:00:49,721 --> 00:00:52,121
+always labeled on screen
+
+20
+00:00:51,721 --> 00:00:55,521
+The translation runs on the final English text with
+
+21
+00:00:55,121 --> 00:00:57,821
+Jimmy Neeflit in small batches
+
+22
+00:00:57,421 --> 00:01:01,221
+and it stays several seconds behind the live subtitles in our
+
+23
+00:01:01,217 --> 00:01:05,017
+tests, an operation panel measures latency
+
+24
+00:01:04,617 --> 00:01:06,917
+50 and P95 per room.
+
+25
+00:01:06,517 --> 00:01:08,817
+never a simple average.
+
+26
+00:01:08,417 --> 00:01:12,217
+In addition to session rotations shown as events
+
+27
+00:01:11,817 --> 00:01:14,017
+transparent and expected.
+
+28
+00:01:13,617 --> 00:01:16,817
+and alerts when a room falls silent.
+
+29
+00:01:18,695 --> 00:01:21,895
+a single command with your own key of
+
+30
+00:01:21,495 --> 00:01:24,195
+Pedia asks Gemini, it lifts the whole
+
+31
+00:01:23,795 --> 00:01:26,995
+Dual stack without key starts in replay mode.
+
+32
+00:01:26,595 --> 00:01:28,795
+Clearly labeled play.
+
+33
+00:01:28,395 --> 00:01:31,495
+Apache 2.0 open source
+
+34
+00:01:31,095 --> 00:01:32,555
+on GitHub
+

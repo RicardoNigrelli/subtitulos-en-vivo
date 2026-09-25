@@ -1,0 +1,32 @@
+{
+  "n1_portada": {
+    "en": "Live captions for conferences, powered by Gemini. Real audio from a Nerdearla talk, two rooms running in parallel, on any phone, no app to install.",
+    "es": "Subtitulos en vivo para conferencias, con Gemini. Audio real de una charla de Nerdearla, dos salas en paralelo, desde cualquier celular, sin instalar nada.",
+    "cita": "R13a (audio real), R21 (dos sesiones en paralelo)"
+  },
+  "n2_vivo": {
+    "en": "Each room streams its audio to a worker that talks to the Gemini Live API. On screen, the English session: captions land with a median end-to-end delay of about half a second in our two-session test.",
+    "es": "Cada sala envia su audio a un worker que habla con la API Live de Gemini. En pantalla, la sesion en ingles: los subtitulos aparecen con una demora mediana de punta a punta de medio segundo en nuestra prueba con dos sesiones.",
+    "cita": "qa/smoke.py -> qa/out/smoke-b5r.log: percibida p50=0.443s (video-en) / p50=0.429s (video-es)"
+  },
+  "n3_indice": {
+    "en": "Attendees just scan a QR code, then pick their room and their language from a simple index. No login, no app: it runs in any browser.",
+    "es": "Los asistentes escanean un codigo QR y eligen su sala y su idioma desde un indice simple. Sin login, sin instalar nada: funciona en cualquier navegador.",
+    "cita": "R6 (indice de sesiones + idioma en URL), R20 (mostrar subtitulos en la web)"
+  },
+  "n4_replay": {
+    "en": "This Spanish track is a replay: pre-recorded earlier with the exact same pipeline, not live speech recognition, always labeled on screen. Translation runs on the final English text with Gemini Flash-Lite, in small batches, trailing the live captions by several seconds in our tests.",
+    "es": "Esta pista en espanol es un replay: grabado antes con el mismo pipeline exacto, no es reconocimiento de voz en vivo, siempre rotulado en pantalla. La traduccion corre sobre el texto final en ingles con Gemini Flash-Lite, en lotes pequenos, y queda varios segundos detras de los subtitulos en vivo en nuestras pruebas.",
+    "cita": "ESTADO.md fila 'R19 EN VIVO, segunda medicion': worker.medir_traduccion -> atraso p50 9.6s(en) / 8.8s(es), p95 20.6-21.8s"
+  },
+  "n5_panel": {
+    "en": "An operations panel tracks p50 and p95 latency per room, never a plain average, plus session rotations shown as transparent, expected events, and alerts when a room goes quiet.",
+    "es": "Un panel de operacion mide latencia p50 y p95 por sala, nunca un promedio simple, ademas de rotaciones de sesion mostradas como eventos transparentes y esperables, y alertas cuando una sala queda en silencio.",
+    "cita": "R8e (panel de monitoreo); texto propio del panel en pantalla: 'nearest-rank, nunca promedio'; decision de Ricardo 14:55 (rotacion transparente, no falla del proveedor)"
+  },
+  "n6_cierre": {
+    "en": "One command, with your own Gemini API key, brings the whole stack up. Without a key, it starts in a clearly labeled replay mode. Apache 2.0, open source, on GitHub.",
+    "es": "Un solo comando, con tu propia clave de API de Gemini, levanta todo el stack. Sin clave, arranca en modo replay, claramente rotulado. Apache 2.0, codigo abierto, en GitHub.",
+    "cita": "R16 (README como levantar), R15 (licencia OSI), ops-b6-compose.log (modo replay sin key)"
+  }
+}
