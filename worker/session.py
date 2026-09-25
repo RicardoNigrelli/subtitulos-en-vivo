@@ -73,7 +73,8 @@ from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from worker.casete import Grabador, kind_server
 from worker.contrato import SIN_SEQ, mensaje
-from worker.dedup import contenido_repetido, dedup_costura, tiradas_repetidas
+from worker.dedup import (VENTANA_CORTA_S, contenido_repetido, corto_repetido, dedup_costura,
+                          tiradas_repetidas)
 from worker.emisor import Emisor
 from worker.ingesta import CHUNK_S, Chunk, EventoFuente
 from worker.mapeo import InfoVentana, Mapeador, segundos as _segundos_mapeo
@@ -740,6 +741,12 @@ class SessionWorker:
                     tir = tiradas_repetidas(a.text, [r[0] for r in rec])
                     if tir is not None:
                         tipo, pedazos = ("tirada", tir) if tir else ("contenido", [])
+                if tipo is None:
+                    # frase CORTA (>= 2 palabras) igual o contenida en un texto ya emitido con audio en los
+                    # ultimos VENTANA_CORTA_S (el reenvio al reabrir la re-transcribe: "Bueno, muy" x2)
+                    ref = max(r[2] for r in rec)
+                    if corto_repetido(a.text, [r[0] for r in rec if r[2] >= ref - VENTANA_CORTA_S]):
+                        tipo, pedazos = "contenido", []
                 if tipo == "contenido":
                     self.res.dedup_descartados += 1
                     if self.rec:

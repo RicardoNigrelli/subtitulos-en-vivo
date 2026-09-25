@@ -194,6 +194,10 @@ O una sesión en modo replay, sin API, desde un casete ya grabado:
 Con el hub arriba, abrir `http://localhost:8080/` (índice), `http://localhost:8080/s/sala-1?lang=es`
 (subtítulos) o `http://localhost:8080/panel/` (monitoreo).
 
+Para más de una sala (R21: al menos dos en simultáneo) sin lanzar cada `worker.run` a mano, usar el
+supervisor `ops/salas.py` (arranque escalonado, reinicio con backoff, `--dry-run`): ver "La receta
+para N salas" en "Cómo escalar a más sesiones" más abajo.
+
 ## Credenciales y modelos
 
 Copiar `.env.example` a `.env` en la raíz. **Nunca se commitea** (`git check-ignore .env` → `.env`).
@@ -229,7 +233,7 @@ PCM s16le 16 kHz mono al pipeline (detalle de cada una, con más ejemplos, en
 |---|---|---|
 | `archivo` (default) | `--archivo x.wav`, con `--inicio`/`--duracion` | **VERIFICADO**: es la que corren R21 y el compose con key |
 | `url` | `--url <URL>`: HTTP, HLS, RTMP, SRT, UDP/mpegts — lo que `ffmpeg` abra | **VERIFICADO**, incluida una corrida REAL de 30 s contra Gemini |
-| `mic` | `--dispositivo "<nombre>"` (dshow en Windows, `avfoundation`/`pulse` en macOS/Linux) | abre el dispositivo; **NO verificado que entregue audio en esta máquina** |
+| `mic` | `--dispositivo "<nombre>"` (dshow en Windows, `avfoundation`/`pulse` en macOS/Linux) | **VERIFICADO** de punta a punta el 25/09 (transcripción + traducción reales) |
 
 `url` sin API, un encoder mandando UDP/mpegts local (también probado por HTTP local, `-listen 1`):
 
@@ -251,11 +255,30 @@ ffmpeg -re -i fixtures/audio/clips/nerdearla-en-booch-300s-60s.wav -t 30 -f mpeg
 ```
 
 `mic`: `worker.run --listar-dispositivos` abre y lista los dispositivos de audio (`dshow` en
-Windows) sin error. `--fuente mic --dispositivo "<nombre>"` también abre el dispositivo sin error,
-pero en la máquina donde se desarrolló esto entregó 0 bytes de PCM en 10–12 s con los tres
-micrófonos disponibles (posible causa: el dispositivo estaba tomado por otro programa capturando en
-paralelo — no confirmado). **No está verificado que `--fuente mic` entregue audio en ninguna
-máquina real**; sólo que abre el dispositivo y arma el comando correcto.
+Windows) sin error; también con `ffmpeg` directo:
+
+```bash
+ffmpeg -list_devices true -f dshow -i dummy
+```
+
+Antes de una charla real, medir la señal del micrófono elegido 5 s (con voz cerca del micrófono, el
+`mean_volume` debería quedar por encima de ~−40 dB; silencio digital da valores por debajo de −70 dB):
+
+```bash
+ffmpeg -f dshow -i audio="<dispositivo>" -t 5 -af volumedetect -f null -
+```
+
+Si el dispositivo está tomado por otro programa (por ejemplo OBS capturando la misma entrada), `ffmpeg`
+no lo abre o entrega 0 bytes: usar otro dispositivo o soltarlo primero en OBS.
+
+**VERIFICADO de punta a punta el 25/09** (con OK de Ricardo): `worker.run --fuente mic --dispositivo
+"Auriculares con micrófono (soundcore A25i)" --sesion prueba-mic --lang es --duracion 30`, señal previa
+−23,1 dB media / −3,7 dB pico (voz), transcripción en castellano correcta y traducida al inglés, 3
+textos, 3/3 traducidos (uno era una frase corta repetida tras la reapertura, defecto corregido después con
+`worker/tests/test_costura_corta.py` sobre este mismo casete), exit 0 (`fixtures/casetes/evidencia-25-09/prueba-mic-20260925-090921.jsonl`,
+`reportes/mic-prueba.md`). Esa corrida coincidió con servicio degradado del nivel gratuito a esa hora
+(primer texto a +32 s, una reapertura por atasco); el mecanismo de captura del micrófono en sí
+funcionó de punta a punta.
 
 ## Glosario automático desde la agenda (R8c): `--agenda`
 
@@ -294,8 +317,10 @@ remoto a apretar F5 si una pantalla se traba.
     ```bash
     .venv/Scripts/python -m worker.run --fuente mic --dispositivo "<nombre dshow>" --sesion sala-1 --lang es --hub ws://SERVIDOR:8080/ingest
     ```
-    Implementado; **entrega de audio NO verificada en la máquina de desarrollo el 24/09 porque OBS
-    tenía tomado el dispositivo** (mismo estado que en "Fuentes de audio en vivo" arriba).
+    **VERIFICADO de punta a punta el 25/09** (transcripción + traducción reales; ver "Fuentes de
+    audio en vivo" arriba). Si el dispositivo elegido está tomado por otro programa (por ejemplo
+    OBS capturando la misma entrada), `ffmpeg` no lo abre: usar otro dispositivo o soltarlo en OBS
+    antes de arrancar el worker.
   - O la mini PC manda el audio por red y el worker corre en el servidor, con `--fuente url`
     (**VERIFICADO con una corrida real de 30 s por UDP el 24/09**, `reportes/audio-pipeline-b8.md`).
     Ejemplo en la mini PC, mandando el cable de 3,5 mm por UDP:
@@ -358,9 +383,32 @@ arranque simple, sin un operador dedicado mirando la mini PC) esto se mantiene o
   el panel remoto con token (`/panel/`, sección "Panel de monitoreo" más abajo), no parado junto al
   escenario.
 
-**Nivel pago en producción:** según la página de estado oficial, "Free-tier requests use sheddable capacity, while billed-tier requests are protected by critical priority" ([status](https://aistudio.google.com/status)); los atascos que documentamos se midieron en nivel gratuito.
+## Uso en producción
 
-**Latencia en producción (nivel pago):** con `TRADUCTOR_RPM`/`TRADUCTOR_TOPE_RPM` en los límites del proyecto y `VENTANA_S=2`, el original llega ~2,3 s después de que el orador empieza la frase (medido) y el traducido ~3,5–4,7 s (estimación con la llamada al modelo medida); detalle en [`docs/evidencia.md`](docs/evidencia.md), sección 1c.
+Esta entrega se desarrolló y midió sobre el **nivel gratuito** de Gemini (por presupuesto de la
+vibeathon); el diseño está pensado para desplegarse con **nivel pago** en un evento real:
+
+- **Nivel pago primero:** según la página de estado oficial, "Free-tier requests use sheddable
+  capacity, while billed-tier requests are protected by critical priority"
+  ([status](https://aistudio.google.com/status)); los atascos del servidor que documentamos en esta
+  entrega (`README.md` "Qué pasa si…", `docs/evidencia.md`) se midieron en nivel gratuito.
+- **Una key o proyecto de Google Cloud por grupo de salas** (`worker.run --key GEMINI_API_KEY_B ...`
+  o el campo `key` de cada sala en `ops/salas.ejemplo.json`): reparte el cupo del traductor y de la
+  Live API entre proyectos en vez de competir por el mismo tope.
+- **`ops/salas.py` con `--escalon-s`** para levantar N salas escalonadas (ver "Cómo escalar" abajo):
+  evita que dos sesiones nuevas atraviesen juntas el arranque, que es donde se vieron los atascos más
+  seguidos.
+- **`TRADUCTOR_RPM` / `TRADUCTOR_TOPE_RPM` en los límites reales del proyecto** (no los del nivel
+  gratuito: `.env.example`, sección "Latencia y nivel pago") y **`VENTANA_S=2`**: con cupo holgado
+  cada línea se traduce sola y al instante; el original llega ~2,3 s después de que el orador empieza
+  la frase (medido) y el traducido ~3,5–4,7 s (estimación con la llamada al modelo medida); detalle en
+  [`docs/evidencia.md`](docs/evidencia.md), sección 1c.
+- **Generar un `HUB_TOKEN` propio** de 16+ caracteres antes del evento (`python -c "import
+  secrets;print(secrets.token_urlsafe(24))"`; ver "Con Docker Compose" arriba) en vez de depender del
+  que genera `token-init` para la demo.
+- **HTTPS delante si el hub se expone a internet:** el token viaja en claro por `ws://`; en un evento
+  real ponerlo detrás de un proxy inverso (nginx, Caddy, Cloudflare Tunnel) con TLS, no exponer el
+  puerto del hub directo.
 
 ## Cómo escalar a más sesiones (R21, C3)
 
@@ -519,22 +567,26 @@ reportes de bloque del equipo, no versionados por tamaño — lo reproducible es
 
 ## Limitaciones conocidas
 
-- El hub no limita todavía clientes por IP ni sesiones por productor autenticado (`hub/README.md`,
-  "Seguridad y límites conocidos"); en un evento real ponelo detrás de un proxy inverso con límites
-  por IP y TLS (el token viaja en claro por `ws://`). El token débil (`dev-token`, vacío o < 16
-  caracteres) ya no es sólo una recomendación: el hub directamente no arranca con él fuera de
+- **Hub único en memoria: un reinicio pierde las traducciones ya entregadas.** El worker reenvía sus
+  `text` (llegan con `translations: {}`) pero no vuelve a mandar las `translation` que ya había
+  entregado antes del reinicio. Quien ya estaba mirando conserva las que tenía; quien entra después,
+  hace backfill de ese tramo, o exporta desde el hub (no desde el casete), los ve sin traducir
+  (detalle y números medidos en `hub/README.md`, "Seguridad y límites conocidos"). No aplica al modo
+  replay reproducido de nuevo, ni a exportar directamente desde el casete
+  (`docs/export/exportar.py --casete ...`).
+- **Historial de 1000 mensajes por sesión en memoria** (`HUB_HISTORY`, `hub/config.py`): una sesión
+  muy larga o una reconexión tardía sólo recupera por `historial?desde=` los últimos 1000 mensajes de
+  esa sala; lo más viejo ya no está para hacer backfill (sí queda en el casete de quien lo grabó).
+- **Sin límite de conexiones por IP, a propósito** (detrás de un NAT de evento toda la audiencia
+  comparte una sola IP pública; el hub sí limita por sesión y por audiencia total —
+  `HUB_MAX_SESIONES`, `HUB_MAX_AUDIENCIA`, `hub/README.md`). En un evento real igual conviene un proxy
+  inverso delante con TLS: el token viaja en claro por `ws://`. El token débil (`dev-token`, vacío o
+  < 16 caracteres) ya no es sólo una recomendación: el hub directamente no arranca con él fuera de
   `127.0.0.1`/`localhost` (ver "Con Docker Compose" arriba).
-- **Un reinicio del hub pierde las traducciones ya entregadas** (el hub sólo guarda estado en
-  memoria): el worker reenvía sus `text` (llegan con `translations: {}`) pero no vuelve a mandar las
-  `translation` que ya había entregado antes del reinicio. Quien ya estaba mirando conserva las que
-  tenía; quien entra después, hace backfill de ese tramo, o exporta desde el hub (no desde el
-  casete), los ve sin traducir (detalle y números medidos en `hub/README.md`, "Seguridad y límites
-  conocidos"). No aplica al modo replay reproducido de nuevo, ni a exportar directamente desde el
-  casete (`docs/export/exportar.py --casete ...`).
-- `hub/tests/test_fanout.py` (200 y 500 clientes) colgaba la noche de la vibeathon por dos defectos del propio test
-  (cola de 10 mensajes que atrapaba al cliente vivo; mensajes de 62 KB que el contrato rechaza); corregido el 25/09, la
-  suite del hub pasa completa (63, con los 22 nuevos de seguridad).
-- Fuente de micrófono implementada pero no verificada en esta máquina (OBS retenía el dispositivo).
+- **`MODO=real` dentro de Docker (ASR real en contenedor) no se volvió a verificar hoy 25/09**: la
+  última corrida registrada es del 24/09 20:28 AR (`qa/out/compose-real-b7.log`, sesiones
+  `replay:false`, textos 27/13, exit 0). Pedido cruzado: re-verificar con audio-pipeline o qa antes de
+  darlo por bueno para hoy.
 
 ## Licencia
 

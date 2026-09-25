@@ -487,6 +487,11 @@ de donde se tomaron el 24/09, y pueden cambiar. Las 7 sesiones Live concurrentes
 Live sólo de audio es 15 min sin compresión; con `gemini-3.5-transcribe-live` observamos cierres a ~283 s,
 que la rotación con solape cubre.
 
+## Dedup de costuras (`worker/dedup.py`)
+
+Siempre: sufijo del último emitido = prefijo del nuevo. Sólo en la costura de una rotación: contenido (≥ 10 caracteres), tirada común (≥ 6 palabras) y **frase corta**: un texto de ≥ 2 palabras IGUAL o CONTENIDO (normalizado, en borde de palabra) en un emitido con audio en los últimos 20 s se descarta.
+Caso real: `fixtures/casetes/evidencia-25-09/prueba-mic-20260925-090921.jsonl` ("Bueno, muy" re-emitido por la conexión vieja tras la reapertura); test `worker/tests/test_costura_corta.py`. Fuera de la costura nada cambia.
+
 ## Tests
 
 ```

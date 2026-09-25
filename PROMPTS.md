@@ -203,3 +203,74 @@ salió a tiempo, 0,016 s de atraso máximo, y el server no devolvió texto ni mo
 cosas que bloqueaban el loop sin ser la causa (reserva y clientes de Gemini creados fuera del loop, con tests que lo
 miden) y se descubrió y corrigió que `--key` no llegaba al traductor de texto. El README lleva la salvedad en
 "Qué pasa si…" y en "Cómo escalar"; el video se grabó con una sala por vez y lo dice.
+
+## Mañana del 25/09: revisión adversarial y cierre
+
+Escrito por `demo` al cierre del último bloque, con la misma regla de siempre: nada sin comando. Responde a X2 sobre
+lo que pasó en las horas finales, sin maquillarlo.
+
+**Revisión de tres agentes, en paralelo, la mañana de la entrega.** Con el MVP ya verificado, Ricardo pidió una
+pasada adversarial completa antes de tocar nada más: un agente de **seguridad** (17 hallazgos: 2 altos, 6 medios, 9
+bajos — `reportes/adversario-final-seguridad.md`), uno de **UX** (23 hallazgos: 5 altos, 10 medios, 8 bajos —
+`reportes/adversario-final-ux.md`) y uno de **escala** (`reportes/adversario-final-escala.md`). Qué se arregló el
+mismo día, con evidencia de antes/después:
+
+- **Seguridad** (`backend`, `reportes/backend-seguridad.md`): token obligatorio con `HUB_HOST` fuera de
+  localhost (antes arrancaba en silencio con `dev-token`; ahora corta con exit 2), tope de tamaño de mensaje
+  (1 MiB → 64 KiB), topes de sesiones/audiencia/espera (`HUB_MAX_*`), cabeceras (`nosniff`, `Referrer-Policy`,
+  `X-Frame-Options` en el panel), `?hub=` ya no se puede saltear con userinfo (`localhost:8100@evil.example`,
+  hallazgo M1, arreglado en `hub/`, `web/` y `panel/`), y un hallazgo nuevo encontrado al medir M3: los WebSocket
+  que el hub cierra con 1013/4401 quedaban vivos ~30 s por un re-armado del heartbeat de aiohttp (arreglado,
+  0 vivos a 1 s tras el cierre). Suite del hub: 41 tests previos + 22 nuevos de seguridad.
+- **UX** (`frontend`, `reportes/frontend-final.md`): la vista en un idioma ya NO mezcla el original — la línea
+  pendiente de traducción pinta un placeholder "…" (antes se veía gris con el original mezclado); estados vacíos
+  en lenguaje llano (conectando / esperando primera frase / sin conexión / sala inexistente); contraste y
+  objetivos táctiles ≥44px; el mismo bug de `?hub=` con userinfo, corregido también en `web/app.js`.
+- **Panel** (`monitor`, `panel/README.md`): vista **Informativa** nueva, ordenada por urgencia (sin texto nunca /
+  sin texto hace rato / se trabó y se reabrió / traducción fallando / reconectando / al día / replay / inactiva),
+  pensada para alguien que no conoce la implementación — pedido directo de Ricardo a partir del hallazgo "¿se ve
+  hecho con IA?" del adversario de UX y el M1 de seguridad (mismo bug de `?hub=`, corregido también acá).
+
+**El pedido de Ricardo sobre la latencia y la corrida A/B/C/D — resultado honesto, no el que se esperaba.** Ricardo
+pidió medir si acortar la ventana de audio bajaba la latencia. `audio-pipeline` corrió cuatro configuraciones sobre
+la misma sala (`docs/evidencia.md`, sección 1c): bajar la ventana de 3 a 2 segundos SÍ bajó la latencia del idioma
+original (p50 3,06 s → 2,32 s), pero en nivel gratuito **empeoró la traducción** (33/36 traducidas, con atraso p95
+de 11,8 s) en vez de mejorarla, porque generó más líneas de las que el cupo de llamadas del modelo de texto podía
+traducir de inmediato. Se dejó documentado tal cual, sin forzar una lectura más favorable: el default que quedó es
+el que mejor midió en nuestro propio nivel (ventana de 3 s, traducción inmediata cuando hay margen, lotes cuando
+no), y en nivel pago (sin ese tope de llamadas) la misma ventana de 2 s se **estima** — no se midió — en 3,5–4,7 s
+de punta a punta.
+
+**Hallazgo sobre el limitador:** durante esa misma investigación se encontró que el tope de llamadas del traductor
+de texto (`TRADUCTOR_RPM`/`TRADUCTOR_TOPE_RPM`) tenía el número del nivel gratuito **fijo en el código**, no
+como variable de entorno — así que no había forma de subirlo para nivel pago sin tocar el código fuente. Se lo
+volvió configurable por variable de entorno (mismo nombre, ahora leído de `.env`/entorno), documentado en el
+README ("Cómo escalar" y "Qué pasa si…").
+
+**Cinco salas reales en simultáneo** (`docs/evidencia.md`, sección 1b): cinco `worker.run` a la vez, tres con la
+key principal y dos con una segunda key de otro proyecto de Google Cloud. Las cinco abrieron y transcribieron sin
+que ninguna fallara por cupo de la Live API; el cupo que sí se notó fue el del traductor de texto en nivel
+gratuito — las tres salas que compartían key tradujeron 78 %, 74 % y 50 % de sus líneas, las dos con key propia el
+100 %. Es la medición detrás de la regla "dos salas por key en nivel gratuito, o nivel pago" del README.
+
+**La prueba de las 09:00 con el servicio gratuito degradado.** El mismo 25/09 a las 09:00 AR, con
+[aistudio.google.com/status](https://aistudio.google.com/status) marcando "All Systems Operational", tres salas de
+prueba en nivel gratuito (dos con una key, una con la key de otro proyecto) dieron sólo 2 a 4 textos cada una y
+errores 1011 del servidor, con el envío de audio a tiempo de nuestro lado (`fixtures/casetes/evidencia-25-09/prueba-*.jsonl`).
+La página de estado oficial explica por qué pasa sobre todo en nivel gratuito: *"Free-tier requests use sheddable
+capacity, while billed-tier requests are protected by critical priority"* (cita textual, `docs/evidencia.md`,
+sección 2). Es la razón por la que este proyecto asume nivel pago para producción y deja el nivel gratuito como
+nota al final del README, no como el despliegue recomendado.
+
+**Tests al cierre de este bloque** (re-corridos por mí, `demo`, no copiados de un reporte ajeno):
+
+```
+.venv/Scripts/python -m pytest worker/tests -q   → 126 passed (09:15, tras la dedup de frases cortas)
+.venv/Scripts/python -m pytest hub/tests -q      → 63 passed in 20.60s
+```
+
+**Estado del video: pendiente de grabación.** El guion (`docs/video/guion-final.md`, guion A
+"beneficio primero", 58 s), la lista de tomas (`docs/video/tomas.md`) y la evidencia que respalda cada afirmación
+que se va a decir en cámara están listos; falta grabar, componer (`docs/video/componer.py`) y que Ricardo lo suba a
+YouTube y lo envíe en Devpost — ninguna de esas tres cosas la hace ningún agente, por regla (`CLAUDE.md`,
+"Requieren confirmación de Ricardo").

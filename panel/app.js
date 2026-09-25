@@ -44,9 +44,19 @@
 // Reglas de la skill ui-subtitulos ("Panel de producción"): p50/p95 SIEMPRE (nearest-rank), NUNCA
 // promedio; estado nunca sólo por color; rotaciones/reaperturas/errores como contadores con
 // timestamp del último.
+//
+// Bloque "config/idioma" (pedido directo de Ricardo, 25/09): "?" pasa a ser un popover FLOTANTE
+// anclado al botón (nunca en línea, nunca empuja el layout); token/mostrar pruebas/aviso con voz se
+// mudan de la cabecera a un drawer de Configuración (botón de engranaje); se agrega un selector de
+// idioma ES/EN (`panel/i18n.js`, sin dependencias) que traduce TODO el texto visible, persistido en
+// localStorage, con `?locale=` forzando el valor de esta carga. El aviso con voz ahora usa la voz y
+// el volumen (0–100 %, default 70 %) del idioma elegido.
 'use strict';
 
 (function () {
+  var I18N = window.PanelI18n;
+  function t(key, vars) { return I18N ? I18N.t(key, vars) : key; }
+
   // ---------------------------------------------------------------- configuración
   var params = new URLSearchParams(location.search);
   var hubParamCrudo = params.get('hub');
@@ -98,6 +108,8 @@
   var WS_BASE = wsScheme + '://' + hubHost;
 
   var TOKEN_KEY = 'panelHubToken'; // sessionStorage; NUNCA query string (skill ui-subtitulos "Token")
+  var PRUEBAS_KEY = 'panelMostrarPruebas'; // localStorage (pedido Ricardo: "todo persistido")
+  var VOLUMEN_KEY = 'panelVolumen'; // localStorage, default 70
 
   var POLL_MS = 2000;           // /api/sesiones, historial de reconciliación y /api/metricas
   var TICK_MS = 1000;           // re-render (para que "sin texto hace N s" y parciales/60s avancen)
@@ -156,9 +168,15 @@
     return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
   }
 
+  // Números con toLocaleString del locale (pedido Ricardo: separadores es-AR/en-US según idioma).
+  function num(n) {
+    return I18N ? I18N.numero(n) : String(n);
+  }
+
   function fmtSeg(x) {
     if (x == null || !isFinite(x)) return '—';
-    return x.toFixed(3) + ' s';
+    var texto = I18N ? I18N.numero(x, { minimumFractionDigits: 3, maximumFractionDigits: 3 }) : x.toFixed(3);
+    return texto + ' s';
   }
 
   // nearest-rank: valor en la posición ceil(q/100*n) de la lista YA ordenada (1-indexado).
@@ -178,13 +196,13 @@
 
   function fmtResumenLatencia(r, sparkHtml) {
     var spark = sparkHtml || '';
-    if (r.n === 0) return '<span class="n-insuf">sin muestras</span>';
+    if (r.n === 0) return '<span class="n-insuf">' + esc(t('sin_muestras')) + '</span>';
     if (r.n < MIN_N_PERCENTIL) {
-      return '<span class="lat-par"><span class="n-insuf">n insuficiente (n=' + r.n + ')</span>' + spark + '</span>';
+      return '<span class="lat-par"><span class="n-insuf">' + esc(t('n_insuficiente', { n: num(r.n) })) + '</span>' + spark + '</span>';
     }
     return '<span class="lat-par"><span class="num">p50 ' + fmtSeg(r.p50) + ' · p95 ' + fmtSeg(r.p95) + '</span>' +
            spark + '</span>' +
-           '<span class="num-sub">n=' + r.n + '</span>';
+           '<span class="num-sub">n=' + num(r.n) + '</span>';
   }
 
   // Innovación (sistema.md §4): sparkline de latencia por sesión, SVG inline sin librerías, con los
@@ -203,7 +221,7 @@
       var y = SPARK_H - SPARK_PAD - ((v - min) / rango) * (SPARK_H - SPARK_PAD * 2);
       return x.toFixed(1) + ',' + y.toFixed(1);
     }).join(' ');
-    var titulo = 'últimas ' + vals.length + ' muestras: ' + fmtSeg(min) + ' a ' + fmtSeg(max);
+    var titulo = t('sparkline_titulo', { n: num(vals.length), min: fmtSeg(min), max: fmtSeg(max) });
     return '<svg class="sparkline" width="' + SPARK_W + '" height="' + SPARK_H + '" viewBox="0 0 ' +
            SPARK_W + ' ' + SPARK_H + '" aria-hidden="true" focusable="false"><title>' + esc(titulo) +
            '</title><polyline points="' + pts + '"></polyline></svg>';
@@ -430,9 +448,10 @@
   // tiene que seguir visible mientras la URL siga teniendo el `?hub=` rechazado.
   var elChipConexion = document.getElementById('chip-conexion');
   var elChipHubSeguridad = document.getElementById('chip-hub-seguridad');
-  if (elChipHubSeguridad) {
+  function actualizarChipSeguridad() {
+    if (!elChipHubSeguridad) return;
     if (hubIgnoradoPorSeguridad) {
-      elChipHubSeguridad.textContent = 'hub externo ignorado por seguridad: "' + hubParamCrudo + '"';
+      elChipHubSeguridad.textContent = t('chip_hub_seguridad', { valor: hubParamCrudo });
       elChipHubSeguridad.hidden = false;
     } else {
       elChipHubSeguridad.hidden = true;
@@ -440,6 +459,7 @@
   }
 
   var metricasGlobal = null;
+  var ultimoErrorSesiones = null; // { detalle } — para poder re-renderizar el aviso al cambiar idioma
 
   function marcarAviso(msg) {
     if (!msg) { elAviso.className = 'aviso'; elAviso.textContent = ''; return; }
@@ -452,7 +472,8 @@
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).then(function (lista) {
-      elChipHub.textContent = 'hub: ok (' + lista.length + ' sesiones)';
+      ultimoErrorSesiones = null;
+      elChipHub.textContent = t('chip_hub_ok', { n: num(lista.length) });
       elChipHub.className = 'chip chip--ok';
       marcarAviso(null);
       lista.forEach(function (resumen) {
@@ -472,13 +493,13 @@
         s.translationsLangs = resumen.translations_langs || [];
         reconciliarHistorial(s);
       });
-      elUltimaActualizacion.textContent = 'actualizado ' + fmtHoraMs(Date.now());
+      elUltimaActualizacion.textContent = t('actualizado', { hora: fmtHoraMs(Date.now()) });
       render();
     }).catch(function (e) {
-      elChipHub.textContent = 'hub: SIN RESPUESTA';
+      elChipHub.textContent = t('chip_hub_sin_respuesta');
       elChipHub.className = 'chip chip--mal';
-      marcarAviso('No se pudo leer ' + HTTP_BASE + '/api/sesiones (' + String(e) + '). ' +
-                  'Los contadores que se ven quedaron en el último valor conocido.');
+      ultimoErrorSesiones = { detalle: String(e) };
+      marcarAviso(t('aviso_sin_respuesta', { url: HTTP_BASE + '/api/sesiones', detalle: String(e) }));
     });
 
     fetchMetricas().then(function (r) {
@@ -486,20 +507,20 @@
       return r.json();
     }).then(function (m) {
       metricasGlobal = m;
-      elChipMetricas.textContent = 'métricas: ok';
-      elChipMetricas.className = 'chip chip--ok';
+      elChipMetricas.textContent = t('config_metricas_con_token');
+      elChipMetricas.className = 'drawer__estado drawer__estado--ok';
       Object.keys(sesiones).forEach(function (id) {
         sesiones[id].metricas = (m.sesiones && m.sesiones[id]) || null;
       });
     }).catch(function (e) {
       if (e && e.message === 'SIN_TOKEN') {
         metricasGlobal = null;
-        elChipMetricas.textContent = 'métricas: sin token';
-        elChipMetricas.className = 'chip';
+        elChipMetricas.textContent = t('config_metricas_sin_token');
+        elChipMetricas.className = 'drawer__estado';
         return;
       }
-      elChipMetricas.textContent = 'métricas: no disponible (' + String((e && e.message) || e) + ')';
-      elChipMetricas.className = 'chip chip--mal';
+      elChipMetricas.textContent = t('config_metricas_error', { detalle: (e && e.message) || e });
+      elChipMetricas.className = 'drawer__estado drawer__estado--mal';
       console.warn('panel: /api/metricas falló:', String(e));
     });
   }
@@ -507,21 +528,23 @@
   // ---------------------------------------------------------------- render
   function estadoDe(s, ahoraMs) {
     var base = s.hubState || 'waiting';
-    if (base === 'ended') return { clase: 'ended', texto: 'terminada' };
-    if (base === 'idle') return { clase: 'idle', texto: 'inactiva' };
-    if (base === 'waiting') return { clase: 'waiting', texto: 'esperando datos' };
+    if (base === 'ended') return { clase: 'ended', texto: t('estado_terminada') };
+    if (base === 'idle') return { clase: 'idle', texto: t('estado_inactiva') };
+    if (base === 'waiting') return { clase: 'waiting', texto: t('estado_esperando') };
     // live:
-    if (s.ultimoTextoEn == null) return { clase: 'live', texto: 'en vivo (sin texto todavía)' };
+    if (s.ultimoTextoEn == null) return { clase: 'live', texto: t('estado_en_vivo_sin_texto') };
     var silencioS = (ahoraMs - s.ultimoTextoEn) / 1000;
     if (silencioS > SIN_TEXTO_S) {
-      return { clase: 'mudo', texto: 'sin texto hace ' + Math.floor(silencioS) + ' s' };
+      return { clase: 'mudo', texto: t('estado_mudo', { s: num(Math.floor(silencioS)) }) };
     }
-    return { clase: 'live', texto: 'en vivo' };
+    return { clase: 'live', texto: t('estado_en_vivo') };
   }
 
   // Franja de color por motivo de rotación (sistema.md §2 ref. Master Control Room: color como
   // clasificador, siempre con texto al lado — nunca el punto solo). Motivos sin mapeo (cualquier
-  // string que mande el worker) caen en el modificador neutro "otro", no se pierden.
+  // string que mande el worker) caen en el modificador neutro "otro", no se pierden. Los nombres de
+  // motivo (cierre/atasco/preventiva/goaway) son valores LITERALES del contrato: no se traducen,
+  // igual que `ok:false` o `type=text` (panel/README.md).
   var MOTIVO_CLASE = { cierre: 'motivo--cierre', atasco: 'motivo--atasco',
                         preventiva: 'motivo--preventiva', goaway: 'motivo--goaway' };
   function fmtDetalleMotivos(mapa) {
@@ -529,7 +552,7 @@
     if (!claves.length) return '';
     return claves.sort().map(function (k) {
       var clase = MOTIVO_CLASE[k] || 'motivo--otro';
-      return '<span class="motivo ' + clase + '">' + esc(k) + ':' + mapa[k] + '</span>';
+      return '<span class="motivo ' + clase + '">' + esc(k) + ':' + num(mapa[k]) + '</span>';
     }).join(' ');
   }
 
@@ -538,7 +561,7 @@
   function fmtDetalleRotacion(s) {
     var motivos = fmtDetalleMotivos(s.rotacionesPorMotivo);
     if (!(s.audioLostS > 0)) return motivos;
-    var perdido = 'audio perdido ' + s.audioLostS.toFixed(1) + ' s';
+    var perdido = esc(t('audio_perdido', { s: fmtSeg(s.audioLostS) }));
     return motivos ? motivos + ' · ' + perdido : perdido;
   }
 
@@ -548,11 +571,8 @@
   // sigue en la vista técnica de abajo, sin tocar). Reglas de urgencia documentadas en
   // panel/README.md — ese archivo es la fuente de verdad de los umbrales; si cambian, cambian ahí y
   // acá a la vez.
-  var NOMBRE_IDIOMA = { en: 'inglés', es: 'español', pt: 'portugués', fr: 'francés', de: 'alemán', it: 'italiano' };
   function nombreIdioma(codigo) {
-    if (!codigo) return '—';
-    var base = String(codigo).split('-')[0].toLowerCase();
-    return NOMBRE_IDIOMA[base] || codigo;
+    return I18N ? I18N.nombreIdioma(codigo) : (codigo || '—');
   }
   function fmtIdiomaTraduccion(s) {
     var origen = nombreIdioma(s.lang);
@@ -563,15 +583,17 @@
 
   // Aviso hablado (Web Speech API): sólo para las dos alarmas de M8 (reportes/adversario-final-ux.md),
   // con corte por edge (dispararAlarma) para que suene UNA vez por episodio, no en cada re-render de
-  // 1 s. Silenciable con el toggle "aviso con voz" de la cabecera (persistido, ver más abajo);
-  // si el navegador no tiene speechSynthesis, se degrada en silencio (la tarjeta ya avisa por texto
-  // y color, nunca depende sólo del audio).
+  // 1 s. Silenciable desde Configuración → Avisos (persistido, ver más abajo); si el navegador no
+  // tiene speechSynthesis, se degrada en silencio (la tarjeta ya avisa por texto y color, nunca
+  // depende sólo del audio). Usa la voz (`.lang`) y el volumen (0–100 %, default 70 %) del idioma
+  // elegido en el selector ES/EN.
   function avisoDeVoz(texto) {
     if (!elToggleSonido || !elToggleSonido.checked) return;
     if (!('speechSynthesis' in window)) return;
     try {
       var u = new SpeechSynthesisUtterance(texto);
-      u.lang = 'es-AR';
+      u.lang = I18N ? I18N.vozLang() : 'es-AR';
+      u.volume = leerVolumen() / 100;
       window.speechSynthesis.speak(u);
     } catch (e) {
       console.warn('panel: no se pudo reproducir el aviso de voz', e);
@@ -588,7 +610,7 @@
   //   3 reconectando · 4 sana (Al día / Replay) · 5 inactiva · 6 terminada.
   function estadoInformativo(s, ahoraMs) {
     if (s.hubState === 'ended') {
-      return { urgencia: 6, clase: 'terminada', icono: '■', texto: 'Terminada', accion: null };
+      return { urgencia: 6, clase: 'terminada', icono: '■', texto: t('estado_terminada'), accion: null };
     }
     var nombreSala = s.title || s.id;
     // Ojo con el orden: las alarmas de "sin texto" van ANTES del chequeo de `idle` a propósito. Al
@@ -599,40 +621,36 @@
     var segsDesdeLive = s.primeraVezLive != null ? Math.floor((ahoraMs - s.primeraVezLive) / 1000) : null;
 
     if (s.ultimoTextoEn == null && segsDesdeLive != null && segsDesdeLive > UMBRAL_NUNCA_TEXTO_S) {
-      dispararAlarma(s, 'alarmaSonadaNunca',
-        'Atención. La sala ' + nombreSala + ' está en vivo hace más de treinta segundos y todavía no muestra texto.');
+      dispararAlarma(s, 'alarmaSonadaNunca', t('voz_nunca_texto', { sala: nombreSala }));
       return {
         urgencia: 0, clase: 'mudo', icono: '◐',
-        texto: 'Sin texto todavía (hace ' + segsDesdeLive + ' s)',
-        accion: 'Verificar el audio de la sala (¿el micrófono o el archivo está enviando?).'
+        texto: t('estado_sin_texto_nunca', { s: num(segsDesdeLive) }),
+        accion: t('accion_sin_texto_nunca')
       };
     }
 
     var silencioS = s.ultimoTextoEn != null ? Math.floor((ahoraMs - s.ultimoTextoEn) / 1000) : null;
     if (silencioS != null && silencioS > UMBRAL_SIN_TEXTO_ALARMA_S) {
-      dispararAlarma(s, 'alarmaSonadaSilencio',
-        'Atención. La sala ' + nombreSala + ' no muestra texto hace más de ' + UMBRAL_SIN_TEXTO_ALARMA_S + ' segundos.');
+      dispararAlarma(s, 'alarmaSonadaSilencio', t('voz_silencio', { sala: nombreSala, s: UMBRAL_SIN_TEXTO_ALARMA_S }));
       return {
         urgencia: 0, clase: 'mudo', icono: '◐',
-        texto: 'Sin texto hace ' + silencioS + ' s',
-        accion: 'Verificar el audio de la sala; si sigue, revisar worker.log.'
+        texto: t('estado_sin_texto_alarma', { s: num(silencioS) }),
+        accion: t('accion_sin_texto_alarma')
       };
     }
     if (silencioS == null || silencioS <= UMBRAL_SIN_TEXTO_ALARMA_S) s.alarmaSonadaSilencio = false; // rearma para el próximo corte
 
     if (s.hubState === 'idle') {
-      return { urgencia: 5, clase: 'inactiva', icono: '◌', texto: 'Inactiva', accion: null };
+      return { urgencia: 5, clase: 'inactiva', icono: '◌', texto: t('estado_inactiva'), accion: null };
     }
 
     var rotacionReciente = s.ultimaRotacionEn != null &&
       ((ahoraMs - s.ultimaRotacionEn) / 1000) <= VENTANA_ROTACION_RECIENTE_S &&
       (s.ultimaRotacionMotivo === 'atasco' || s.ultimaRotacionMotivo === 'cierre');
     if (rotacionReciente) {
-      var perdido = s.ultimaRotacionAudioLostS > 0 ? ' (' + Math.round(s.ultimaRotacionAudioLostS) + ' s perdidos)' : '';
-      var accionRotacion = s.ultimaRotacionMotivo === 'atasco'
-        ? 'Se recuperó sola. Si pasa seguido con otra sala del mismo proyecto, arrancarlas con 20 s de diferencia (ver README) y revisar worker.log.'
-        : 'Se recuperó sola. Si pasa seguido, revisar worker.log.';
-      return { urgencia: 1, clase: 'rotacion', icono: '↺', texto: 'Se trabó y se reabrió' + perdido, accion: accionRotacion };
+      var perdido = s.ultimaRotacionAudioLostS > 0 ? t('estado_rotacion_perdido', { n: num(Math.round(s.ultimaRotacionAudioLostS)) }) : '';
+      var accionRotacion = s.ultimaRotacionMotivo === 'atasco' ? t('accion_rotacion_atasco') : t('accion_rotacion_cierre');
+      return { urgencia: 1, clase: 'rotacion', icono: '↺', texto: t('estado_rotacion', { perdido: perdido }), accion: accionRotacion };
     }
 
     var ventana = s.traduccionesVentana || [];
@@ -642,28 +660,29 @@
     if (totalVentana >= UMBRAL_TRAD_MUESTRAS_MIN && tasaFallo >= UMBRAL_TRAD_TASA) {
       return {
         urgencia: 2, clase: 'traduccion', icono: '▲',
-        texto: 'Traducción fallando (' + fallos + ' de ' + totalVentana + ')',
-        accion: 'Ver worker.log; puede ser un límite de cuota de traducción.'
+        texto: t('estado_traduccion', { f: num(fallos), n: num(totalVentana) }),
+        accion: t('accion_traduccion')
       };
     }
 
     if (s.wsEstado === 'reconectando') {
       return {
-        urgencia: 3, clase: 'reconectando', icono: '◌', texto: 'Reconectando',
-        accion: 'Esperando reconexión con el servidor. Si sigue más de un minuto, revisar el hub o la red.'
+        urgencia: 3, clase: 'reconectando', icono: '◌', texto: t('estado_reconectando'),
+        accion: t('accion_reconectando')
       };
     }
 
-    if (s.replay === true) return { urgencia: 4, clase: 'sana', icono: '⟲', texto: 'Replay', accion: null };
-    return { urgencia: 4, clase: 'sana', icono: '●', texto: 'Al día', accion: null };
+    if (s.replay === true) return { urgencia: 4, clase: 'sana', icono: '⟲', texto: t('estado_replay'), accion: null };
+    return { urgencia: 4, clase: 'sana', icono: '●', texto: t('estado_al_dia'), accion: null };
   }
 
   function tarjetaHtml(s, estado) {
     var badgeReplay = s.replay === true ? '<span class="badge badge-replay">REPLAY</span>' :
                        (s.replay === false ? '<span class="badge badge-vivo">LIVE</span>' : '');
     var nombre = esc(s.title || s.id);
-    var accionHtml = estado.accion ? '<p class="tarjeta__accion">Qué hacer: ' + esc(estado.accion) + '</p>' : '';
+    var accionHtml = estado.accion ? '<p class="tarjeta__accion"><b>' + esc(t('accion_prefijo')) + '</b> ' + esc(estado.accion) + '</p>' : '';
     var espectadores = s.viewers || 0;
+    var textoEspectadores = espectadores === 1 ? t('espectador_uno', { n: num(espectadores) }) : t('espectador_varios', { n: num(espectadores) });
     return (
       '<article class="tarjeta tarjeta--' + estado.clase + '" data-estado="' + estado.clase + '" data-id="' + esc(s.id) + '">' +
         '<header class="tarjeta__cabecera">' +
@@ -674,7 +693,7 @@
         '<p class="tarjeta__estado"><span class="tarjeta__icono" aria-hidden="true">' + estado.icono + '</span>' +
           esc(estado.texto) + '</p>' +
         accionHtml +
-        '<p class="tarjeta__pie">' + espectadores + (espectadores === 1 ? ' espectador' : ' espectadores') + '</p>' +
+        '<p class="tarjeta__pie">' + esc(textoEspectadores) + '</p>' +
       '</article>'
     );
   }
@@ -705,14 +724,14 @@
       });
     });
 
-    if (elResumenEnVivo) elResumenEnVivo.textContent = String(enVivoN);
+    if (elResumenEnVivo) elResumenEnVivo.textContent = num(enVivoN);
     var elResumenReplay = document.getElementById('resumen-replay');
     if (elResumenReplay) {
-      elResumenReplay.textContent = String(replayN);
+      elResumenReplay.textContent = num(replayN);
       elResumenReplay.parentNode.hidden = replayN === 0;
     }
-    if (elResumenAtender) { elResumenAtender.textContent = String(atenderN); elResumenAtender.classList.toggle('hay', atenderN > 0); }
-    if (elResumenSanas) elResumenSanas.textContent = String(sanasN);
+    if (elResumenAtender) { elResumenAtender.textContent = num(atenderN); elResumenAtender.classList.toggle('hay', atenderN > 0); }
+    if (elResumenSanas) elResumenSanas.textContent = num(sanasN);
     if (elResumenHora) elResumenHora.textContent = ultimoDatoMs != null ? fmtHoraMs(ultimoDatoMs) : '—';
     if (elTarjetasVacio) elTarjetasVacio.hidden = items.length > 0;
 
@@ -720,8 +739,8 @@
   }
 
   function fmtContador(n, ultimoMs, detalle) {
-    var html = '<span class="contador' + (n === 0 ? ' contador-cero' : '') + '">' + n + '</span>';
-    if (ultimoMs != null) html += '<span class="contador-detalle">últ. ' + fmtHoraMs(ultimoMs) + '</span>';
+    var html = '<span class="contador' + (n === 0 ? ' contador-cero' : '') + '">' + num(n) + '</span>';
+    if (ultimoMs != null) html += '<span class="contador-detalle">' + esc(t('ultimo_prefijo', { hora: fmtHoraMs(ultimoMs) })) + '</span>';
     if (detalle) html += '<span class="contador-detalle">' + detalle + '</span>';
     return html;
   }
@@ -736,12 +755,13 @@
     var m = s.metricas;
     if (!m || !m.latido_worker || !m.latido_worker.meta ||
         typeof m.latido_worker.meta.audio_seconds_sent !== 'number') {
-      return '<span class="n-insuf">sin heartbeat con audio_seconds_sent</span>';
+      return '<span class="n-insuf">' + esc(t('audio_sin_heartbeat')) + '</span>';
     }
     var seg = m.latido_worker.meta.audio_seconds_sent;
     var hace = m.latido_worker.t_hub ? ((Date.now() / 1000) - m.latido_worker.t_hub) : null;
-    var html = '<span class="num">' + seg.toFixed(1) + ' s <i>(estimación)</i></span>';
-    if (hace != null) html += '<span class="num-sub">latido hace ' + hace.toFixed(0) + ' s</span>';
+    var segTexto = I18N ? I18N.numero(seg, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : seg.toFixed(1);
+    var html = '<span class="num">' + segTexto + ' s <i>' + esc(t('audio_estimacion')) + '</i></span>';
+    if (hace != null) html += '<span class="num-sub">' + esc(t('audio_latido_hace', { n: num(Math.round(hace)) })) + '</span>';
     return html;
   }
 
@@ -751,24 +771,24 @@
                        (s.replay === false ? '<span class="badge badge-vivo">LIVE</span>' : '');
     var badgeTest = s.test === true ? '<span class="badge badge-test">TEST</span>' : '';
     var destinos = s.translationsLangs && s.translationsLangs.length ?
-      '<span class="num-sub">trad: ' + esc(s.translationsLangs.join(', ')) + '</span>' : '';
+      '<span class="num-sub">' + esc(t('trad_prefijo')) + ' ' + esc(s.translationsLangs.join(', ')) + '</span>' : '';
 
-    var etiquetaLatWorker = s.replay === true ? 'grabada (t_emit − t_captured)' : 't_emit − t_captured';
-    var latWorkerHtml = '<span class="num-sub">' + etiquetaLatWorker + '</span>' +
+    var etiquetaLatWorker = s.replay === true ? t('lat_grabada_sub') : t('lat_worker_sub');
+    var latWorkerHtml = '<span class="num-sub">' + esc(etiquetaLatWorker) + '</span>' +
                         fmtResumenLatencia(resumenLatencia(s.latGrabada), sparklineSvg(s.latGrabada));
     var latPercibidaHtml;
     if (s.replay === true) {
-      latPercibidaHtml = '<span class="n-insuf">no aplica (replay)</span>';
+      latPercibidaHtml = '<span class="n-insuf">' + esc(t('lat_no_aplica_replay')) + '</span>';
     } else {
-      latPercibidaHtml = '<span class="num-sub">t_receive − t_captured (WS propio)</span>' +
+      latPercibidaHtml = '<span class="num-sub">' + esc(t('lat_percibida_sub')) + '</span>' +
                           fmtResumenLatencia(resumenLatencia(s.latPercibida), sparklineSvg(s.latPercibida));
     }
 
-    var viewersHtml = String(s.viewers || 0);
+    var viewersHtml = num(s.viewers || 0);
     var vpi = Object.keys(s.viewersPorIdioma || {});
     if (vpi.length) {
       viewersHtml += '<span class="num-sub">' +
-        vpi.sort().map(function (k) { return esc(k) + ':' + s.viewersPorIdioma[k]; }).join(' · ') +
+        vpi.sort().map(function (k) { return esc(k) + ':' + num(s.viewersPorIdioma[k]); }).join(' · ') +
         '</span>';
     }
 
@@ -777,18 +797,18 @@
         (s.title ? '<span class="sesion-titulo">' + esc(s.title) + '</span>' : '') + '</td>' +
       '<td>' + esc(lang) + ' ' + badgeReplay + badgeTest + destinos + '</td>' +
       '<td class="estado estado--' + estado.clase + '">' + esc(estado.texto) + '</td>' +
-      '<td class="mono">' + (s.lastSeqHub == null ? '—' : s.lastSeqHub) +
+      '<td class="mono">' + (s.lastSeqHub == null ? '—' : num(s.lastSeqHub)) +
         '<span class="num-sub">' + (s.lastTEmitHub ? fmtHoraMs(s.lastTEmitHub * 1000) : '—') + '</span></td>' +
-      '<td class="mono">' + s.textos + '</td>' +
+      '<td class="mono">' + num(s.textos) + '</td>' +
       '<td>' + latWorkerHtml + '</td>' +
       '<td>' + latPercibidaHtml + '</td>' +
       '<td>' + fmtContador(s.rotaciones, s.ultimaRotacionEn, fmtDetalleRotacion(s)) + '</td>' +
       '<td>' + fmtContador(s.watchdogReaperturas, s.ultimoWatchdogEn,
-                 s.watchdogEventos !== s.watchdogReaperturas ? (s.watchdogEventos + ' eventos watchdog en total') : '') + '</td>' +
+                 s.watchdogEventos !== s.watchdogReaperturas ? esc(t('watchdog_eventos_total', { n: num(s.watchdogEventos) })) : '') + '</td>' +
       '<td>' + fmtContador(s.errores, s.ultimoErrorEn, s.ultimoErrorDetalle ? esc(s.ultimoErrorDetalle) : '') + '</td>' +
       '<td>' + fmtContador(s.traduccionesOkFalse, s.ultimaTraduccionEn,
-                 s.traduccionesOkTrue ? ('ok:true = ' + s.traduccionesOkTrue) : '') + '</td>' +
-      '<td class="mono col-secundaria">' + fmtParcialesPorMinuto(s, ahoraMs) + '</td>' +
+                 s.traduccionesOkTrue ? esc(t('ok_true_igual', { n: num(s.traduccionesOkTrue) })) : '') + '</td>' +
+      '<td class="mono col-secundaria">' + num(fmtParcialesPorMinuto(s, ahoraMs)) + '</td>' +
       '<td class="col-secundaria">' + fmtAudioEstimado(s) + '</td>' +
       '<td class="mono">' + viewersHtml + '</td>'
     );
@@ -826,9 +846,13 @@
       }
     });
     if (elChipPruebasOcultas) {
-      elChipPruebasOcultas.textContent = totalTest === 0 ? 'sin sesiones TEST' :
-        (totalTest + (totalTest === 1 ? ' sesión TEST' : ' sesiones TEST') +
-         (mostrarPruebas ? ' (mostradas)' : ' (ocultas; "mostrar pruebas" las trae)'));
+      if (totalTest === 0) {
+        elChipPruebasOcultas.textContent = t('pruebas_sin');
+      } else {
+        var etiqueta = totalTest === 1 ? t('pruebas_singular') : t('pruebas_plural');
+        var sufijo = mostrarPruebas ? t('pruebas_mostradas') : t('pruebas_ocultas');
+        elChipPruebasOcultas.textContent = num(totalTest) + ' ' + etiqueta + ' ' + sufijo;
+      }
     }
     // Corrección de dirección (bloque 10): la conexión WS del PANEL a cada sesión es un dato del
     // PANEL, no un estado de la sesión (mostrarlo por fila confundía "terminada" con "en vivo" en
@@ -838,7 +862,7 @@
       var enVivo = ordenFilas.reduce(function (acc, id) {
         return acc + (sesiones[id].wsEstado === 'en vivo' ? 1 : 0);
       }, 0);
-      elChipConexion.textContent = 'conexión panel: ' + enVivo + '/' + totalFilas + ' en vivo';
+      elChipConexion.textContent = t('chip_conexion', { n: num(enVivo), total: num(totalFilas) });
     }
   }
 
@@ -855,7 +879,17 @@
   var elBtnTokenBorrar = document.getElementById('btn-token-borrar');
   var elChipPruebasOcultas = document.getElementById('chip-pruebas-ocultas');
   var elTogglePruebas = document.getElementById('toggle-pruebas');
-  var mostrarPruebas = elTogglePruebas ? elTogglePruebas.checked === true : false;
+
+  // Config/idioma: "mostrar pruebas" ahora persiste en localStorage (pedido: "Todo persistido en
+  // localStorage", el token es la única excepción y sigue en sessionStorage).
+  function leerMostrarPruebasGuardado() {
+    try { return localStorage.getItem(PRUEBAS_KEY) === '1'; } catch (e) { return false; }
+  }
+  function guardarMostrarPruebas(v) {
+    try { localStorage.setItem(PRUEBAS_KEY, v ? '1' : '0'); } catch (e) { /* no fatal */ }
+  }
+  var mostrarPruebas = leerMostrarPruebasGuardado();
+  if (elTogglePruebas) elTogglePruebas.checked = mostrarPruebas;
 
   if (elInputToken) elInputToken.value = leerToken();
   if (elBtnTokenGuardar) elBtnTokenGuardar.addEventListener('click', function () {
@@ -870,12 +904,13 @@
     guardarToken('');
     metricasGlobal = null;
     Object.keys(sesiones).forEach(function (id) { sesiones[id].metricas = null; });
-    elChipMetricas.textContent = 'métricas: sin token';
-    elChipMetricas.className = 'chip';
+    elChipMetricas.textContent = t('config_metricas_sin_token');
+    elChipMetricas.className = 'drawer__estado';
     render();
   });
   if (elTogglePruebas) elTogglePruebas.addEventListener('change', function () {
     mostrarPruebas = elTogglePruebas.checked;
+    guardarMostrarPruebas(mostrarPruebas);
     render();
   });
 
@@ -886,13 +921,20 @@
   var VISTA_KEY = 'panelVista';
   var elBtnVistaInformativa = document.getElementById('btn-vista-informativa');
   var elBtnVistaTecnica = document.getElementById('btn-vista-tecnica');
+  var elBtnAyudaInformativa = document.getElementById('btn-ayuda-informativa');
+  var elBtnAyudaTecnica = document.getElementById('btn-ayuda-tecnica');
   function aplicarVista(vista) {
     var v = vista === 'tecnica' ? 'tecnica' : 'informativa';
     document.body.setAttribute('data-vista', v);
     if (elBtnVistaInformativa) elBtnVistaInformativa.setAttribute('aria-selected', String(v === 'informativa'));
     if (elBtnVistaTecnica) elBtnVistaTecnica.setAttribute('aria-selected', String(v === 'tecnica'));
+    // Sólo una "?" a la vez: la de jerga técnica en Técnica, la de lenguaje llano en Informativa.
+    // Si el popover de la "?" que se oculta estaba abierto, se cierra (su botón ya no es visible).
+    if (elBtnAyudaInformativa) elBtnAyudaInformativa.hidden = v !== 'informativa';
+    if (elBtnAyudaTecnica) elBtnAyudaTecnica.hidden = v !== 'tecnica';
+    if (v !== 'informativa' && ctrlAyudaInformativa) ctrlAyudaInformativa.cerrar(false);
+    if (v !== 'tecnica' && ctrlAyudaTecnica) ctrlAyudaTecnica.cerrar(false);
     try { localStorage.setItem(VISTA_KEY, v); } catch (e) { /* localStorage no disponible: la vista no persiste, no es fatal */ }
-    ajustarAltoCabecera();
   }
   var vistaGuardada = (function () { try { return localStorage.getItem(VISTA_KEY); } catch (e) { return null; } })();
   aplicarVista(vistaGuardada === 'tecnica' ? 'tecnica' : 'informativa');
@@ -901,7 +943,7 @@
 
   // Aviso con voz (M8): silenciable, persistido; por defecto ENCENDIDO (skill ui-subtitulos: el
   // estado nunca depende sólo de un canal — acá la voz es un extra sobre la tarjeta con texto+color,
-  // apagarla no oculta ninguna alarma visual).
+  // apagarla no oculta ninguna alarma visual). Ahora vive en Configuración → Avisos.
   var SONIDO_KEY = 'panelSonido';
   if (elToggleSonido) {
     var sonidoGuardado = (function () { try { return localStorage.getItem(SONIDO_KEY); } catch (e) { return null; } })();
@@ -911,27 +953,202 @@
     });
   }
 
-  // ---------------------------------------------------------------- layout: alto de cabecera variable
-  // La cabecera ahora tiene dos filas y un desplegable "?" (sistema.md §4): su alto cambia según el
-  // ancho de pantalla (flex-wrap) y según si "?" está abierto. En vez de un número de píxeles fijo
-  // para anclar el thead sticky de la tabla debajo (frágil: se superpone o deja un hueco), se mide
-  // el alto real y se publica como variable CSS.
-  var elCabecera = document.querySelector('.cabecera');
-  function ajustarAltoCabecera() {
-    if (!elCabecera) return;
-    document.documentElement.style.setProperty('--cabecera-alto', elCabecera.offsetHeight + 'px');
+  // Volumen del aviso con voz: 0–100 %, default 70 % (pedido Ricardo), persistido en localStorage.
+  var elInputVolumen = document.getElementById('input-volumen');
+  var elVolumenValor = document.getElementById('volumen-valor');
+  function leerVolumen() {
+    try {
+      var v = localStorage.getItem(VOLUMEN_KEY);
+      if (v == null) return 70;
+      var n = parseInt(v, 10);
+      return isFinite(n) ? Math.min(100, Math.max(0, n)) : 70;
+    } catch (e) { return 70; }
   }
-  if (elCabecera) {
-    ajustarAltoCabecera();
-    window.addEventListener('resize', ajustarAltoCabecera);
-    if (typeof ResizeObserver === 'function') {
-      new ResizeObserver(ajustarAltoCabecera).observe(elCabecera);
-    } else {
-      document.querySelectorAll('.ayuda').forEach(function (d) {
-        d.addEventListener('toggle', ajustarAltoCabecera);
-      });
+  function guardarVolumen(v) {
+    try { localStorage.setItem(VOLUMEN_KEY, String(v)); } catch (e) { /* no fatal */ }
+  }
+  function aplicarVolumenUi() {
+    var v = leerVolumen();
+    if (elInputVolumen) elInputVolumen.value = String(v);
+    if (elVolumenValor) elVolumenValor.textContent = v + '%';
+  }
+  aplicarVolumenUi();
+  if (elInputVolumen) elInputVolumen.addEventListener('input', function () {
+    var v = parseInt(elInputVolumen.value, 10) || 0;
+    guardarVolumen(v);
+    if (elVolumenValor) elVolumenValor.textContent = v + '%';
+  });
+  var elBtnProbarAviso = document.getElementById('btn-probar-aviso');
+  if (elBtnProbarAviso) elBtnProbarAviso.addEventListener('click', function () {
+    if (!('speechSynthesis' in window)) return;
+    try {
+      var u = new SpeechSynthesisUtterance(t('voz_prueba'));
+      u.lang = I18N ? I18N.vozLang() : 'es-AR';
+      u.volume = leerVolumen() / 100;
+      window.speechSynthesis.speak(u);
+    } catch (e) { console.warn('panel: no se pudo probar el aviso de voz', e); }
+  });
+
+  // ---------------------------------------------------------------- popovers flotantes ("?")
+  // Pedido de Ricardo: la ayuda ya NO se despliega en línea (empujaba el layout); es un popover
+  // FLOTANTE anclado al botón (position: fixed, ver estilo.css), con sombra sobria, ancho máx.
+  // ~420 px y z-index sobre todo el panel. Cierra con Esc, clic afuera y el mismo botón; maneja
+  // foco (al abrir, foco al botón de cerrar; al cerrar, foco vuelve al botón que abrió). En
+  // pantallas angostas (≤480 px) ocupa el ancho con 16 px de margen vía CSS (estilo.css).
+  function crearFlotante(btn, elFlotante, opciones) {
+    var abierto = false;
+    var onClickFueraLigado = null;
+    function posicionar() {
+      if (opciones && opciones.overlay) return; // drawer lateral: CSS lo ancla (right:0), no se reposiciona
+      if (window.innerWidth <= 480) return; // CSS fija el ancho/posición en mobile
+      var r = btn.getBoundingClientRect();
+      elFlotante.style.top = (r.bottom + 8) + 'px';
+      var anchoFlotante = elFlotante.offsetWidth;
+      var left = r.right - anchoFlotante;
+      var maxLeft = window.innerWidth - anchoFlotante - 8;
+      if (left > maxLeft) left = maxLeft;
+      if (left < 8) left = 8;
+      elFlotante.style.left = left + 'px';
     }
+    function onKeydown(e) { if (e.key === 'Escape') cerrar(true); }
+    function onClickFuera(e) {
+      if (elFlotante.contains(e.target) || btn.contains(e.target)) return;
+      cerrar(false);
+    }
+    function abrir() {
+      if (abierto) return;
+      abierto = true;
+      elFlotante.hidden = false;
+      btn.setAttribute('aria-expanded', 'true');
+      posicionar();
+      document.addEventListener('keydown', onKeydown);
+      // setTimeout: evita que el mismo click que abre el flotante dispare "clic afuera" al burbujear
+      // hasta document (patrón estándar de popovers).
+      onClickFueraLigado = onClickFuera;
+      setTimeout(function () { document.addEventListener('click', onClickFueraLigado); }, 0);
+      if (opciones && opciones.overlay) opciones.overlay.hidden = false;
+      var focoInicial = elFlotante.querySelector('[data-cerrar-popover], button, input, [tabindex]');
+      if (focoInicial) focoInicial.focus();
+      if (opciones && typeof opciones.alAbrir === 'function') opciones.alAbrir();
+    }
+    function cerrar(devolverFoco) {
+      if (!abierto) return;
+      abierto = false;
+      elFlotante.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('keydown', onKeydown);
+      if (onClickFueraLigado) { document.removeEventListener('click', onClickFueraLigado); onClickFueraLigado = null; }
+      if (opciones && opciones.overlay) opciones.overlay.hidden = true;
+      if (devolverFoco !== false) btn.focus();
+    }
+    btn.addEventListener('click', function () { abierto ? cerrar(true) : abrir(); });
+    var botonesCerrar = elFlotante.querySelectorAll('[data-cerrar-popover]');
+    botonesCerrar.forEach && botonesCerrar.forEach(function (b) { b.addEventListener('click', function () { cerrar(true); }); });
+    // NodeList.forEach no existe en IE, pero el resto del archivo ya usa ES5+DOM moderno (Array.map,
+    // etc.) — sin polyfill a propósito, mismo criterio que el resto del panel.
+    window.addEventListener('resize', function () { if (abierto) posicionar(); });
+    return { abrir: abrir, cerrar: cerrar };
   }
+
+  var ctrlAyudaInformativa = null, ctrlAyudaTecnica = null;
+  if (elBtnAyudaInformativa) {
+    var popAyudaInformativa = document.getElementById('popover-ayuda-informativa');
+    if (popAyudaInformativa) ctrlAyudaInformativa = crearFlotante(elBtnAyudaInformativa, popAyudaInformativa);
+  }
+  if (elBtnAyudaTecnica) {
+    var popAyudaTecnica = document.getElementById('popover-ayuda-tecnica');
+    if (popAyudaTecnica) ctrlAyudaTecnica = crearFlotante(elBtnAyudaTecnica, popAyudaTecnica);
+  }
+
+  // ---------------------------------------------------------------- drawer de Configuración
+  var elBtnConfig = document.getElementById('btn-config');
+  var elPanelConfig = document.getElementById('panel-config');
+  var elOverlayConfig = document.getElementById('overlay-config');
+  var elBtnConfigCerrar = document.getElementById('btn-config-cerrar');
+  if (elBtnConfig && elPanelConfig) {
+    var drawerConfig = crearFlotante(elBtnConfig, elPanelConfig, {
+      overlay: elOverlayConfig,
+      alAbrir: function () { if (elInputToken) elInputToken.focus(); }
+    });
+    if (elOverlayConfig) elOverlayConfig.addEventListener('click', function () { drawerConfig.cerrar(false); });
+    if (elBtnConfigCerrar) elBtnConfigCerrar.addEventListener('click', function () { drawerConfig.cerrar(true); });
+  }
+
+  // ---------------------------------------------------------------- idioma ES/EN (panel/i18n.js)
+  var elBtnLocale = document.getElementById('btn-locale');
+  function actualizarBotonLocale() {
+    if (!elBtnLocale || !I18N) return;
+    var actual = I18N.getLocale();
+    elBtnLocale.querySelectorAll('.btn-locale__opcion').forEach(function (span) {
+      span.classList.toggle('btn-locale__opcion--activa', span.getAttribute('data-locale') === actual);
+    });
+  }
+  // Ayuda informativa como LISTA ESCANEABLE (pedido de Ricardo vía orquestador, no un párrafo
+  // corrido): una fila por estado, con el MISMO color semántico e ícono que usa la tarjeta de esa
+  // sala (var(--color-exito/error/atencion/aviso/texto-secundario/texto-silenciado), sin paleta
+  // nueva) y una sola línea de explicación al lado; el color es sólo un clasificador — el texto de
+  // la fila es la fuente real (skill ui-subtitulos: nunca sólo color). Debajo, 3 bullets breves y,
+  // al pie, en gris, la referencia a la vista Técnica.
+  var FILAS_AYUDA_INFORMATIVA = [
+    { clase: 'mudo', icono: '◐', tituloKey: 'ayuda_fila_mudo_titulo', textoKey: 'ayuda_fila_mudo_texto' },
+    { clase: 'rotacion', icono: '↺', tituloKey: 'ayuda_fila_rotacion_titulo', textoKey: 'ayuda_fila_rotacion_texto' },
+    { clase: 'traduccion', icono: '▲', tituloKey: 'ayuda_fila_traduccion_titulo', textoKey: 'ayuda_fila_traduccion_texto' },
+    { clase: 'reconectando', icono: '◌', tituloKey: 'ayuda_fila_reconectando_titulo', textoKey: 'ayuda_fila_reconectando_texto' },
+    { clase: 'sana', icono: '●', tituloKey: 'ayuda_fila_sana_titulo', textoKey: 'ayuda_fila_sana_texto' },
+    { clase: 'terminada', icono: '■', tituloKey: 'ayuda_fila_terminada_titulo', textoKey: 'ayuda_fila_terminada_texto' }
+  ];
+  function construirAyudaInformativa() {
+    var el = document.getElementById('ayuda-informativa-contenido');
+    if (!el) return;
+    var filas = FILAS_AYUDA_INFORMATIVA.map(function (f) {
+      return '<li class="ayuda-lista__fila">' +
+        '<span class="ayuda-lista__icono ayuda-lista__icono--' + f.clase + '" aria-hidden="true">' + f.icono + '</span>' +
+        '<span class="ayuda-lista__texto"><b>' + esc(t(f.tituloKey)) + '</b> — ' + esc(t(f.textoKey)) + '</span>' +
+      '</li>';
+    }).join('');
+    var bullets = ['ayuda_bullet_urgencia', 'ayuda_bullet_quehacer', 'ayuda_bullet_voz'].map(function (k) {
+      return '<li>' + esc(t(k)) + '</li>';
+    }).join('');
+    el.innerHTML =
+      '<ul class="ayuda-lista">' + filas + '</ul>' +
+      '<ul class="ayuda-lista__bullets">' + bullets + '</ul>' +
+      '<p class="ayuda-lista__pie">' + esc(t('ayuda_pie_tecnico')) + '</p>';
+  }
+
+  function aplicarI18nEstatico() {
+    if (!I18N) return;
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+      el.textContent = t(el.getAttribute('data-i18n'));
+    });
+    document.querySelectorAll('[data-i18n-html]').forEach(function (el) {
+      el.innerHTML = t(el.getAttribute('data-i18n-html'));
+    });
+    document.querySelectorAll('[data-i18n-attr]').forEach(function (el) {
+      el.getAttribute('data-i18n-attr').split(',').forEach(function (par) {
+        var partes = par.split(':');
+        if (partes.length === 2) el.setAttribute(partes[0].trim(), t(partes[1].trim()));
+      });
+    });
+    actualizarBotonLocale();
+    actualizarChipSeguridad();
+    construirAyudaInformativa();
+    document.title = t('titulo_pagina');
+  }
+  if (elBtnLocale) elBtnLocale.addEventListener('click', function () {
+    if (!I18N) return;
+    I18N.setLocale(I18N.getLocale() === 'es' ? 'en' : 'es');
+  });
+  if (I18N) I18N.onChange(function () {
+    aplicarI18nEstatico();
+    // Re-render de todo lo que ya se armó con texto en el idioma anterior (chips dinámicos, tabla,
+    // tarjetas): mismas fuentes de datos, sin re-pedir nada al hub.
+    if (elChipHub.textContent) {
+      // El último resultado (ok/sin respuesta) puede volver a pedirse sin esperar el poll de 2 s.
+      pollSesiones();
+    }
+    render();
+  });
+  aplicarI18nEstatico();
 
   // ---------------------------------------------------------------- arranque
   pollSesiones();

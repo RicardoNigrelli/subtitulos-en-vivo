@@ -200,3 +200,20 @@ def tiradas_repetidas(nuevo: str, recientes: list[str], min_palabras: int = MIN_
             pedazos.append((t, antes, despues))
         k = j
     return pedazos
+
+
+# ---- frase CORTA repetida en la costura de una reapertura (microfono 25/09 09:09) -----------------
+# c2 emitio "Bueno, muy" y la vieja c1, drenando, la volvio a emitir identica: 2 palabras / 8 caracteres
+# compactos, no la ve ni la contencion (>= MIN_CONTENIDO) ni la tirada (>= MIN_TIRADA). Solo se usa EN
+# la costura y contra textos cuyo audio es reciente (VENTANA_CORTA_S); fuera de ella nada cambia.
+MIN_PALABRAS_CORTA = 2   # una muletilla suelta ("bueno", "sí") legitima no se descarta
+VENTANA_CORTA_S = 20.0   # segundos de audio hacia atras donde se buscan los textos ya emitidos
+
+
+def corto_repetido(nuevo: str, recientes: list[str], min_palabras: int = MIN_PALABRAS_CORTA) -> bool:
+    """True si `nuevo` (normalizado: minusculas, sin puntuacion, espacios colapsados) es IGUAL o esta
+    CONTENIDO, en borde de palabra, en alguno de `recientes`, y tiene >= min_palabras palabras."""
+    n, _ = _norm_con_indices(nuevo)
+    if not n or len(n.split()) < min_palabras:
+        return False
+    return any(f" {n} " in f" {_norm_con_indices(r)[0]} " for r in recientes)

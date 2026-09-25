@@ -10,90 +10,104 @@
 <body>
   <header class="cabecera">
     <div class="cabecera__fila cabecera__identidad">
-      <h1 class="cabecera__titulo">Panel de producción<span class="cabecera__subtitulo">control de sesiones en vivo</span></h1>
-      <div class="selector-vista" role="tablist" aria-label="Vista del panel">
-        <button type="button" id="btn-vista-informativa" role="tab" aria-selected="true">Informativa</button>
-        <button type="button" id="btn-vista-tecnica" role="tab" aria-selected="false">Técnica</button>
+      <h1 class="cabecera__titulo"><span data-i18n="titulo"></span><span class="cabecera__subtitulo" data-i18n="subtitulo"></span></h1>
+      <div class="selector-vista" role="tablist" data-i18n-attr="aria-label:vista_aria_label">
+        <button type="button" id="btn-vista-informativa" role="tab" aria-selected="true" data-i18n="vista_informativa"></button>
+        <button type="button" id="btn-vista-tecnica" role="tab" aria-selected="false" data-i18n="vista_tecnica"></button>
+      </div>
+      <div class="cabecera__botones">
+        <button type="button" id="btn-ayuda-informativa" class="ayuda__boton ayuda-informativa" aria-haspopup="dialog" aria-expanded="false" aria-controls="popover-ayuda-informativa" data-i18n-attr="aria-label:ayuda_aria_informativa">?</button>
+        <button type="button" id="btn-ayuda-tecnica" class="ayuda__boton ayuda-tecnica" aria-haspopup="dialog" aria-expanded="false" aria-controls="popover-ayuda-tecnica" data-i18n-attr="aria-label:ayuda_aria_tecnica" hidden>?</button>
+        <button type="button" id="btn-config" class="btn-icono" aria-haspopup="dialog" aria-expanded="false" aria-controls="panel-config">
+          <svg class="icono-engranaje" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M8.4 1.6h3.2l.45 2.1c.5.17.98.4 1.42.68l1.9-.98 2.26 2.26-.98 1.9c.28.44.5.92.68 1.42l2.1.45v3.2l-2.1.45a6.9 6.9 0 0 1-.68 1.42l.98 1.9-2.26 2.26-1.9-.98c-.44.28-.92.5-1.42.68l-.45 2.1H8.4l-.45-2.1a6.9 6.9 0 0 1-1.42-.68l-1.9.98-2.26-2.26.98-1.9a6.9 6.9 0 0 1-.68-1.42l-2.1-.45v-3.2l2.1-.45c.17-.5.4-.98.68-1.42l-.98-1.9L4.63 3.4l1.9.98c.44-.28.92-.5 1.42-.68l.45-2.1ZM10 13.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/>
+          </svg>
+          <span data-i18n="btn_config"></span>
+        </button>
+        <button type="button" id="btn-locale" class="btn-locale" data-i18n-attr="aria-label:btn_locale_aria">
+          <span class="btn-locale__opcion" data-locale="es">ES</span><span aria-hidden="true">|</span><span class="btn-locale__opcion" data-locale="en">EN</span>
+        </button>
       </div>
       <div class="cabecera__estado" role="status" aria-live="polite">
-        <span id="chip-hub" class="chip">hub: conectando…</span>
-        <span id="chip-metricas" class="chip">métricas: sin token</span>
-        <span id="ultima-actualizacion" class="chip">sin datos aún</span>
-        <span id="chip-conexion" class="chip">conexión panel: —</span>
+        <span id="chip-hub" class="chip">hub: …</span>
+        <span id="ultima-actualizacion" class="chip"></span>
+        <span id="chip-conexion" class="chip">—</span>
         <span id="chip-hub-seguridad" class="chip chip--warn" hidden></span>
       </div>
     </div>
-    <div class="cabecera__fila cabecera__controles">
-      <span class="token-caja">
-        <label for="input-token">token <code>/api/metricas</code></label>
-        <input type="password" id="input-token" placeholder="HUB_TOKEN" autocomplete="off" spellcheck="false">
-        <button type="button" id="btn-token-guardar">guardar</button>
-        <button type="button" id="btn-token-borrar">borrar</button>
-      </span>
-      <label class="toggle-pruebas" for="toggle-pruebas">
-        <input type="checkbox" id="toggle-pruebas"> mostrar pruebas
-      </label>
-      <span id="chip-pruebas-ocultas" class="chip">sin sesiones TEST</span>
-      <label class="toggle-sonido" for="toggle-sonido">
-        <input type="checkbox" id="toggle-sonido"> aviso con voz
-      </label>
-      <details class="ayuda ayuda-informativa">
-        <summary class="ayuda__boton" aria-label="Cómo leer la vista informativa">?</summary>
-        <div class="ayuda__contenido">
-          Cada tarjeta es una sala. Están ordenadas primero las que hay que atender. "Al día" o "Replay"
-          quiere decir que todo funciona bien. "Sin texto todavía" o "Sin texto hace N s" aparece cuando una
-          sala lleva más de 30 segundos en vivo sin mostrar ninguna frase, o dejó de mostrar frases por más de
-          20 segundos: en los dos casos suena además un aviso hablado (silenciable con "aviso con voz"), porque
-          es lo primero que hay que mirar. "Se trabó y se reabrió" es una sala que tuvo un problema técnico y
-          se recuperó sola; si dice cuántos segundos de audio se perdieron, es lo que no se pudo recuperar.
-          "Traducción fallando" cuenta cuántas de las últimas traducciones no salieron. "Reconectando" es que
-          este panel perdió la conexión con esa sala y está reintentando. Cuando una tarjeta dice "Qué hacer",
-          es una sugerencia concreta, no una orden. El resumen de arriba cuenta cuántas salas están en vivo,
-          cuántas hay que atender ahora y cuántas están sin problemas. Los detalles técnicos (latencias exactas,
-          números de secuencia, motivos con jerga) están en la vista <b>Técnica</b>.
-        </div>
-      </details>
-      <details class="ayuda ayuda-tecnica">
-        <summary class="ayuda__boton" aria-label="Cómo leer este panel">?</summary>
-        <div class="ayuda__contenido">
-          Estado <code>live</code> con más de <code>15 s</code> sin un <code>type=text</code> nuevo se muestra
-          como "sin texto hace N s" (umbral documentado, brief B3). p50/p95 = <b>nearest-rank</b>, nunca promedio;
-          con menos de <code>10</code> muestras se marca "n insuficiente". El trazo junto al p50/p95 es un
-          <b>sparkline</b> de las últimas 20 muestras: es un adorno, no reemplaza los números. "grabada" =
-          <code>t_emit − t_captured</code> tal como quedó en el casete (sesiones <code>replay:true</code>); en
-          sesiones en vivo esa misma resta es la latencia real del worker y se agrega además la
-          <b>percibida</b> = <code>t_receive − t_captured</code> medida en el WebSocket propio de este panel.
-          "Parciales/60 s" es una ventana deslizante, no un promedio de sesión completa. Segundos de audio:
-          <b>estimación</b> (viene de <code>heartbeat.meta.audio_seconds_sent</code> del worker, sólo visible con
-          token vía <code>Authorization: Bearer</code> a <code>/api/metricas</code>; sin token esa columna dice
-          "sin token" y el resto de la fila sigue funcionando). El token se pega UNA vez arriba, se guarda en
-          <code>sessionStorage</code> (nunca en la URL ni en la query string) y viaja sólo en la cabecera de la
-          petición; <code>?hub=</code> sólo se acepta si apunta a localhost/127.0.0.1/el mismo host que sirve
-          esta página — cualquier otro valor se ignora y se avisa arriba, para no filtrar el token a un host
-          ajeno. Sesiones con <code>test:true</code> (fixtures/transporte de casete, no ASR en vivo) llevan el
-          rótulo <b>TEST</b> y están OCULTAS por defecto: "mostrar pruebas" las trae de vuelta.
-          <code>rotation.meta.audio_lost_s</code>, cuando el worker lo manda, se acumula por sesión y aparece
-          junto a "Rotaciones"; el color de cada motivo (cierre/atasco/preventiva/goaway) es un clasificador
-          visual, el texto del motivo siempre está al lado. La franja de color a la izquierda de cada fila
-          resume el estado de esa sesión (vivo/mudo/idle/ended/esperando), igual que el texto de la columna
-          Estado.
-        </div>
-      </details>
-    </div>
   </header>
+
+  <!-- Popovers de ayuda (flotantes, anclados al botón "?"; ver panel/app.js crearPopover()). -->
+  <div id="popover-ayuda-informativa" class="popover" role="dialog" aria-modal="false" aria-labelledby="popover-ayuda-informativa-titulo" hidden>
+    <div class="popover__cabecera">
+      <h2 id="popover-ayuda-informativa-titulo" data-i18n="ayuda_titulo_informativa"></h2>
+      <button type="button" class="popover__cerrar" data-cerrar-popover data-i18n-attr="aria-label:ayuda_cerrar">×</button>
+    </div>
+    <div class="popover__contenido" id="ayuda-informativa-contenido"></div>
+  </div>
+  <div id="popover-ayuda-tecnica" class="popover" role="dialog" aria-modal="false" aria-labelledby="popover-ayuda-tecnica-titulo" hidden>
+    <div class="popover__cabecera">
+      <h2 id="popover-ayuda-tecnica-titulo" data-i18n="ayuda_titulo_tecnica"></h2>
+      <button type="button" class="popover__cerrar" data-cerrar-popover data-i18n-attr="aria-label:ayuda_cerrar">×</button>
+    </div>
+    <div class="popover__contenido" data-i18n-html="ayuda_contenido_tecnica"></div>
+  </div>
+
+  <!-- Drawer de Configuración (token/Acceso, Vista, Avisos). Token en sessionStorage; el resto en
+       localStorage (ver app.js). -->
+  <div id="overlay-config" class="overlay" hidden></div>
+  <div id="panel-config" class="drawer" role="dialog" aria-modal="false" aria-labelledby="panel-config-titulo" hidden>
+    <div class="drawer__cabecera">
+      <h2 id="panel-config-titulo" data-i18n="config_titulo"></h2>
+      <button type="button" id="btn-config-cerrar" class="popover__cerrar" data-i18n-attr="aria-label:config_cerrar">×</button>
+    </div>
+    <div class="drawer__contenido">
+      <section class="drawer__seccion">
+        <h3 data-i18n="config_seccion_acceso"></h3>
+        <label class="drawer__campo" for="input-token" data-i18n="config_token_label"></label>
+        <input type="password" id="input-token" placeholder="HUB_TOKEN" autocomplete="off" spellcheck="false">
+        <div class="drawer__botones">
+          <button type="button" id="btn-token-guardar" data-i18n="config_token_guardar"></button>
+          <button type="button" id="btn-token-borrar" data-i18n="config_token_borrar"></button>
+        </div>
+        <p id="chip-metricas" class="drawer__estado"></p>
+      </section>
+      <section class="drawer__seccion">
+        <h3 data-i18n="config_seccion_vista"></h3>
+        <label class="toggle-pruebas" for="toggle-pruebas">
+          <input type="checkbox" id="toggle-pruebas"> <span data-i18n="config_mostrar_pruebas"></span>
+        </label>
+        <p id="chip-pruebas-ocultas" class="drawer__estado"></p>
+      </section>
+      <section class="drawer__seccion">
+        <h3 data-i18n="config_seccion_avisos"></h3>
+        <label class="toggle-sonido" for="toggle-sonido">
+          <input type="checkbox" id="toggle-sonido"> <span data-i18n="config_aviso_voz"></span>
+        </label>
+        <label class="drawer__volumen" for="input-volumen">
+          <span data-i18n="config_volumen"></span>
+          <input type="range" id="input-volumen" min="0" max="100" step="1" value="70">
+          <span id="volumen-valor" class="drawer__volumen-valor">70%</span>
+        </label>
+        <div class="drawer__botones">
+          <button type="button" id="btn-probar-aviso" data-i18n="config_probar_aviso"></button>
+        </div>
+      </section>
+    </div>
+  </div>
 
   <div id="aviso-hub" class="aviso"></div>
 
   <div id="vista-informativa" class="vista-informativa">
     <div class="resumen-informativa">
-      <span><b id="resumen-en-vivo">0</b> en vivo</span>
-      <span hidden><b id="resumen-replay">0</b> en replay</span>
-      <span><b id="resumen-atender">0</b> a atender</span>
-      <span><b id="resumen-sanas">0</b> sin problemas</span>
-      <span>último dato: <b id="resumen-hora">—</b></span>
+      <span><b id="resumen-en-vivo">0</b> <span data-i18n="resumen_en_vivo"></span></span>
+      <span hidden><b id="resumen-replay">0</b> <span data-i18n="resumen_en_replay"></span></span>
+      <span><b id="resumen-atender">0</b> <span data-i18n="resumen_a_atender"></span></span>
+      <span><b id="resumen-sanas">0</b> <span data-i18n="resumen_sin_problemas"></span></span>
+      <span><span data-i18n="resumen_ultimo_dato"></span> <b id="resumen-hora">—</b></span>
     </div>
     <div id="tarjetas" class="tarjetas"></div>
-    <p id="tarjetas-vacio" class="tarjetas-vacio">Esperando la primera respuesta de <code>/api/sesiones</code>…</p>
+    <p id="tarjetas-vacio" class="tarjetas-vacio" data-i18n="tarjetas_vacio"></p>
   </div>
 
   <div id="vista-tecnica" class="vista-tecnica">
@@ -101,36 +115,34 @@
       <table class="panel">
         <thead>
           <tr>
-            <th class="col-sesion">Sesión</th>
-            <th>Idioma</th>
-            <th>Estado</th>
-            <th>Último seq</th>
-            <th>Textos</th>
-            <th>Latencia worker (p50 / p95)</th>
-            <th>Latencia percibida (p50 / p95)</th>
-            <th>Rotaciones</th>
-            <th>Watchdog reaperturas</th>
-            <th>Errores</th>
-            <th>Traducciones ok:false</th>
-            <th class="col-secundaria">Parciales / 60 s</th>
-            <th class="col-secundaria">Audio enviado (estimación)</th>
-            <th>Espectadores</th>
+            <th class="col-sesion" data-i18n="th_sesion"></th>
+            <th data-i18n="th_idioma"></th>
+            <th data-i18n="th_estado"></th>
+            <th data-i18n="th_ultimo_seq"></th>
+            <th data-i18n="th_textos"></th>
+            <th data-i18n="th_lat_worker"></th>
+            <th data-i18n="th_lat_percibida"></th>
+            <th data-i18n="th_rotaciones"></th>
+            <th data-i18n="th_watchdog"></th>
+            <th data-i18n="th_errores"></th>
+            <th data-i18n="th_trad_okfalse"></th>
+            <th class="col-secundaria" data-i18n="th_parciales"></th>
+            <th class="col-secundaria" data-i18n="th_audio"></th>
+            <th data-i18n="th_espectadores"></th>
           </tr>
         </thead>
         <tbody id="cuerpo-tabla">
-          <tr id="fila-vacia"><td colspan="14">Esperando la primera respuesta de <code>/api/sesiones</code>…</td></tr>
+          <tr id="fila-vacia"><td colspan="14" data-i18n="tarjetas_vacio"></td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
   <div class="pie">
-    Fuente: <span id="pie-hub-url">—</span> · refresco de <code>/api/sesiones</code> cada 2 s ·
-    reconciliación de historial cada 2 s · re-render cada 1 s. Override de hub: agregá
-    <code>?hub=host:puerto</code> a esta URL (sólo localhost/127.0.0.1/este mismo host). Consola del
-    navegador sin errores es parte de la evidencia de cierre (ver <code>reportes/monitor-b10.md</code>).
+    <span data-i18n="pie_fuente"></span> <span id="pie-hub-url">—</span> · <span data-i18n="pie_resto"></span>
   </div>
 
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

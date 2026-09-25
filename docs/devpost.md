@@ -30,7 +30,8 @@ Reemplazar antes de enviar: `https://github.com/RicardoNigrelli/subtitulos-en-vi
 
 `python` · `aiohttp` · `websockets` · `google-genai` (Gemini Live API) ·
 `gemini-3.5-transcribe-live` · `gemini-3.5-flash-lite` / `gemini-3.1-flash-lite` · `jsonschema` ·
-`pytest` · `ffmpeg` · `yt-dlp` · `html` · `css` · `javascript` (vanilla, sin framework) · `docker`
+`pytest` · `ffmpeg` · `yt-dlp` · `html` · `css` · `javascript` (vanilla, sin framework) · `docker` ·
+`qrcode-generator` (MIT, vendorizado en `web/vendor/` para los QR del índice, sin llamada externa)
 
 (Lista cruzada contra `requirements.txt` y los modelos citados en `ESTADO.md`, fila "`.env` con
 `GEMINI_API_KEY`..." y fila "Modelo y config exactos" de `reportes/audio-pipeline-b1.md`.)
@@ -55,10 +56,20 @@ full breakdown of who built what).
 - Transcribes it in real time, in the original language (Spanish or English).
 - Translates it in real time from English to Spanish (and, offline-verified, Spanish to English).
 - Shows the captions on a web page where every viewer independently picks the session (room) and
-  the language they want to read.
-- Runs at least two sessions at the same time, each with its own real speech-to-text pipeline.
+  the language they want to read; the view renders ONLY the chosen language (an animated "…"
+  placeholder holds the line's place while its translation is in flight, `reportes/frontend-final.md`).
+- Runs at least two sessions at the same time, each with its own real speech-to-text pipeline —
+  measured with **5 real rooms at once across 2 Google Cloud projects** on 09/25
+  (`docs/evidencia.md`, section 1b), and a standalone supervisor (`ops/salas.py`) that staggers
+  startup, restarts a crashed room on its own, and was load-tested with **10 rooms with no API
+  calls** while measuring real RSS/CPU (`reportes/ops-salas.md`).
 - Ships a monitoring panel (latency percentiles, connection state, automatic session-rotation
-  counter) and a SRT/VTT/TXT exporter for any session's saved history.
+  counter, and a plain-language "what needs attention first" view sorted by urgency, with a settings drawer, spoken alerts with volume control and a Spanish/English
+  switch, `panel/README.md`)
+  and a SRT/VTT/TXT exporter for any session's saved history.
+- Requires a token for anything other than localhost (hub, panel and worker→hub traffic), caps
+  message size/connections/known sessions, and sets basic security headers; stream credentials are
+  never published (`reportes/backend-seguridad.md`).
 
 ### How we built it
 
@@ -100,10 +111,15 @@ full breakdown of who built what).
 - The free tier's text-model limits (15 requests/minute and 500/day per model) meant translation
   had to be batched and load-balanced across two models from day one, or it would simply stop
   working under two concurrent sessions.
-- Getting translation to consistently keep up in real time, live, across two simultaneous sessions
-  is still a work in progress as of this write-up; the pipeline, the batching, and the replay path
-  are all verified end to end, and we're actively tuning the live latency (parallel dispatch,
-  shorter per-call timeouts) rather than shipping something we haven't measured.
+- Live translation latency is bound by the free tier's text-model call quota, not by the model
+  itself: on 09/25 we ran an A/B/C/D test on the same room and found that shrinking the audio window
+  from 3 s to 2 s dropped original-language latency (p50 3.06 s → 2.32 s) but, on the free tier,
+  generated more lines than the quota could translate immediately, so translated coverage got
+  *worse*, not better (`docs/evidencia.md`, section 1c). That's an honest, counter-intuitive result:
+  the default shipped is the one that measured best on our own tier (3 s window, immediate
+  translation when there's headroom, batching when there isn't). On a paid tier, where that call cap
+  goes away, the same 2 s window is estimated (not measured) at 3.5–4.7 s end to end for the
+  translated line, versus ~6 s today on the free tier.
 - A handful of very Windows-specific traps: a taken port doesn't fail to bind, it silently steals
   traffic from the process that's already listening; a local antivirus intercepts HTTPS and trips
   Python 3.13's stricter certificate checks; Git Bash rewrites paths that start with `/`.
@@ -111,7 +127,13 @@ full breakdown of who built what).
 ### Accomplishments that we're proud of
 
 - Two independent, fully real (non-replay) speech-to-text sessions running at the same time end to
-  end, feeding the same shared hub, with continuous sequence numbers and no gaps in a live run.
+  end, feeding the same shared hub, with continuous sequence numbers and no gaps in a live run —
+  and, on 09/25, **5 real rooms at once across 2 Google Cloud projects**, none failing on quota
+  (`docs/evidencia.md`, section 1b), plus a supervisor script tested with 10 rooms with no API calls.
+- An adversarial security pass (17 findings) and a UX pass (23 findings) the morning of the
+  deadline, most fixed same-day: a required token outside localhost, message-size/connection/session
+  caps, security headers, and a caption-view redesign that stopped mixing the original language into
+  a translated view.
 - A hub that fanned out one session's captions to 200 and to 500 simultaneous synthetic viewers, in
   order, without ever calling Gemini for it.
 - A translation-merge path (batched items applied by sequence number to already-saved lines) that we
@@ -134,8 +156,10 @@ full breakdown of who built what).
 
 ### What's next
 
-- Close the remaining gap between "translation pipeline is correct" and "translation keeps up live,
-  every time, on two-plus sessions" — batching and dispatch changes are already in progress.
+- Move the default deployment target from the free tier to a paid Gemini/Vertex tier: our own
+  measurements show the free tier's per-minute call cap, not the model, is what limits how fast
+  translation can keep up (`docs/evidencia.md`, section 1c); `docker compose up` with real
+  credentials is already a one-command deploy, no code changes needed for that switch.
 - Promote Spanish-to-English translation (already verified offline) to a first-class, always-on
   second target language, and add more target languages.
 - A per-event glossary of proper nouns (speaker names, product names) fed into the transcription
@@ -165,12 +189,22 @@ de quién construyó qué está en `PROMPTS.md`, en la raíz del repo).
 - Lo transcribe en tiempo real, en el idioma original (español o inglés).
 - Lo traduce en tiempo real de inglés a español (y, verificado offline, de español a inglés).
 - Muestra los subtítulos en una página web donde cada persona elige, de forma independiente, la
-  sesión (sala) y el idioma que quiere leer.
+  sesión (sala) y el idioma que quiere leer; la vista renderiza SÓLO el idioma elegido (mientras la
+  traducción de una línea está en camino se ve un placeholder animado "…" que le guarda el lugar,
+  `reportes/frontend-final.md`).
 - Procesa al menos dos sesiones al mismo tiempo, cada una con su propio pipeline real de
-  reconocimiento de voz.
+  reconocimiento de voz — medido con **5 salas reales al mismo tiempo, en 2 proyectos de Google
+  Cloud** el 25/09 (`docs/evidencia.md`, sección 1b), y un supervisor propio (`ops/salas.py`) que
+  escalona el arranque, reinicia solo una sala caída, y se probó con **10 salas sin gastar cuota de
+  API** midiendo RSS/CPU reales (`reportes/ops-salas.md`).
 - Incluye un panel de monitoreo (percentiles de latencia, estado de conexión, contador de
-  reaperturas automáticas de sesión) y un exportador a SRT/VTT/TXT del historial guardado de
+  reaperturas automáticas de sesión, y una vista en lenguaje llano ordenada por urgencia para saber
+  qué atender primero, con configuración, avisos por voz con volumen y cambio español/inglés,
+  `panel/README.md`) y un exportador a SRT/VTT/TXT del historial guardado de
   cualquier sesión.
+- Exige un token fuera de `localhost` (hub, panel y el tráfico worker→hub), pone topes de tamaño de
+  mensaje/conexiones/sesiones conocidas y cabeceras de seguridad básicas; las credenciales del stream
+  nunca se publican (`reportes/backend-seguridad.md`).
 
 ### Cómo lo construimos
 
@@ -212,11 +246,15 @@ de quién construyó qué está en `PROMPTS.md`, en la raíz del repo).
 - Los límites del nivel gratuito para los modelos de texto (15 solicitudes por minuto y 500 por día,
   por modelo) obligaron a que la traducción fuera por lotes y repartida entre dos modelos desde el
   primer día, o directamente dejaba de funcionar con sólo dos sesiones simultáneas.
-- Que la traducción llegue de forma consistente y a tiempo, en vivo, con dos sesiones simultáneas,
-  todavía es un trabajo en curso al momento de escribir esto: el pipeline, el armado de lotes y el
-  camino de replay están verificados de punta a punta, y estamos ajustando activamente la latencia en
-  vivo (despacho en paralelo, timeouts más cortos por llamada) en lugar de mostrar algo que no
-  medimos.
+- La latencia de la traducción en vivo la fija el cupo de llamadas del modelo de texto del nivel
+  gratuito, no el modelo en sí: el 25/09 corrimos una prueba A/B/C/D sobre la misma sala y encontramos
+  que bajar la ventana de audio de 3 s a 2 s mejoró la latencia del original (p50 3,06 s → 2,32 s)
+  pero, en nivel gratuito, generó más líneas de las que el cupo podía traducir de inmediato, así que
+  la cobertura traducida empeoró en vez de mejorar (`docs/evidencia.md`, sección 1c). Es un resultado
+  honesto y contraintuitivo: el default que quedó es el que mejor midió en nuestro propio nivel
+  (ventana de 3 s, traducción inmediata cuando hay margen, lotes cuando no). En nivel pago, donde ese
+  tope de llamadas desaparece, la misma ventana de 2 s se estima (no se midió) en 3,5–4,7 s de punta a
+  punta para la línea traducida, contra ~6 s de hoy en nivel gratuito.
 - Un puñado de trampas bien de Windows: un puerto ocupado no falla al bindear, directamente le roba
   el tráfico al proceso que ya estaba escuchando; un antivirus local intercepta HTTPS y activa las
   validaciones de certificado más estrictas de Python 3.13; Git Bash reescribe las rutas que
@@ -226,7 +264,13 @@ de quién construyó qué está en `PROMPTS.md`, en la raíz del repo).
 
 - Dos sesiones de reconocimiento de voz real (no replay) funcionando al mismo tiempo, de punta a
   punta, alimentando el mismo hub compartido, con números de secuencia continuos y sin cortes en una
-  corrida en vivo.
+  corrida en vivo — y, el 25/09, **5 salas reales al mismo tiempo en 2 proyectos de Google Cloud**,
+  ninguna falló por cupo (`docs/evidencia.md`, sección 1b), más un supervisor propio probado con 10
+  salas sin gastar cuota de API.
+- Una revisión adversarial de seguridad (17 hallazgos) y de UX (23 hallazgos) la mañana de la
+  entrega, la mayoría arreglados el mismo día: token obligatorio fuera de localhost, topes de
+  tamaño de mensaje/conexiones/sesiones, cabeceras de seguridad, y un rediseño de la vista de
+  subtítulos que dejó de mezclar el idioma original dentro de una vista traducida.
 - Un hub que repartió los subtítulos de una sesión a 200 y a 500 espectadores sintéticos
   simultáneos, en orden, sin llamar a Gemini para eso ni una vez.
 - Un camino de merge de traducciones (ítems por lotes aplicados por número de secuencia a líneas ya
@@ -250,9 +294,11 @@ de quién construyó qué está en `PROMPTS.md`, en la raíz del repo).
 
 ### Qué sigue
 
-- Cerrar la brecha que queda entre "el pipeline de traducción es correcto" y "la traducción llega a
-  tiempo en vivo, siempre, con dos o más sesiones": los cambios de armado de lotes y despacho ya
-  están en marcha.
+- Mover el despliegue por defecto del nivel gratuito a un nivel pago de Gemini/Vertex: lo que
+  medimos muestra que el tope de llamadas por minuto del nivel gratuito, no el modelo, es lo que
+  limita qué tan rápido llega la traducción (`docs/evidencia.md`, sección 1c); `docker compose up`
+  con credenciales reales ya es un despliegue de un solo comando, sin cambios de código para ese
+  cambio de nivel.
 - Promover la traducción de español a inglés (ya verificada offline) a segundo idioma de destino de
   primera clase y agregar más idiomas.
 - Un glosario de nombres propios por evento (oradores, productos) que alimente al modelo de
@@ -269,8 +315,8 @@ de quién construyó qué está en `PROMPTS.md`, en la raíz del repo).
 **EN:** Matches what Nerdearla staff described for the actual venue this week: a sound card feeds a
 3.5 mm cable into a small PC by the stage, which either opens the browser locally or forwards the
 audio over the network. Two ways to get audio in: on that PC, `worker.run --fuente mic --dispositivo
-"<dshow name>"` (implemented; audio delivery **not verified** on our dev machine on 09/24 because OBS
-held the device), or send the audio over the network to the server running the worker with `--fuente
+"<dshow name>"` (**verified end to end on 09/25** with a headset microphone: Spanish speech transcribed and
+translated to English, `fixtures/casetes/evidencia-25-09/prueba-mic-20260925-090921.jsonl`), or send the audio over the network to the server running the worker with `--fuente
 url` (**verified with a real 30 s UDP run on 09/24**, `reportes/audio-pipeline-b8.md`), e.g. `ffmpeg
 -f dshow -i audio="<device>" -ac 1 -ar 16000 -f mpegts udp://SERVER:9000` from the mini PC. Screens in
 front of the stage open `http://SERVER:8080/s/<room>?lang=es&modo=proyeccion` (verified in a browser
@@ -285,13 +331,16 @@ close, a stall, or every 240 s of sent audio (`rotation` in the panel, with accu
 `audio_lost_s`), and the viewer's page reconnects on its own and recovers what it missed from history
 (69/69 messages recovered in the reconnection test, `qa/out/reconexion-b2.log`) — that a screen reload
 doesn't interrupt transcription follows from that split-process design, it is not a measured figure.
-If translation falls behind, the original text shows first and gets marked "untranslated" after 120 s.
+If translation falls behind, an animated "…" placeholder holds the line's place; after 120 s without
+a translation it falls back to showing the original text with a language tag (e.g. "EN") instead
+(`reportes/frontend-final.md`). Outside `localhost`, the hub, the panel and the worker→hub traffic
+all require a token (`reportes/backend-seguridad.md`) — no stream credentials are ever published.
 
 **ES:** Coincide con lo que describió el staff de Nerdearla para la sala real de esta semana: una
 placa de audio manda un cable de 3,5 mm a una mini PC junto al escenario, que abre el navegador ahí
 mismo o reenvía el audio por red. Dos formas de meter el audio: en esa PC, `worker.run --fuente mic
---dispositivo "<nombre dshow>"` (implementado; entrega de audio **NO verificada** en la máquina de
-desarrollo el 24/09 porque OBS tenía tomado el dispositivo), o mandar el audio por red al servidor que
+--dispositivo "<nombre dshow>"` (**verificado de punta a punta el 25/09** con el micrófono de un
+auricular: voz en castellano transcripta y traducida al inglés, `fixtures/casetes/evidencia-25-09/prueba-mic-20260925-090921.jsonl`), o mandar el audio por red al servidor que
 corre el worker con `--fuente url` (**verificado con una corrida real de 30 s por UDP el 24/09**,
 `reportes/audio-pipeline-b8.md`), por ejemplo `ffmpeg -f dshow -i audio="<dispositivo>" -ac 1 -ar
 16000 -f mpegts udp://SERVIDOR:9000` desde la mini PC. Las pantallas frente al escenario abren
@@ -307,39 +356,51 @@ del servidor, un atasco o cada 240 s de audio enviado (`rotation` en el panel, c
 acumulado), y la vista se reconecta sola y recupera por historial lo perdido (69/69 mensajes
 recuperados en la prueba de reconexión, `qa/out/reconexion-b2.log`) — que recargar la pantalla no
 corte la transcripción es consecuencia de ese diseño con procesos separados, no una cifra medida. Si
-la traducción se atrasa, primero se ve el original y a los 120 s sin traducir se marca "sin
-traducir".
+la traducción se atrasa, se ve un placeholder animado "…" que le guarda el lugar a la línea; a los
+120 s sin traducción cae al original con una marca de idioma (por ejemplo "EN") en vez de mezclarse
+con el idioma elegido (`reportes/frontend-final.md`). Fuera de `localhost`, el hub, el panel y el
+tráfico worker→hub exigen un token (`reportes/backend-seguridad.md`) — las credenciales del stream
+nunca se publican.
 
 ---
 
 ## What happens when… / Qué pasa si…
 
 **EN:** Questions the Nerdearla staff raised about live-talk deal breakers (same Discord thread).
-Translation lag doesn't stop transcription: the line stays gray as pending and resolves as
-"untranslated" after 120 s (`reportes/frontend-b4-pendiente-120s.txt`); the panel counts failed
+Translation lag doesn't stop transcription: an animated "…" placeholder holds the line's place and,
+after 120 s without a translation, falls back to the original text with a language tag instead of
+mixing languages in the chosen-language view (`reportes/frontend-final.md`); the panel counts failed
 translations. If Gemini closes the session or stalls, the worker reopens it with overlap on its own —
 close / stall / a 240 s preventive refresh / a stuck send — with no F5 and no remote desktop
-(`qa/out/smoke-b5r.log`: 5 rotations, 0 silent gaps over a real 2×11 min run). If the hub restarts or
-the network between worker and hub drops, the worker reconnects and resends what's pending, and the
-viewer's page recovers the missed lines from history (`qa/out/reconexion-b2.log`: 69/69 recovered). A
-screen reload doesn't interrupt capture, by design (worker and web are separate processes) — not a
-measured figure. A few lost seconds of audio inside a rotation show up as `audio_lost_s` on the panel
-and as "[gap: N s]" in the transcript (`reportes/frontend-b4-huecos.txt`). If the quota runs out or
-the key is missing, the worker stops with a clear message instead of failing silently, and the same
-deployment can start in a labeled replay mode for tests (`docs/costos.md` for the paid-tier /
-multiple-projects path). For a vMix-style stream with no built-in translation, one transparent
-browser source per language (`?modo=obs&lang=xx`) covers it, verified against real video in OBS on
-09/25 (`reportes/obs-transparencia.md`). One number for scale, about our own run only: perceived
-transcription latency was p50 ≈ 0.44 s in the real run (`qa/out/final/`, `04-latencia.log`) — we make
-no claim about any other team's setup.
+(`qa/out/smoke-b5r.log`: 5 rotations, 0 silent gaps over a real 2×11 min run; the same stall pattern,
+more frequent with two rooms sharing one project key, is documented with its mitigation — staggered
+startup, one key per room — in `docs/evidencia.md`, section 2, and matches an independent report on
+Google's own developer forum). If the hub restarts or the network between worker and hub drops, the
+worker reconnects and resends what's pending, and the viewer's page recovers the missed lines from
+history (`qa/out/reconexion-b2.log`: 69/69 recovered). A screen reload doesn't interrupt capture, by
+design (worker and web are separate processes) — not a measured figure. A few lost seconds of audio
+inside a rotation show up as `audio_lost_s` on the panel and as "[gap: N s]" in the transcript
+(`reportes/frontend-b4-huecos.txt`). If the quota runs out or the key is missing, the worker stops
+with a clear message instead of failing silently, and the same deployment can start in a labeled
+replay mode for tests (`docs/costos.md` for the paid-tier / multiple-projects path). For a vMix-style
+stream with no built-in translation, one transparent browser source per language (`?modo=obs&lang=xx`)
+covers it, verified against real video in OBS on 09/25 (`reportes/obs-transparencia.md`). Numbers for
+scale, about our own runs only: perceived transcription latency was p50 ≈ 0.44 s in a real 2-session
+run (`qa/out/final/`, `04-latencia.log`), and on 09/25, original-language latency measured p50 ≈ 2.3–3.1
+s depending on window size, with a paid-tier estimate (not measured) of 3.5–4.7 s end to end including
+translation (`docs/evidencia.md`, section 1c) — we make no claim about any other team's setup.
 
 **ES:** Preguntas que hizo el staff de Nerdearla sobre qué sería un "deal breaker" en una charla en
-vivo (mismo hilo de Discord). El atraso en la traducción no frena la transcripción: la línea queda
-gris como pendiente y a los 120 s se confirma como "sin traducir" (`reportes/frontend-b4-pendiente-120s.txt`);
+vivo (mismo hilo de Discord). El atraso en la traducción no frena la transcripción: un placeholder
+animado "…" le guarda el lugar a la línea y, a los 120 s sin traducción, cae al original con una marca
+de idioma en vez de mezclar idiomas en la vista de un solo idioma elegido (`reportes/frontend-final.md`);
 el panel cuenta las traducciones fallidas. Si Gemini cierra la sesión o se atasca, el worker la
 reabre solo, con solape — cierre / atasco / preventiva a los 240 s / un envío trabado — sin F5 ni
 escritorio remoto (`qa/out/smoke-b5r.log`: 5 rotaciones, 0 tramos mudos en una corrida real de 2×11
-min). Si el hub se reinicia o se cae la red entre el worker y el hub, el worker reconecta y reenvía lo
+min; el mismo patrón de atasco, más frecuente con dos salas que comparten la key de un proyecto, está
+documentado con su mitigación —arranque escalonado, una key por sala— en `docs/evidencia.md`, sección
+2, y coincide con un reporte independiente en el foro oficial de desarrolladores de Google). Si el hub
+se reinicia o se cae la red entre el worker y el hub, el worker reconecta y reenvía lo
 pendiente, y la vista recupera por historial lo que se perdió (`qa/out/reconexion-b2.log`: 69/69
 recuperados). Recargar la pantalla no corta la captura, por diseño (worker y web son procesos
 separados) — no es una cifra medida. Si se pierden unos segundos de audio en una rotación, el panel
@@ -349,6 +410,23 @@ mensaje claro en vez de fallar en silencio, y el mismo despliegue puede arrancar
 rotulado para pruebas (`docs/costos.md` para el camino de nivel pago / varios proyectos). Para un
 stream tipo vMix sin traducción propia, una fuente de navegador transparente por idioma
 (`?modo=obs&lang=xx`) alcanza, verificado sobre video real en OBS el 25/09
-(`reportes/obs-transparencia.md`). Una cifra de referencia, sólo sobre nuestra propia corrida: la
-latencia percibida de transcripción fue p50 ≈ 0,44 s en la corrida real (`qa/out/final/`,
-`04-latencia.log`) — sin afirmar nada sobre el equipo de nadie más.
+(`reportes/obs-transparencia.md`). Cifras de referencia, sólo sobre nuestras propias corridas: la
+latencia percibida de transcripción fue p50 ≈ 0,44 s en una corrida real de 2 sesiones
+(`qa/out/final/`, `04-latencia.log`), y el 25/09 la latencia del idioma original midió p50 ≈ 2,3–3,1 s
+según el tamaño de ventana, con una estimación (no medida) de 3,5–4,7 s de punta a punta incluyendo la
+traducción en nivel pago (`docs/evidencia.md`, sección 1c) — sin afirmar nada sobre el equipo de nadie
+más.
+
+---
+
+## Antes de enviar / Before submitting
+
+- [ ] Reemplazar `<YOUTUBE_URL>` (dos veces: `## Links` arriba y en Devpost) por el link real del
+  video subido a YouTube.
+- [ ] Probar ese link en una ventana privada/incógnito (sin sesión de Google logueada) y confirmar
+  que reproduce y tiene subtítulos en inglés disponibles (R14).
+- [ ] Confirmar que el repositorio de `## Links` es público y que la licencia (Apache 2.0, R15) se ve
+  en la página de GitHub, no sólo en el archivo `LICENSE`.
+- [ ] Confirmar que `README.md` enlaza `PROMPTS.md` y que ambos están en la raíz del repo público.
+- [ ] Recargar la página del proyecto en Devpost después de enviar y confirmar que figura como
+  "submitted" (R22, antes de las 12:00 AR / 15:00 UTC del 25/09).

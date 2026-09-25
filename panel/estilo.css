@@ -101,9 +101,13 @@ body {
   gap: var(--esp-2);
 }
 
-.cabecera__controles {
-  padding-top: var(--esp-2);
-  border-top: 1px solid var(--color-borde);
+/* Botones de la cabecera (ayuda flotante, engranaje de Configuración, selector ES/EN): agrupados
+   entre el switch de vista y los chips de estado, mismo patrón sobrio de borde fino que el resto. */
+.cabecera__botones {
+  display: flex;
+  align-items: center;
+  gap: var(--esp-2);
+  flex: none;
 }
 
 /* ---------------------------------------------------------------- barra de estado (sobria)
@@ -143,59 +147,20 @@ body {
   display: none;
 }
 
-/* ---------------------------------------------------------------- token y toggle */
-.token-caja {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--esp-1);
-  font-size: var(--tam-chico);
-  color: var(--color-texto-secundario);
-}
-.token-caja label { color: var(--color-texto-secundario); }
-.token-caja label code { color: var(--color-texto-secundario); }
-.token-caja input {
-  width: 130px;
-  background: var(--color-fondo);
-  color: var(--color-texto);
-  border: 1px solid var(--color-borde);
-  border-radius: var(--radio-chico);
-  padding: 2px 6px;
-  font-size: var(--tam-chico);
-  font-family: inherit;
-}
-.token-caja input:focus-visible { outline: 2px solid var(--color-link); outline-offset: 1px; }
-.token-caja button {
-  background: var(--color-superficie);
-  color: var(--color-texto);
-  border: 1px solid var(--color-borde);
-  border-radius: var(--radio-chico);
-  padding: 3px 9px;
-  font-size: var(--tam-diminuto);
-  cursor: pointer;
-  transition: background var(--dur-rapida) var(--easing-estandar);
-}
-.token-caja button:hover { background: var(--color-superficie-alta); }
-.token-caja button:focus-visible { outline: 2px solid var(--color-link); outline-offset: 1px; }
-
 .toggle-pruebas, .toggle-sonido {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
   font-size: var(--tam-chico);
   color: var(--color-texto-secundario);
   cursor: pointer;
   user-select: none;
+  margin: var(--esp-2) 0;
 }
 
-/* Sólo una "?" a la vez: la de jerga técnica en vista Técnica, la de lenguaje llano en Informativa
-   (mismo contenido semántico, texto distinto — nunca las dos abiertas compitiendo). */
-body[data-vista="informativa"] .ayuda-tecnica { display: none; }
-body[data-vista="tecnica"] .ayuda-informativa { display: none; }
-
-/* ---------------------------------------------------------------- ayuda ("?" desplegable)
-   El párrafo largo de explicación vive acá adentro, colapsado por defecto (nativo <details>, sin
-   JS): sistema.md §4 "párrafo de ayuda en un desplegable". */
-.ayuda { font-size: var(--tam-chico); color: var(--color-texto-secundario); }
+/* ---------------------------------------------------------------- botón "?" (dispara el popover)
+   Ya NO es un <details>: es un <button> que abre panel/app.js::crearFlotante() (popover FLOTANTE,
+   ver más abajo). El círculo con "?" es sólo el disparador; el contenido vive en `.popover`. */
 .ayuda__boton {
   display: inline-flex;
   align-items: center;
@@ -208,22 +173,242 @@ body[data-vista="tecnica"] .ayuda-informativa { display: none; }
   color: var(--color-texto-secundario);
   cursor: pointer;
   font-weight: 600;
-  list-style: none; /* algunos navegadores agregan un triángulo por defecto */
+  padding: 0;
 }
-.ayuda__boton::-webkit-details-marker { display: none; }
 .ayuda__boton:hover { color: var(--color-texto); border-color: var(--color-texto-secundario); }
 .ayuda__boton:focus-visible { outline: 2px solid var(--color-link); outline-offset: 2px; }
-.ayuda[open] .ayuda__boton { color: var(--color-texto); background: var(--color-superficie); }
-.ayuda__contenido {
-  margin-top: var(--esp-2);
-  padding: var(--esp-3);
-  max-width: 72ch;
+.ayuda__boton[aria-expanded="true"] { color: var(--color-texto); background: var(--color-superficie); }
+.ayuda__boton[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- botón de engranaje (Configuración) */
+.btn-icono {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--color-borde);
+  background: var(--color-superficie-alta);
+  color: var(--color-texto-secundario);
+  font: inherit;
+  font-size: var(--tam-chico);
+  cursor: pointer;
+}
+.btn-icono:hover { color: var(--color-texto); border-color: var(--color-texto-secundario); }
+.btn-icono:focus-visible { outline: 2px solid var(--color-link); outline-offset: 2px; }
+.btn-icono[aria-expanded="true"] { color: var(--color-texto); background: var(--color-superficie); }
+.icono-engranaje { width: 14px; height: 14px; flex: none; }
+
+/* ---------------------------------------------------------------- selector de idioma ES | EN */
+.btn-locale {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--color-borde);
+  background: transparent;
+  color: var(--color-texto-secundario);
+  font: inherit;
+  font-size: var(--tam-chico);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.btn-locale:hover { border-color: var(--color-texto-secundario); }
+.btn-locale:focus-visible { outline: 2px solid var(--color-link); outline-offset: 2px; }
+.btn-locale span[aria-hidden] { color: var(--color-texto-silenciado); }
+.btn-locale__opcion { color: var(--color-texto-silenciado); }
+.btn-locale__opcion--activa { color: var(--color-texto); }
+
+/* ---------------------------------------------------------------- popover flotante ("?")
+   Pedido de Ricardo: NUNCA en línea (empujaba el layout). position: fixed, anclado al botón por JS
+   (crearFlotante() calcula top/left contra getBoundingClientRect), sombra sobria, ancho máx. 420px,
+   z-index sobre todo el panel. En ≤480px ocupa el ancho con 16px de margen (ver media query abajo). */
+.popover {
+  position: fixed;
+  top: 0; left: 0; /* JS reposiciona antes de mostrarlo */
+  z-index: 1000;
+  width: max-content;
+  max-width: 420px;
   background: var(--color-superficie-alta);
   border: 1px solid var(--color-borde);
   border-radius: var(--radio-medio);
+  box-shadow: var(--sombra-flotante);
+  padding: var(--esp-3);
+  font-size: var(--tam-chico);
+  color: var(--color-texto-secundario);
   line-height: 1.5;
 }
-.ayuda__contenido code { color: var(--color-texto); font-family: var(--fuente-mono); }
+.popover[hidden] { display: none; }
+.popover__cabecera {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--esp-3);
+  margin-bottom: var(--esp-2);
+}
+.popover__cabecera h2 { margin: 0; font-size: var(--tam-cuerpo); font-weight: 600; color: var(--color-texto); }
+.popover__cerrar {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--color-borde);
+  background: transparent;
+  color: var(--color-texto-secundario);
+  font-size: var(--tam-cuerpo);
+  line-height: 1;
+  cursor: pointer;
+}
+.popover__cerrar:hover { color: var(--color-texto); border-color: var(--color-texto-secundario); }
+.popover__cerrar:focus-visible { outline: 2px solid var(--color-link); outline-offset: 2px; }
+.popover__contenido code { color: var(--color-texto); font-family: var(--fuente-mono); }
+.popover__contenido { max-width: 72ch; }
+
+/* Ayuda informativa: lista escaneable, no un párrafo corrido (pedido de Ricardo). Un color/ícono por
+   fila, MISMO significado que la franja de color de la tarjeta correspondiente (tokens.css, sin
+   paleta nueva); el color es sólo un clasificador, el texto de al lado es la fuente real. */
+.ayuda-lista {
+  list-style: none;
+  margin: 0 0 var(--esp-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ayuda-lista__fila { display: flex; align-items: flex-start; gap: var(--esp-2); }
+.ayuda-lista__icono {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  line-height: 1.5;
+  font-size: 14px;
+}
+.ayuda-lista__icono--mudo { color: var(--color-error); }
+.ayuda-lista__icono--rotacion { color: var(--color-atencion); }
+.ayuda-lista__icono--traduccion { color: var(--color-aviso); }
+.ayuda-lista__icono--reconectando { color: var(--color-texto-secundario); }
+.ayuda-lista__icono--sana { color: var(--color-exito); }
+.ayuda-lista__icono--terminada { color: var(--color-texto-silenciado); }
+.ayuda-lista__texto { color: var(--color-texto-secundario); }
+.ayuda-lista__texto b { color: var(--color-texto); }
+.ayuda-lista__bullets {
+  list-style: disc;
+  margin: 0 0 var(--esp-2);
+  padding-left: 1.2em;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-texto-secundario);
+}
+.ayuda-lista__pie {
+  margin: var(--esp-2) 0 0;
+  padding-top: var(--esp-2);
+  border-top: 1px solid var(--color-borde);
+  color: var(--color-texto-silenciado);
+  font-size: var(--tam-diminuto);
+}
+
+/* ---------------------------------------------------------------- drawer de Configuración
+   Lateral (no modal): overlay semitransparente para detectar "clic afuera" y para separar
+   visualmente del resto (sobrio, sin blur/glow); a ≤480px ocupa toda la pantalla. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999;
+}
+.overlay[hidden] { display: none; }
+.drawer {
+  position: fixed;
+  top: 0; right: 0; bottom: 0;
+  left: auto;
+  width: min(360px, 100vw);
+  max-width: none;
+  background: var(--color-superficie);
+  border-left: 1px solid var(--color-borde);
+  box-shadow: var(--sombra-flotante);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: var(--esp-4);
+}
+.drawer[hidden] { display: none; }
+.drawer__cabecera {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--esp-3);
+  margin-bottom: var(--esp-3);
+  padding-bottom: var(--esp-2);
+  border-bottom: 1px solid var(--color-borde);
+}
+.drawer__cabecera h2 { margin: 0; font-size: var(--tam-titulo); font-weight: 600; color: var(--color-texto); }
+.drawer__contenido { display: flex; flex-direction: column; gap: var(--esp-5); }
+.drawer__seccion h3 {
+  margin: 0 0 var(--esp-2);
+  font-size: var(--tam-diminuto);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-texto-secundario);
+  font-weight: 600;
+}
+.drawer__campo {
+  display: block;
+  font-size: var(--tam-chico);
+  color: var(--color-texto-secundario);
+  margin-bottom: 4px;
+}
+.drawer__seccion input[type="password"] {
+  width: 100%;
+  background: var(--color-fondo);
+  color: var(--color-texto);
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-chico);
+  padding: 6px 8px;
+  font-size: var(--tam-chico);
+  font-family: inherit;
+}
+.drawer__seccion input[type="password"]:focus-visible { outline: 2px solid var(--color-link); outline-offset: 1px; }
+.drawer__botones { display: flex; gap: var(--esp-2); margin-top: var(--esp-2); }
+.drawer__botones button, .drawer__seccion > button {
+  background: var(--color-superficie-alta);
+  color: var(--color-texto);
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-chico);
+  padding: 5px 12px;
+  font-size: var(--tam-chico);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--dur-rapida) var(--easing-estandar);
+}
+.drawer__botones button:hover, .drawer__seccion > button:hover { background: var(--color-fondo); }
+.drawer__botones button:focus-visible, .drawer__seccion > button:focus-visible { outline: 2px solid var(--color-link); outline-offset: 1px; }
+.drawer__estado { font-size: var(--tam-chico); color: var(--color-texto-secundario); margin: var(--esp-2) 0 0; }
+.drawer__estado--ok { color: var(--color-exito); }
+.drawer__estado--mal { color: var(--color-error); }
+.drawer__volumen {
+  display: flex;
+  align-items: center;
+  gap: var(--esp-2);
+  font-size: var(--tam-chico);
+  color: var(--color-texto-secundario);
+  margin: var(--esp-2) 0;
+}
+.drawer__volumen input[type="range"] {
+  flex: 1 1 auto;
+  accent-color: var(--color-acento);
+}
+.drawer__volumen-valor { flex: none; min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 480px) {
+  .popover { left: 16px !important; right: 16px; width: auto; max-width: none; }
+  .drawer { width: 100vw; }
+}
 
 /* ---------------------------------------------------------------- aviso de conectividad */
 .aviso {
@@ -490,5 +675,5 @@ body[data-vista="informativa"] .pie { display: none; }
   .vista-informativa { overflow: visible; padding: var(--esp-3) var(--esp-3); }
   .cabecera { max-width: 100%; box-sizing: border-box; }
   .cabecera__subtitulo { display: none; }
-  .cabecera__estado, .cabecera__controles { flex-wrap: wrap; }
+  .cabecera__estado, .cabecera__botones { flex-wrap: wrap; }
 }
