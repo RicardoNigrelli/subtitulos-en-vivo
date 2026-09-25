@@ -73,7 +73,7 @@ from typing import AsyncIterator, Awaitable, Callable, Optional
 
 from worker.casete import Grabador, kind_server
 from worker.contrato import SIN_SEQ, mensaje
-from worker.dedup import contenido_repetido, dedup_costura
+from worker.dedup import contenido_repetido, dedup_costura, tiradas_repetidas
 from worker.emisor import Emisor
 from worker.ingesta import CHUNK_S, Chunk, EventoFuente
 from worker.mapeo import InfoVentana, Mapeador, segundos as _segundos_mapeo
@@ -103,11 +103,13 @@ class ConfigReabrir:
     intentos_conectar: int = 3
     tick_s: float = 0.5
     envio_timeout_s: float = 5.0      # B7: un envio trabado mas que esto = conexion muerta
+    arranque_s: float = 0.0           # compuerta: reabrir si tras N s de audio NINGUN final (0 = apagado)
 
     @classmethod
     def desde_env(cls) -> "ConfigReabrir":
         return cls(atasco_umbral_s=_env_f("ATASCO_UMBRAL_S", 22.0),
                    atasco_sostenido_s=_env_f("ATASCO_SOSTENIDO_S", 8.0),
+                   arranque_s=_env_f("ATASCO_ARRANQUE_S", 0.0),
                    mudo_s=_env_f("MUDO_S", 10.0),
                    preventiva_s=_env_f("ROTACION_PREVENTIVA_S", 240.0),
                    drenaje_vieja_s=_env_f("DRENAJE_VIEJA_S", 20.0),
@@ -399,6 +401,14 @@ class SessionWorker:
         if con.acc_s >= self.cfg.preventiva_s:
             self.pedir_reapertura("preventiva")
             return
+        # ATASCO_ARRANQUE_S (apagado por defecto): conexion que todavia no dio NINGUN final despues de N s
+        # de audio propio (sin contar el reenvio en rafaga) con voz pendiente. Caso gate-es: el server no
+        # cerro el primer turno (su ACTIVITY_END llego a +39,7 s) aunque le mandamos activity_end a +3 s.
+        if self.cfg.arranque_s > 0 and con.finales == 0 and con.voz_sin_texto_desde is not None:
+            arr = min(120.0, self.cfg.arranque_s * (2 ** self._atascos_seguidos))
+            if con.acc_s - con.gracia_s >= arr:
+                self.pedir_reapertura("atasco", detalle="arranque", sin_final_s=round(con.acc_s - con.gracia_s, 2))
+                return
         at = con.atraso_s
         con.max_atraso = max(con.max_atraso, at)
         # backoff: si la conexion anterior se reabrio por atasco y esta todavia no dio un final,
@@ -725,13 +735,18 @@ class SessionWorker:
             if self.dedup and self._recientes and self._en_costura(a, con):
                 rec = list(self._recientes)
                 tipo, pedazos = contenido_repetido(a.text, [r[0] for r in rec])
+                if tipo is None:
+                    # compuerta (gate-es): tirada comun de >= 6 palabras EN EL MEDIO de dos textos distintos
+                    tir = tiradas_repetidas(a.text, [r[0] for r in rec])
+                    if tir is not None:
+                        tipo, pedazos = ("tirada", tir) if tir else ("contenido", [])
                 if tipo == "contenido":
                     self.res.dedup_descartados += 1
                     if self.rec:
                         self.rec.client("dedup_descartado", {"conexion": extra["conexion"], "text": a.text,
                                                              "ventanas": a.ventanas, "motivo": "contenido"})
                     continue
-                if tipo == "contiene":
+                if tipo in ("contiene", "tirada"):
                     # se quitan los tramos que repiten textos ya emitidos; lo que queda (audio que la otra
                     # conexion no transcribio) sale ubicado entre los tramos repetidos
                     partes = []
@@ -750,7 +765,7 @@ class SessionWorker:
                             t2, _q = dedup_costura(max(vecino, key=lambda r: r[2])[0], t)
                             if _q and t2.strip():
                                 partes[0] = (t2, a0, a1, s0)
-                    extra = {**extra, "costura": {"original": a.text, "pedazos": len(partes)}}
+                    extra = {**extra, "costura": {"original": a.text, "pedazos": len(partes), "tipo": tipo}}
                     if not partes:
                         self.res.dedup_descartados += 1
                         continue

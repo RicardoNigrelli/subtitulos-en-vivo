@@ -168,11 +168,28 @@ Escrito por el orquestador al cierre, para responder a X2 sin maquillaje.
   contrato. **Quedaron pendientes** los topes de clientes por IP y de sesiones por productor en el hub: `backend` los
   estaba escribiendo cuando el segundo límite de uso (23:05) lo cortó; sus cambios a medias colgaban los tests y el
   orquestador los revirtió. Está documentado como limitación conocida en el README.
-- **Tests:** la suite del worker pasa (76). Del hub pasan 39 en cuatro archivos; `hub/tests/test_fanout.py` (200 y
-  500 clientes) colgó en este entorno esa noche y no se investigó a fondo; el fan-out fue re-ejecutado por el
-  adversario en los bloques 1 y 2.
-- **Video final:** guion "beneficio primero" derivado de los guiones reales de videos de Wordly, Interprefy, KUDO,
+- **Tests (estado al 25/09 02:00):** worker 83 y hub 41 en verde. El test de fan-out que "colgaba" tenía dos causas
+  propias del test, encontradas en la madrugada: una cola de 10 mensajes que atrapaba también al cliente vivo, y
+  mensajes de 62 KB que el contrato (ahora con `maxLength: 4000`) rechaza correctamente.
+- **Video final (PENDIENTE al 25/09 02:00; Ricardo no autoriza grabar hasta un funcionamiento total verificado):**
+  guion "beneficio primero" derivado de los guiones reales de videos de Wordly, Interprefy, KUDO,
   Google, Microsoft, Zoom, Samsung y Apple (`reportes/video-referencias.md`, transcripciones bajadas con yt-dlp);
   narración en español con Cartesia (voz Iria, velocidad rápida); subtítulos en inglés generados pasando la narración
   por el propio `worker.run` y `docs/export/exportar.py` (R14); composición con `docs/video/componer.py`; tomas de la
   interfaz grabadas con OBS controlado por WebSocket. Ricardo sube a YouTube y envía en Devpost.
+
+
+## Madrugada del 25/09: verificación total antes de grabar
+
+Ricardo (00:10): "no tenés autorizado grabar hasta que me reportes un funcionamiento total". Se hicieron dos
+verificaciones completas con `qa` (11 y 12 ítems, `reportes/verificacion-final.md` y `-final2.md`) y una compuerta
+con el adversario (`reportes/compuerta-entrega.md`). Lo que salió rojo y se arregló, siempre reproduciéndolo primero
+con el casete real de la corrida: texto duplicado tras una rotación por atasco (dedup por contenido en la costura),
+un test de fan-out mal diseñado, el modo proyección que se persistía y se ponía en negro con parciales largos, un
+casete viejo que rompía el validador, el entrypoint de Docker que reproducía fixtures de test, la tabla de R19 del
+README con dos p50 rotulados como p50/p95. Lo que se midió y NO se arregló porque no es nuestro: en algunas sesiones
+el primer texto final del server tarda 21–37 s; el watchdog reabre la sesión y el README lo documenta. Un cambio de
+umbral (10/4) se probó en replay, salió peor y se revirtió a 22/8, que es el valor de la corrida real de 2 × 11 min.
+Se sumaron, por el hilo de Discord del staff de Nerdearla: modo sala (correr sin límite, parar limpio, reabrir la
+fuente si se cae el cable), la tabla "Qué pasa si…" y la verificación de `?modo=obs` transparente sobre video en OBS.
+El orquestador se equivocó una vez en voz alta (atribuyó el fan-out al `maxLength`) y lo sondeó antes de afirmarlo.

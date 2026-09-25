@@ -100,11 +100,11 @@ ventanas o S segundos desde el primer bloque pendiente, lo que ocurra primero). 
 con el tamaño del lote, la hora del día y la latencia del modelo de texto en ese momento — por eso
 se muestra el RANGO de tres corridas reales, no una sola cifra:
 
-| Corrida | Lote | Cobertura traducida | Atraso p50 / p95 | Comando |
+| Corrida | Lote | Cobertura traducida | Atraso (p50 / p95 por dirección) | Comando |
 |---|---|---|---|---|
-| 2 × 60 s | 2 ventanas / 5 s | 32/41 = 78 % | 12,3 s / 20,5 s | `worker.medir_traduccion fixtures/casetes/b4-trad-vivo-en.jsonl fixtures/casetes/b4-trad-vivo-es.jsonl` (arriba) |
-| 2 × ~11 min, sin cortacircuito | 2 ventanas / 5 s | EN→ES 181/253 = 71,5 %; ES→EN 191/247 = 77,3 % | 9,6 s / 8,8 s | `worker.medir_traduccion` sobre el casete de la corrida larga (ver "Reproducir los números de R21") |
-| 2 × 60 s, lotes más chicos | 2 ventanas / 4 s | EN→ES 26/26 = 100 %; ES→EN 22/22 = 100 % | 2,64 s / 2,68 s | `.venv/Scripts/python -m worker.medir_traduccion fixtures/casetes/b8-trad-vivo-en.jsonl fixtures/casetes/b8-trad-vivo-es.jsonl` |
+| 2 × 60 s | 2 ventanas / 5 s | 32/41 = 78 % | ambas direcciones juntas: 12,3 s / 20,5 s | `worker.medir_traduccion fixtures/casetes/b4-trad-vivo-en.jsonl fixtures/casetes/b4-trad-vivo-es.jsonl` (arriba) |
+| 2 × ~11 min, sin cortacircuito | 2 ventanas / 5 s | EN→ES 181/253 = 71,5 %; ES→EN 191/247 = 77,3 % | EN→ES 9,6 s / 21,8 s; ES→EN 8,8 s / 20,6 s | `worker.medir_traduccion` sobre el casete de la corrida larga (ver "Reproducir los números de R21") |
+| 2 × 60 s, lotes más chicos | 2 ventanas / 4 s | EN→ES 26/26 = 100 %; ES→EN 22/22 = 100 % | EN→ES 2,64 s / 6,35 s; ES→EN 2,68 s / 7,12 s | `.venv/Scripts/python -m worker.medir_traduccion fixtures/casetes/b8-trad-vivo-en.jsonl fixtures/casetes/b8-trad-vivo-es.jsonl` |
 
 La tercera corrida también coincidió con una latencia mucho mejor del modelo de texto en sí (no sólo
 del lote más chico): no se puede atribuir la mejora completa a `TRADUCTOR_LOTE_S=4` con una sola

@@ -138,7 +138,10 @@ async def correr(a) -> int:
 
         def fabrica(corte_s: float):
             return TransporteGemini(a.modelo, a.lang, vocab, nombre_key=a.key, auto_vad=a.vad_auto)
-    casete = a.casete or f"fixtures/casetes/{a.sesion}-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
+    # sin --casete: el camino real graba en fixtures/casetes/ (casete de evidencia); el transporte de
+    # casete (test) graba en reportes/, nunca en fixtures/
+    casete = a.casete or (f"reportes/casete-test-{a.sesion}-{time.strftime('%Y%m%d-%H%M%S')}.jsonl" if es_casete
+                          else f"fixtures/casetes/{a.sesion}-{time.strftime('%Y%m%d-%H%M%S')}.jsonl")
     source = {"file": a.archivo, "url": a.url, "start_s": a.inicio, "dur_s": a.duracion,
               "kind": a.fuente, "device": a.dispositivo,
               "agenda": {"file": a.agenda, "charla": a.charla or a.sesion} if a.agenda else None}

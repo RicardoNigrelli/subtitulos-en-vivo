@@ -293,6 +293,7 @@ raíz lo cargan `worker/gemini.py` (al pedir la key), `worker/emisor.py` y `work
 | `TRADUCTOR_CORTE_S` / `TRADUCTOR_CORTE_MAX_S` | `60` / `480` | duración del primer corte y tope de la duplicación |
 | `ATASCO_UMBRAL_S` / `ATASCO_SOSTENIDO_S` | `22` / `8` | reapertura por atraso del server (10 / 4 se probó el 25/09 y se descartó: `reportes/audio-pipeline-umbral.log`) |
 | `MUDO_S` | `10` | reapertura por ventanas con voz sin ningún texto (watchdog) |
+| `ATASCO_ARRANQUE_S` | `0` (apagado) | reabre la conexión que todavía no dio NINGÚN final después de N s de audio propio con voz pendiente (probado sólo en replay; ver `reportes/audio-pipeline-gate.md`) |
 | `ROTACION_PREVENTIVA_S` | `240` | reapertura preventiva por audio enviado a una conexión |
 | `DRENAJE_VIEJA_S` | `20` | cuánto drena la conexión vieja tras reabrir |
 | `REENVIO_MAX_S` | `15` | tope de audio que se reenvía a la conexión nueva |
