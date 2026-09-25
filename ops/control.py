@@ -322,7 +322,7 @@ class SalaProceso:
                 f.flush()
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
                 try:
-                    proc = subprocess.Popen(cmd, cwd=str(RAIZ), stdout=subprocess.PIPE,
+                    proc = subprocess.Popen(cmd, cwd=str(RAIZ), env={**os.environ, "CUOTA_GUARDA": "0"}, stdout=subprocess.PIPE,
                                              stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                              errors="replace", bufsize=1,
                                              creationflags=creationflags)

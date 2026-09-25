@@ -200,7 +200,10 @@ async def correr(a) -> int:
     # sala: mic/url sin --duracion corre sin limite; la cuota del bloque (guarda de desarrollo) no la
     # corta ni le impide arrancar: los segundos se registran igual al terminar
     sin_limite = a.fuente in ("mic", "url") and not a.duracion
-    restante = float("inf") if (es_casete or sin_limite) else cuota.restante_s()
+    # CUOTA_GUARDA=0: sin la guarda de presupuesto de DESARROLLO (la usa ops/control.py: una sala creada
+    # por el staff desde el panel no puede negarse a arrancar por el tope de 30 min de la vibeathon)
+    guarda = os.environ.get("CUOTA_GUARDA", "1").strip() != "0"
+    restante = float("inf") if (es_casete or sin_limite or not guarda) else cuota.restante_s()
     if sin_limite and not es_casete:
         print(f"[run] sala sin limite ({a.fuente}): gastado del bloque {cuota.gastado_s():.1f} s de "
               f"{cuota.PRESUPUESTO_S:.0f} s; no corta. Parar: Ctrl+C", file=sys.stderr)

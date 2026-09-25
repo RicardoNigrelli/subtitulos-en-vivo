@@ -467,12 +467,14 @@
     elAviso.textContent = msg;
   }
 
+  var hubRespondio = false; // true tras la primera respuesta OK de /api/sesiones (aunque venga vacía)
   function pollSesiones() {
     fetch(HTTP_BASE + '/api/sesiones').then(function (r) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).then(function (lista) {
       ultimoErrorSesiones = null;
+      hubRespondio = true;
       elChipHub.textContent = t('chip_hub_ok', { n: num(lista.length) });
       elChipHub.className = 'chip chip--ok';
       marcarAviso(null);
@@ -741,6 +743,7 @@
     if (elResumenSanas) elResumenSanas.textContent = num(sanasN);
     if (elResumenHora) elResumenHora.textContent = ultimoDatoMs != null ? fmtHoraMs(ultimoDatoMs) : '—';
     if (elTarjetasVacio) elTarjetasVacio.hidden = items.length > 0;
+    if (elTarjetasVacio && !items.length) elTarjetasVacio.textContent = t(hubRespondio ? 'tarjetas_sin_salas' : 'tarjetas_vacio');
 
     elTarjetas.innerHTML = items.map(function (it) { return tarjetaHtml(it.s, it.estado); }).join('');
   }
@@ -902,6 +905,7 @@
   if (elBtnTokenGuardar) elBtnTokenGuardar.addEventListener('click', function () {
     guardarToken(elInputToken ? elInputToken.value.trim() : '');
     pollSesiones(); // aplica ya, sin esperar los 2 s del intervalo
+    if (typeof actualizarSalas === 'function') { actualizarSalas(); actualizarFuentes(); }
   });
   if (elInputToken) elInputToken.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && elBtnTokenGuardar) elBtnTokenGuardar.click();
@@ -1242,12 +1246,27 @@
     if (estado === 'error') return 'error';
     return 'silenciado'; // detenida
   }
+  // Motivo legible de un error de sala: la última línea útil del log del worker (no "exit 4").
+  function motivoErrorSala(sala) {
+    var lineas = (sala.log_tail || []).filter(function (l) {
+      l = (l || '').trim();
+      return l && l.indexOf('---') !== 0 && l.charAt(0) !== '$';
+    });
+    var ult = lineas.length ? lineas[lineas.length - 1].trim() : '';
+    if (/SIN PRESUPUESTO/.test(ult)) return t('salas_motivo_presupuesto');
+    if (/GEMINI_API_KEY[A-Z_]* no esta definida|no está definida/.test(ult)) return t('salas_motivo_key');
+    if (/1011|quota|RESOURCE_EXHAUSTED/i.test(ult)) return t('salas_motivo_servicio');
+    if (/could not find|Could not|I\/O error|dshow/i.test(ult)) return t('salas_motivo_fuente');
+    ult = ult.replace(/^\[[a-z_-]+\]\s*/i, '');
+    if (!ult) return sala.ultimo_error || '—';
+    return ult.length > 180 ? ult.slice(0, 177) + '…' : ult;
+  }
   function textoEstadoSala(sala) {
     if (sala.estado === 'corriendo') return t('salas_estado_corriendo');
     if (sala.estado === 'arrancando') return t('salas_estado_arrancando');
     if (sala.estado === 'reiniciando') return t('salas_estado_reiniciando');
     if (sala.estado === 'deteniendo') return t('salas_estado_deteniendo');
-    if (sala.estado === 'error') return t('salas_estado_error', { detalle: sala.ultimo_error || '—' });
+    if (sala.estado === 'error') return t('salas_estado_error_corto');
     return t('salas_estado_detenida');
   }
   function fuenteLegible(fuente) {
@@ -1342,6 +1361,9 @@
     el.hidden = false;
   }
   function accionSala(id, accion) {
+    // Respuesta inmediata en la fila: detener puede tardar hasta 10 s (el servicio espera la parada limpia).
+    var sala = salasEstado.porId && salasEstado.porId[id];
+    if (sala) { sala.estado = accion === 'detener' ? 'deteniendo' : 'arrancando'; renderSalas(); }
     fetchControl('/api/control/salas/' + encodeURIComponent(id) + '/' + accion, 'POST').then(function (r) {
       if (!r.ok) return r.json().catch(function () { return {}; }).then(function (d) {
         throw new Error(d.error || ('HTTP ' + r.status));
@@ -1385,13 +1407,15 @@
         '</p>';
     }
     return (
-      '<article class="sala-fila sala-fila--' + claseEstado + '">' +
+      '<article class="sala-fila sala-fila--' + claseEstado + (sala.id === salaRecienCreada ? ' sala-fila--nueva' : '') + '" data-sala-id="' + esc(sala.id) + '">' +
         '<div class="sala-fila__cabecera">' +
           '<b>' + esc(sala.titulo || sala.id) + '</b>' +
           '<span class="sala-fila__estado sala-fila__estado--' + claseEstado + '">' +
             '<span aria-hidden="true">●</span> ' + esc(textoEstadoSala(sala)) + '</span>' +
         '</div>' +
         '<p class="sala-fila__idioma">' + esc(idiomaSalaTexto(sala)) + '</p>' +
+        (sala.estado === 'error' ? '<p class="sala-fila__motivo" role="status">' + esc(motivoErrorSala(sala)) +
+          (sala.ultimo_error ? ' <span class="sala-fila__codigo">(' + esc(sala.ultimo_error) + ')</span>' : '') + '</p>' : '') +
         fuenteHtml +
         '<p class="sala-fila__meta">' + esc(t('salas_intentos', { n: num(sala.intentos || 0) })) +
           (sala.pid ? ' · ' + esc(t('salas_pid', { pid: sala.pid })) : '') + '</p>' +
@@ -1425,6 +1449,7 @@
       return;
     }
     if (elFormNuevaSala) elFormNuevaSala.hidden = !!salasEstado.requiereToken;
+    if (elBtnNuevaSala) elBtnNuevaSala.hidden = !!salasEstado.requiereToken;
     var elTokenInline = document.getElementById('salas-token-inline');
     if (elTokenInline) elTokenInline.hidden = !salasEstado.requiereToken;
     if (salasEstado.requiereToken) {
@@ -1437,6 +1462,9 @@
     }
     if (elAvisoServicio) elAvisoServicio.hidden = true;
     var salas = salasEstado.salas;
+    if (!salasEstado.fuentes || !salasEstado.fuentes.idiomas) actualizarFuentes();
+    if (!formPlegadoInicial) { formPlegadoInicial = true; if (salas.length) plegarNuevaSala(false); }
+    if (elBtnNuevaSala) elBtnNuevaSala.hidden = false;
     if (elSalasVacio) elSalasVacio.hidden = salas.length !== 0;
     // Sólo se redibuja si algo cambió: redibujar cada 3 s reemplazaba los botones y un clic en
     // "Detener" justo en ese instante se perdía (visto en la prueba de punta a punta del 25/09).
@@ -1465,6 +1493,7 @@
       if (inp) inp.value = '';
       pollSesiones();
       actualizarSalas();
+      actualizarFuentes();
     }
     if (btn) btn.addEventListener('click', guardarDesdeSalas);
     if (inp) inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') guardarDesdeSalas(); });
@@ -1613,6 +1642,20 @@
     if (el) { el.textContent = msg; el.hidden = false; }
   }
 
+  var salaRecienCreada = null;
+  var elBtnNuevaSala = document.getElementById('salas-btn-nueva');
+  var elNuevaCuerpo = document.getElementById('salas-nueva-cuerpo');
+  function plegarNuevaSala(abierto) {
+    if (!elNuevaCuerpo || !elBtnNuevaSala) return;
+    elNuevaCuerpo.hidden = !abierto;
+    elBtnNuevaSala.setAttribute('aria-expanded', abierto ? 'true' : 'false');
+    if (abierto) { var p = document.getElementById('salas-input-titulo'); if (p) p.focus(); }
+  }
+  if (elBtnNuevaSala) elBtnNuevaSala.addEventListener('click', function () {
+    plegarNuevaSala(elNuevaCuerpo ? elNuevaCuerpo.hidden : true);
+  });
+  var formPlegadoInicial = false;
+
   if (elFormNuevaSala) elFormNuevaSala.addEventListener('submit', function (e) {
     e.preventDefault();
     limpiarErroresForm();
@@ -1648,7 +1691,17 @@
           if (elCheckArrancar) elCheckArrancar.checked = true;
           actualizarPanelFuente();
           poblarIdiomas();
-          return actualizarSalas();
+          salaRecienCreada = id;
+          plegarNuevaSala(false);
+          return Promise.resolve(actualizarSalas()).then(function () {
+            var fila = elListaSalas && elListaSalas.querySelector('[data-sala-id="' + cssEscape(id) + '"]');
+            if (fila && fila.scrollIntoView) fila.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            setTimeout(function () {
+              salaRecienCreada = null;
+              var f = elListaSalas && elListaSalas.querySelector('[data-sala-id="' + cssEscape(id) + '"]');
+              if (f) f.classList.remove('sala-fila--nueva');
+            }, 4000);
+          });
         }
         if (r.status === 409 && /id/.test(String(data.error || ''))) {
           var nuevo = id, i = 1;

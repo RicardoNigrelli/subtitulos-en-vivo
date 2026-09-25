@@ -134,7 +134,10 @@
       </section>
 
       <section class="drawer__seccion">
-        <h3 data-i18n="salas_seccion_nueva"></h3>
+        <button type="button" id="salas-btn-nueva" class="salas-btn-nueva" aria-expanded="true" aria-controls="salas-nueva-cuerpo">
+          <span aria-hidden="true">+</span> <span data-i18n="salas_seccion_nueva"></span>
+        </button>
+        <div id="salas-nueva-cuerpo">
         <form id="form-nueva-sala" class="form-salas" novalidate>
           <label class="drawer__campo" for="salas-input-titulo" data-i18n="salas_campo_titulo"></label>
           <input type="text" id="salas-input-titulo" autocomplete="off" required>
@@ -186,6 +189,7 @@
             <button type="submit" id="salas-btn-crear" data-i18n="salas_crear"></button>
           </div>
         </form>
+        </div>
       </section>
     </div>
   </div>

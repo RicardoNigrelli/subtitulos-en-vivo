@@ -805,3 +805,13 @@ body[data-vista="informativa"] .pie { display: none; }
 .salas-token-inline { display: flex; gap: var(--esp-2); margin-top: var(--esp-2); }
 .salas-token-inline[hidden] { display: none; }
 .salas-token-inline input { flex: 1 1 auto; min-width: 0; }
+
+.sala-fila__motivo { margin: var(--esp-1) 0; color: var(--color-error); font-size: var(--tam-chico, 0.875rem); line-height: 1.4; }
+.sala-fila__codigo { color: var(--color-texto-silenciado); }
+
+/* "+ Nueva sala": el formulario se pliega después de crear (Ricardo 25/09) */
+.salas-btn-nueva { display: inline-flex; align-items: center; gap: var(--esp-1); min-height: 44px; font-weight: 600; }
+.salas-btn-nueva[hidden] { display: none; }
+#salas-nueva-cuerpo[hidden] { display: none; }
+.sala-fila--nueva { outline: 2px solid var(--color-exito); outline-offset: 2px; transition: outline-color 1s; }
+@media (prefers-reduced-motion: reduce) { .sala-fila--nueva { transition: none; } }
