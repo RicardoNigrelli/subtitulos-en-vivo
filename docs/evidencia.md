@@ -113,6 +113,10 @@ una key y una con la key de otro proyecto, dieron 2 a 4 textos cada una y errore
 a tiempo (`fixtures/casetes/evidencia-25-09/prueba-*.jsonl`). En
 producción, con nivel pago, las sesiones corren con prioridad crítica.
 
+A las 09:47 AR, la misma sala de 60 s en nivel gratuito volvió a dar 21 textos, primer texto a +6,9 s y sin
+reaperturas (`fixtures/casetes/evidencia-25-09/recheck-0950-20260925-094715.jsonl`): la degradación fue una
+ventana de unos 50 minutos, de las 08:58 a las 09:47 como máximo.
+
 Cómo se opera para que pase lo menos posible (README, "Qué pasa si…" y "Cómo escalar"): arrancar las salas
 escalonadas 20–30 s, una key o proyecto por sala (`--key`), y dejar activo el watchdog, que ya lo está.
 
