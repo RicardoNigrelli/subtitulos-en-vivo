@@ -59,3 +59,60 @@ def dedup_costura(previo: str | None, nuevo: str, min_chars: int = MIN_CHARS) ->
     corte = idx[k - 1] + 1
     resto = nuevo[corte:].lstrip(_PUNTA)
     return resto, k
+
+
+# ---- ROJO 4 (verificacion final): dedup por CONTENIDO en la costura de una rotacion --------------
+# El sufijo/prefijo de arriba no alcanza cuando la conexion VIEJA, drenando, emite un texto FUSIONADO
+# que tiene ADENTRO (no en la punta) lo que la NUEVA ya emitio (casete vf-smoke-final-en: la vieja
+# emitio "as an abstraction ... until the" + [el texto entero de la nueva] + "All it requires two or
+# three more"). Se compara el contenido COMPACTO (minusculas, sin puntuacion ni espacios).
+MIN_CONTENIDO = 10     # caracteres compactos: una frase corta legitima repetida ("thank you") no cuenta
+
+
+def _compacto_con_indices(s: str) -> tuple[str, list[int]]:
+    out: list[str] = []
+    idx: list[int] = []
+    for i, ch in enumerate(s or ""):
+        c = unicodedata.normalize("NFC", ch).casefold()
+        if c.isalnum():
+            out.append(c)
+            idx.append(i)
+    return "".join(out), idx
+
+
+def compacto(s: str) -> str:
+    return _compacto_con_indices(s)[0]
+
+
+def contenido_repetido(nuevo: str, recientes: list[str], min_chars: int = MIN_CONTENIDO):
+    """("contenido", []) si el nuevo entero ya esta dentro de algun reciente (duplicado: no se emite);
+    ("contiene", pedazos) si el nuevo contiene ENTERO a uno o mas recientes: `pedazos` = lo que queda
+    del nuevo fuera de esos tramos, como [(texto, i_reciente_anterior | None, i_reciente_siguiente | None)]
+    (los i sirven para ubicar el pedazo en el audio); (None, []) si no hay repeticion."""
+    n, idx = _compacto_con_indices(nuevo)
+    if len(n) < min_chars:
+        return None, []
+    comp = [compacto(r) for r in recientes]
+    if any(n in rc for rc in comp):
+        return "contenido", []
+    tramos = []
+    for i, rc in enumerate(comp):
+        if len(rc) >= min_chars:
+            k = n.find(rc)
+            if k >= 0:
+                tramos.append((idx[k], idx[k + len(rc) - 1] + 1, i))
+    if not tramos:
+        return None, []
+    tramos.sort()
+    pedazos, cursor, previo = [], 0, None
+    for ini, fin, i in tramos:
+        if ini > cursor:
+            t = nuevo[cursor:ini].strip(_PUNTA)
+            if compacto(t):
+                pedazos.append((t, previo, i))
+        if fin > cursor:
+            cursor, previo = fin, i
+    t = nuevo[cursor:].strip(_PUNTA)
+    if compacto(t):
+        pedazos.append((t, previo, None))
+    return "contiene", pedazos

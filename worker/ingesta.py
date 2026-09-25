@@ -166,3 +166,132 @@ def leer_pcm(entrada: str, inicio: float = 0.0, duracion: float | None = None) -
 async def desde_lista(chunks: Iterable[Chunk]) -> AsyncIterator[Chunk]:
     for c in chunks:
         yield c
+
+
+# ---- operacion en sala: fuente mic/url que se REABRE sola ----------------------------------------
+# Si ffmpeg muere o deja de entregar bytes durante FUENTE_TIMEOUT_S (cable desenchufado, stream
+# caido), se reabre con backoff 1, 2, 4... hasta 30 s. Los chunks siguen numerados (idx y audio_*
+# continuos: la sesion publica no cambia). Entre medio se entrega un EventoFuente (no es un Chunk)
+# para que el SessionWorker avise al hub (`error` code "fuente") y cierre la ventana abierta.
+import os
+import sys
+
+FUENTE_TIMEOUT_S = float(os.environ.get("FUENTE_TIMEOUT_S", 10))
+FUENTE_BACKOFF_MAX_S = float(os.environ.get("FUENTE_BACKOFF_MAX_S", 30))
+
+
+@dataclass
+class EventoFuente:
+    tipo: str        # "caida" | "reabierta"
+    detalle: dict
+
+
+def _aislado() -> dict:
+    """ffmpeg en su propio grupo de procesos: el Ctrl+C / Ctrl+Break de la consola le llega SOLO al
+    worker, que lo cierra en orden (si le llegara a ffmpeg, la parada se veria como una caida)."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+class FuenteReabrible:
+    """Chunks de 100 ms desde ffmpeg (mic/url) sin fin propio: termina solo con parar() o, si se pasa
+    max_s, al llegar a esos segundos de audio."""
+
+    def __init__(self, entrada: str, formato_entrada: str | None = None,
+                 opciones_entrada: list[str] | None = None, inicio: float = 0.0,
+                 max_s: float | None = None, timeout_s: float | None = None,
+                 backoff_max_s: float | None = None, tiempo_real: bool = True, log=None):
+        self.entrada, self.formato, self.opciones = entrada, formato_entrada, list(opciones_entrada or [])
+        self.inicio, self.max_s = inicio, (max_s or None)
+        self.timeout_s = FUENTE_TIMEOUT_S if timeout_s is None else timeout_s
+        self.backoff_max_s = FUENTE_BACKOFF_MAX_S if backoff_max_s is None else backoff_max_s
+        self.tiempo_real = tiempo_real
+        self.log = log or (lambda s: print(s, file=sys.stderr, flush=True))
+        self._parada = asyncio.Event()
+        self.caidas = 0
+        self.aperturas = 0
+        self._it = self._gen()
+
+    def parar(self) -> None:
+        self._parada.set()
+
+    def __aiter__(self):
+        return self._it
+
+    async def aclose(self) -> None:
+        self.parar()
+        await self._it.aclose()
+
+    async def _dormir(self, s: float) -> None:
+        try:
+            await asyncio.wait_for(self._parada.wait(), s)
+        except asyncio.TimeoutError:
+            pass
+
+    async def _gen(self):
+        loop = asyncio.get_running_loop()
+        idx, intento = 0, 0
+        caida_pendiente: dict | None = None
+        while not self._parada.is_set():
+            cmd = comando_ffmpeg(self.entrada, self.inicio if self.aperturas == 0 else 0.0, None,
+                                 self.formato, self.opciones)
+            self.aperturas += 1
+            motivo, proc, entregados = None, None, 0
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, **_aislado())
+            except Exception as e:
+                motivo = f"ffmpeg no arranca: {type(e).__name__}: {e}"
+            try:
+                t0, ultimo = loop.time(), loop.time()
+                while proc is not None and not self._parada.is_set():
+                    try:
+                        d = await asyncio.wait_for(proc.stdout.readexactly(CHUNK_BYTES), 0.5)
+                    except asyncio.TimeoutError:
+                        if loop.time() - ultimo >= self.timeout_s:
+                            motivo = f"sin bytes durante {self.timeout_s:g} s"
+                            break
+                        continue
+                    except asyncio.IncompleteReadError:
+                        # ffmpeg termino (el resto < 100 ms se descarta: la linea de tiempo sigue pareja)
+                        motivo = "ffmpeg termino"
+                        break
+                    ultimo = loop.time()
+                    if caida_pendiente is not None:
+                        yield EventoFuente("reabierta", {**caida_pendiente, "audio_s": round(idx * CHUNK_S, 3),
+                                                         "aperturas": self.aperturas})
+                        caida_pendiente, intento = None, 0
+                    if self.tiempo_real:
+                        espera = t0 + (entregados + 1) * CHUNK_S - loop.time()
+                        if espera > 0:
+                            await asyncio.sleep(espera)
+                    a0 = idx * CHUNK_S
+                    yield Chunk(idx, d, round(a0, 3), round(a0 + CHUNK_S, 3), time.time(), rms_pcm16(d))
+                    idx += 1
+                    entregados += 1
+                    if self.max_s and idx * CHUNK_S >= self.max_s - 1e-9:
+                        return
+            finally:
+                if proc is not None:
+                    if proc.returncode is None:
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            pass
+                    try:
+                        await asyncio.wait_for(proc.wait(), 5)
+                    except Exception:
+                        pass
+            if self._parada.is_set():
+                return
+            if motivo == "ffmpeg termino" and proc is not None:
+                motivo += f" (exit {proc.returncode})"
+            espera = min(2.0 ** intento, self.backoff_max_s)
+            intento += 1
+            self.caidas += 1
+            caida_pendiente = {"motivo": motivo, "caidas": self.caidas}
+            self.log(f"[fuente] caida #{self.caidas}: {motivo}; reintento en {espera:g} s")
+            yield EventoFuente("caida", {"motivo": motivo, "caidas": self.caidas, "reintento_en_s": espera,
+                                         "audio_s": round(idx * CHUNK_S, 3)})
+            await self._dormir(espera)

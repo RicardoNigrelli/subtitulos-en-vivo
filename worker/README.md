@@ -106,7 +106,7 @@ fuente en el casete y en `session_start.meta.source` (`kind`, `device`, `agenda`
 
 | Fuente | Entrada | Qué agrega el worker |
 |---|---|---|
-| `archivo` (default) | `--archivo x.wav` | `-ss --inicio`, `-t --duracion`; ritmo real simulado |
+| `archivo` (default) | `--archivo x.wav` | `-ss --inicio`, `-t --duracion`; ritmo real simulado; termina al acabar el archivo |
 | `url` | `--url <URL>` (o `--archivo <URL>`): HTTP, HLS (`.m3u8`), RTMP, SRT, UDP/mpegts, lo que ffmpeg abra | HTTP(S): `-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5`. Un stream en vivo ya llega a ritmo real; un archivo por HTTP se pauta igual que un archivo |
 | `mic` | `--dispositivo "<nombre>"` | Windows: `-f dshow -audio_buffer_size 50 -i audio=<nombre>`; macOS `avfoundation`; Linux `pulse` |
 
@@ -123,6 +123,48 @@ ffmpeg -re -i charla.wav -f mpegts udp://127.0.0.1:9000 &
 Probar sólo la ingesta, sin API: agregar `--transporte casete:fixtures/casetes/b1-en-60s.jsonl
 --traducir-a none` (el resumen JSON final trae `segundos_enviados` y `ventanas`; el casete trae el
 RMS de cada ventana en las líneas `client`/`ventana`).
+
+## Operación en sala: correr sin límite, parar, qué pasa si se cae el cable
+
+Un proceso por sala, que queda escuchando hasta que alguien lo para.
+
+**Correr sin límite.** Con `--fuente mic` o `--fuente url`, si no se pasa `--duracion` (o se pasa
+`--duracion 0`), el worker no tiene fin propio: no se agrega `-t` a ffmpeg y el presupuesto de audio
+del bloque (`CUOTA_BLOQUE_S`, una guarda de desarrollo) no lo corta ni le impide arrancar. Los segundos
+enviados se registran igual en `reportes/cuota-audio.log` al terminar. `--tope-envio-s N` sigue
+funcionando si se quiere un tope explícito. Con `--fuente archivo` termina al acabar el archivo.
+
+```
+.venv/Scripts/python -m worker.run --fuente mic --dispositivo "<nombre>" --sesion sala-1 --lang es --hub ws://localhost:8100/ingest
+```
+
+**Parar.** Ctrl+C en la consola (o Ctrl+Break, o `SIGTERM` en Linux) hace una parada
+limpia: deja de leer la fuente, cierra la ventana abierta, espera hasta 8 s el último texto
+(`PARADA_DRENAJE_S` en `worker/session.py`), cierra la conexión con Gemini en orden, manda
+`session_end` con `meta.reason: "stop"` al hub, cierra el casete y sale con exit 0. Un segundo Ctrl+C
+interrumpe sin esperar (no garantiza `session_end`). ffmpeg corre en su propio grupo de procesos para que el Ctrl+C le
+llegue sólo al worker.
+
+**Si se cae el cable o el stream.** Si ffmpeg termina o no entrega bytes durante `FUENTE_TIMEOUT_S`
+(default 10 s), el worker:
+1. manda al hub un `error` con `meta.code: "fuente"` y cierra la
+   ventana abierta para que su texto llegue igual;
+2. reintenta abrir la fuente con espera 1, 2, 4, 8… s, hasta `FUENTE_BACKOFF_MAX_S` (30 s), sin límite
+   de intentos;
+3. cuando vuelven los bytes sigue con la MISMA `session_id` y el `seq` continuo; el audio retoma la
+   línea de tiempo donde quedó. La conexión con Gemini no se toca: se reabre sólo por sus propias
+   causas (cierre del server, atasco, GoAway).
+
+En el casete quedan las líneas `client` `fuente_caida` y `fuente_reabierta` (motivo, número de caída,
+posición de audio) y `parada`. En el resumen JSON final, `caidas_fuente` y `motivo_fin: "stop"`.
+
+`FUENTE_TIMEOUT_S` tiene que ser mayor que el sondeo inicial de ffmpeg: con UDP/mpegts, ffmpeg tarda
+unos segundos en entregar el primer byte después de abrir (ver `worker/tests/test_sala.py`, que usa
+7 s con las opciones de producción).
+
+Verificación sin API (0 min): `.venv/Scripts/python -m pytest worker/tests/test_sala.py -q`
+(parada con señal simulada; fuente UDP real que se corta y vuelve; `worker.run` como proceso aparte
+con `--transporte casete:`, corte y vuelta del stream UDP y señal real al final).
 
 ## Glosario desde la agenda (R8c): `--agenda`
 
@@ -236,6 +278,8 @@ raíz lo cargan `worker/gemini.py` (al pedir la key), `worker/emisor.py` y `work
 | `DRENAJE_VIEJA_S` | `20` | cuánto drena la conexión vieja tras reabrir |
 | `REENVIO_MAX_S` | `15` | tope de audio que se reenvía a la conexión nueva |
 | `ENVIO_TIMEOUT_S` | `5` | un envío trabado más que esto da la conexión por muerta y reabre |
+| `FUENTE_TIMEOUT_S` | `10` | mic/url: sin bytes de ffmpeg durante esto, la fuente se da por caída y se reabre |
+| `FUENTE_BACKOFF_MAX_S` | `30` | tope de la espera entre reintentos de abrir la fuente (1, 2, 4… s) |
 
 ## Llamadas al modelo de texto entre procesos (`cuota-texto-reservas.jsonl`)
 

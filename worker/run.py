@@ -22,13 +22,21 @@ cuota ni la registra. Lo usa qa para el e2e del watchdog sobre el bus real.
 
 Gasta cuota: antes de arrancar mira reportes/cuota-audio.log y no pasa del presupuesto del bloque.
 Al terminar apende la linea de cuota (fecha-hora | sesion | segundos_enviados | archivo_fuente).
-Exit: 0 = hubo texto; 3 = sin texto; 4 = sin presupuesto; 2 = error de uso.
+OPERACION EN SALA (--fuente mic|url): sin --duracion (o --duracion 0) corre SIN LIMITE (ni -t ni tope
+de cuota del bloque; los segundos se registran igual) hasta Ctrl+C / Ctrl+Break / SIGTERM, que hacen
+una parada limpia: session_end con meta.reason "stop", conexion cerrada en orden, casete cerrado,
+exit 0. Si ffmpeg muere o no entrega bytes durante FUENTE_TIMEOUT_S (10 s), la fuente se reabre con
+backoff 1, 2, 4... 30 s (worker/ingesta.py: FuenteReabrible) sin cerrar la sesion publica: sale un
+`error` con meta.code "fuente" y la sesion sigue. --fuente archivo termina al acabar el archivo.
+
+Exit: 0 = hubo texto o parada pedida; 3 = sin texto; 4 = sin presupuesto; 2 = error de uso.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
+import signal
 import sys
 import time
 from pathlib import Path
@@ -37,7 +45,7 @@ from worker import cuota
 from worker.casete import Grabador
 from worker.emisor import Emisor
 from worker.gemini import MODELO_LIVE_DEFAULT
-from worker.ingesta import comando_ffmpeg, fuente_ffmpeg
+from worker.ingesta import FuenteReabrible, comando_ffmpeg, fuente_ffmpeg
 from worker.session import SessionWorker
 from worker.transporte import TransporteGemini
 
@@ -95,12 +103,18 @@ def entrada_de(a) -> tuple[str, str | None, list[str], str]:
 
 async def correr(a) -> int:
     es_casete = a.transporte.startswith("casete:")
-    restante = float("inf") if es_casete else cuota.restante_s()
+    # sala: mic/url sin --duracion corre sin limite; la cuota del bloque (guarda de desarrollo) no la
+    # corta ni le impide arrancar: los segundos se registran igual al terminar
+    sin_limite = a.fuente in ("mic", "url") and not a.duracion
+    restante = float("inf") if (es_casete or sin_limite) else cuota.restante_s()
+    if sin_limite and not es_casete:
+        print(f"[run] sala sin limite ({a.fuente}): gastado del bloque {cuota.gastado_s():.1f} s de "
+              f"{cuota.PRESUPUESTO_S:.0f} s; no corta. Parar: Ctrl+C", file=sys.stderr)
     if restante <= 0:
         print(f"[run] SIN PRESUPUESTO: gastado {cuota.gastado_s():.1f} s de "
               f"{cuota.PRESUPUESTO_S:.0f} s en el bloque. No se corre.", file=sys.stderr)
         return 4
-    tope = (None if a.tope_envio_s is None else a.tope_envio_s) if es_casete else (
+    tope = (None if a.tope_envio_s is None else a.tope_envio_s) if (es_casete or sin_limite) else (
         restante if a.tope_envio_s is None else min(a.tope_envio_s, restante))
     vocab = [v.strip() for v in a.vocab.split(",") if v.strip()]
     if a.agenda:
@@ -164,8 +178,14 @@ async def correr(a) -> int:
         print(f"[run] seq inicial = {seq0} (auth_ok.last_seq; conectado={emisor.conectado})",
               file=sys.stderr)
     rec.client("seq_inicial", {"last_seq_hub": seq0, "conectado": bool(emisor and emisor.conectado)})
-    fuente = fuente_ffmpeg(entrada, a.inicio, a.duracion, tiempo_real=True,
-                           formato_entrada=formato, opciones_entrada=opciones)
+    if a.fuente == "archivo":
+        fuente = fuente_ffmpeg(entrada, a.inicio, a.duracion, tiempo_real=True,
+                               formato_entrada=formato, opciones_entrada=opciones)
+    else:
+        # mic/url: se reabre sola si se cae (FUENTE_TIMEOUT_S, backoff hasta 30 s); --duracion N la
+        # corta a los N s de audio, sin --duracion no tiene fin propio (Ctrl+C / SIGTERM)
+        fuente = FuenteReabrible(entrada, formato, opciones, inicio=a.inicio, max_s=a.duracion or None,
+                                 log=lambda s: print(s, file=sys.stderr, flush=True))
     print(f"[run] fuente {a.fuente}: {' '.join(comando_ffmpeg(entrada, a.inicio, a.duracion, formato, opciones))}",
           file=sys.stderr)
     w = SessionWorker(a.sesion, a.lang, tr, fuente, grabador=rec, emisor=emisor, titulo=titulo,
@@ -175,6 +195,23 @@ async def correr(a) -> int:
                       log=lambda s: print(s, file=sys.stderr, flush=True),
                       fabrica=None if a.sin_reabrir else fabrica, reabrir=cfg_reabrir,
                       turnos_manuales=not a.vad_auto)
+    loop = asyncio.get_running_loop()
+    senales = [signal.SIGINT, signal.SIGTERM] + ([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])
+    previos = {}
+
+    def _senal(signum, _frame):
+        # 1a senal: parada limpia; 2a: se restauran los handlers (la siguiente corta en seco)
+        for sg, h in previos.items():
+            signal.signal(sg, h)
+        print(f"[run] senal {signal.Signals(signum).name}: parada limpia (otra vez = corte en seco)",
+              file=sys.stderr, flush=True)
+        loop.call_soon_threadsafe(w.parar, "stop")
+
+    for sg in senales:
+        try:
+            previos[sg] = signal.signal(sg, _senal)
+        except (ValueError, OSError):
+            pass
     res = None
     try:
         res = await w.correr()
@@ -192,6 +229,11 @@ async def correr(a) -> int:
                   f"vaciado={ok}", file=sys.stderr)
             await emisor.detener()
         rec.cerrar()
+        for sg, h in previos.items():
+            try:
+                signal.signal(sg, h)
+            except (ValueError, OSError):
+                pass
     resumen = {"sesion": res.session_id, "casete": casete, "segundos_enviados": res.segundos_enviados,
                "ventanas": res.ventanas, "textos": res.textos, "mensajes_server": res.mensajes_server,
                "goaway": res.goaway, "cierre": res.cierre, "motivo_fin": res.motivo_fin,
@@ -199,6 +241,7 @@ async def correr(a) -> int:
                "errores": res.errores, "seq_inicial": seq0, "parciales": w.n_parciales,
                "drenaje": w.drenaje, "rotaciones": res.rotaciones,
                "descartados_vieja": res.descartados_vieja, "reenviados_s": round(res.reenviados_s, 1),
+               "caidas_fuente": res.caidas_fuente,
                "turnos": "vad_auto" if a.vad_auto else "manuales", "transporte": a.transporte,
                "traduccion": None if traductor is None else {
                    "a": traductor.a, "llamadas": traductor.n_llamadas, "lotes": traductor.n_lotes,
@@ -208,7 +251,7 @@ async def correr(a) -> int:
                "dedup": {"recortados": res.dedup_recortados, "descartados": res.dedup_descartados},
                "rotulo": w.rotulo}
     print(json.dumps(resumen, ensure_ascii=False))
-    return 0 if res.textos > 0 else 3
+    return 0 if (res.textos > 0 or res.motivo_fin == "stop") else 3
 
 
 def main(argv=None) -> int:
