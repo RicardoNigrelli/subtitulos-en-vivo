@@ -126,7 +126,8 @@ BACKOFF_MAX = 30.0
 FMT = "%Y-%m-%d %H:%M:%S"
 # Nombres para el prompt (mejora la calidad); GENERICO por codigo: un idioma que no este aca igual
 # funciona, prompt_lote cae al codigo ISO tal cual (IDIOMAS.get(x, x)), Gemini lo entiende.
-IDIOMAS = {"en": "English", "es": "Spanish", "pt": "Portuguese"}
+IDIOMAS = {"en": "English", "es": "Spanish", "pt": "Portuguese", "fr": "French", "de": "German",
+           "it": "Italian"}
 
 
 def _env_num(nombre: str, defecto: float) -> float:
@@ -353,6 +354,8 @@ def prompt_lote(textos: list[str], de: str, a: str) -> str:
             f"Output: ONLY a JSON array of exactly {len(textos)} strings, one {dst} translation per "
             f"input element, same order. Keep proper names, numbers and technical terms (software "
             f"names, acronyms) as they are. No extra text, no notes.\n"
+            f"The source may contain words glued together or repeated at segment joins; translate the "
+            f"intended meaning into clean, well-punctuated text.\n"
             f"Input:\n{json.dumps(textos, ensure_ascii=False)}")
 
 

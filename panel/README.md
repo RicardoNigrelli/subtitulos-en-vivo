@@ -131,6 +131,59 @@ Cualquier rechazo se avisa en la cabecera con texto ("hub externo ignorado por s
 sólo en consola. Mismo hallazgo (M1) afecta a `web/app.js`/`web/index.html`, que son de `frontend`
 (pedido cruzado, ver reporte).
 
+## Salas (control de sesiones desde el panel, pedido del orquestador)
+
+Botón "Salas" en la cabecera (junto a Configuración) abre un **drawer lateral** más ancho
+(`.drawer--ancho`, 420 px) con el mismo patrón que Configuración: overlay, cierra con Esc/clic
+afuera/`×`, refresco cada 3 s. Habla con un **servicio de control aparte** (`ops/control.py`; hasta
+que exista, `qa/out/panel-control/stub_control.py` implementa el MISMO contrato REST — ver
+`reportes/monitor-control.md`), **no** con el hub: mismo token que `/api/metricas`
+(`Authorization: Bearer`, sessionStorage, nunca query string). Origen por defecto
+`http://<location.hostname>:8110`; `?control=host:puerto` lo sobrescribe con la MISMA validación de
+`?hub=` (`hubParamSeguro()`, reutilizada tal cual) — un valor rechazado se ignora y se avisa con
+texto (`#chip-control-seguridad`), igual que el hub.
+
+- **Lista de salas**: estado en palabras + color (nunca sólo color: Corriendo/Arrancando/
+  Reiniciando/Deteniendo/Detenida/Error con el `ultimo_error`), idioma "inglés → español, portugués"
+  (`idiomaSalaTexto()`, reutiliza `nombreIdioma()` de `panel/i18n.js`), fuente legible
+  ("Micrófono: …" / "Clip: …" / "Stream: …"), intentos y pid, botones Iniciar/Detener/Borrar (Borrar
+  pide confirmación con `window.confirm()`) y link "Ver sala" (misma lógica de origen que
+  `web/index.html`: si el hub sirve panel Y web desde el mismo puerto, `location.origin`; si no, el
+  puerto de dev de `web/servir.py`, 8101, en el mismo host).
+- **Nueva sala**: nombre → id sugerido como slug (editable a mano, deja de auto-completarse apenas
+  se toca), **idioma de la charla** e **idiomas de traducción** vienen de `GET /api/control/fuentes`
+  `idiomas` (`{codigo,nombre_es,nombre_en,probado}`; en/es probados, pt/fr/de/it marcados "(sin
+  probar en vivo)"); "Traducir a" es selección MÚLTIPLE por chips (nunca el mismo idioma que la
+  charla; por defecto el opuesto en/es), se manda como `"traducir_a":"es,pt"` (o `"none"` sin
+  ninguno marcado) con el aviso "Cada idioma extra suma llamadas al modelo de traducción" — el
+  worker de audio-pipeline hoy sólo traduce a UN destino por proceso (`worker/run.py --traducir-a`);
+  con más de uno, el servicio de control usa el primero y lo deja anotado en `log_tail` (limitación
+  de audio-pipeline, no de este drawer). Fuente con tres pestañas (Micrófono/Clip de prueba/Stream);
+  errores del servicio junto al campo (id repetido → sugiere `id-2`, `id-3`, …); estado vacío
+  "Todavía no hay salas. Creá la primera."
+- **Escuchar el original** (pedido de Ricardo, comparar con la transcripción): en salas con fuente
+  Clip, botón "Escuchar" + control de volumen reproducen el WAV servido SIN auth por
+  `GET /api/control/audio/<nombre>.wav` (whitelist por nombre exacto contra
+  `fixtures/audio/clips/`), sincronizado con `audio.currentTime = Date.now()/1000 - audio_inicio`
+  (recalculado al dar play; si ya terminó, vuelve a 0). Si la sala trae `video_origen`
+  (`{url, inicio_s}`, opcional), un link "Ver original en YouTube (desde m:ss)". Fuente Micrófono:
+  texto "Escuchás la sala en vivo"; fuente Stream: link a la URL. El mismo botón chico aparece en la
+  tarjeta de la vista Informativa (mismo `<audio>` compartido, `salasEstado.audios`, para que
+  Escuchar desde la tarjeta o desde el drawer no dupliquen la reproducción).
+- **Servicio no disponible**: mensaje "El servicio de control no está corriendo:
+  `python -m ops.control --hub ws://localhost:8100/ingest`" con botón "copiar comando"
+  (`navigator.clipboard`). **Falta token**: "Cargá el token en Configuración."
+- Hallazgo propio (fijado en este mismo bloque): `.salas-fuente-panel`/`.form-salas` fijan
+  `display: flex`, que le gana al `display: none` del atributo `[hidden]` por origen de la hoja de
+  estilos (mismo caso que `.chip[hidden]` ya documentado más arriba) — sin
+  `.salas-fuente-panel[hidden]{display:none}` y `.form-salas[hidden]{display:none}` las tres
+  pestañas de fuente (Micrófono/Clip/Stream) se mostraban SIMULTÁNEAS. Verificado visualmente antes
+  y después del fix (`reportes/monitor-control.md`).
+- Verificado end-to-end con hub y stub propios (nunca 8100–8107): crear una sala con Clip de prueba
+  desde la UI aparece en la Informativa en pocos segundos (bien dentro de los 10 s pedidos), Detener
+  y Borrar actualizan la lista en el siguiente refresco de 3 s; confirmado también contra el hub real
+  (`GET /api/sesiones`) y contra los logs del stub (`qa/out/panel-control/control-8111.log`).
+
 ## Cómo probarlo (reproducible)
 
 Hub propio (nunca 8100/8101/8102/8105/8106/8107):
@@ -145,6 +198,20 @@ atascos reales: `sala-b-051619.jsonl`):
 ```
 HUB_TOKEN=tok-panel .venv/Scripts/python -m worker.replay fixtures/casetes/evidencia-25-09/sala-b-051619.jsonl --hub ws://127.0.0.1:8195/ingest --sesion sala-atascos --velocidad 0.5
 ```
+
+Drawer de Salas (hub + web + panel juntos, control aparte con el stub mientras no exista
+`ops/control.py`, `--transporte casete:...` para no gastar cuota):
+
+```
+HUB_TOKEN=tok-panel-control-8187 HUB_PORT=8187 HUB_HOST=127.0.0.1 .venv/Scripts/python -m hub --web web --panel panel
+HUB_TOKEN=tok-panel-control-8187 .venv/Scripts/python qa/out/panel-control/stub_control.py --hub ws://127.0.0.1:8187/ingest --port 8111 --transporte casete:fixtures/casetes/evidencia-25-09/simple-en-053454.jsonl
+```
+
+Abrir `http://127.0.0.1:8187/panel/?control=127.0.0.1:8111`, cargar el token en Configuración
+(`tok-panel-control-8187`), abrir "Salas" → Nueva sala → fuente "Clip de prueba" → Crear sala (con
+"arrancar ahora" marcado). Aparece en la Informativa en unos segundos; `Detener`/`Borrar` actualizan
+la lista en el siguiente refresco de 3 s. Evidencia de una corrida real: `reportes/monitor-control.md`
+(comandos + salida de `curl`, log del stub).
 
 Panel propio: `.venv/Scripts/python panel/servir.py --puerto 8198`, abrir
 `http://127.0.0.1:8198/?hub=127.0.0.1:8195`.

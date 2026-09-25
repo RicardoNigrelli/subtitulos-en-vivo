@@ -78,11 +78,17 @@ from worker.dedup import (VENTANA_CORTA_S, contenido_repetido, corto_repetido, d
 from worker.emisor import Emisor
 from worker.ingesta import CHUNK_S, Chunk, EventoFuente
 from worker.mapeo import InfoVentana, Mapeador, segundos as _segundos_mapeo
+from worker.normalizar import (limpieza_activa, marcas_pegado, normalizar, prompt_limpieza,
+                               salida_limpieza, validar_limpieza)
+from worker.traductor import Error429, Error5xx
 from worker.transporte import Transporte
 from worker.ventanas import GAP_S, SOLAPE_S, Accion, Cortador, Ventana
 
 
 PARADA_DRENAJE_S = 8.0   # parada en sala: espera corta del ultimo texto antes de cerrar
+# limpieza de turnos mergeados (worker/normalizar.py): timeout de la llamada y espera maxima de cupo
+LIMPIEZA_TIMEOUT_S = float(os.environ.get("LIMPIEZA_TIMEOUT_S", "3.0"))
+LIMPIEZA_ESPERA_CUPO_S = float(os.environ.get("LIMPIEZA_ESPERA_CUPO_S", "0.3"))
 
 
 def _env_f(nombre: str, defecto: float) -> float:
@@ -146,6 +152,8 @@ class Resultado:
     reenviados_s: float = 0.0
     dedup_recortados: int = 0         # textos a los que se les quito el prefijo repetido
     dedup_descartados: int = 0        # textos que eran duplicado entero (no se emitieron)
+    limpiezas_ok: int = 0             # textos mergeados limpiados por el modelo de texto (validados)
+    limpiezas_fallidas: int = 0       # sin cupo / timeout / error / salida invalida: reglas conservadoras
 
     @property
     def segundos_enviados(self) -> float:
@@ -244,7 +252,8 @@ class SessionWorker:
                  reabrir: Optional[ConfigReabrir] = None,
                  turnos_manuales: bool = True,
                  rotulo: Optional[str] = None,
-                 dedup: bool = True):
+                 dedup: bool = True, vocab: Optional[list] = None,
+                 limpieza: Optional[bool] = None):
         self.sid = session_id
         self.lang = lang
         self.tr = transporte
@@ -262,13 +271,23 @@ class SessionWorker:
         self.dormir = dormir
         self.log = log
         self.seq = int(seq_inicial or 0)     # sigue desde auth_ok.last_seq (el hub no rebobina)
-        self.traductor = traductor           # worker/traductor.py (R19), o None
+        # worker/traductor.py (R19): uno o una LISTA (un Traductor por idioma destino); el primero
+        # tambien presta cliente/limitador a la limpieza de turnos mergeados
+        if isinstance(traductor, (list, tuple)):
+            self.traductores = [t for t in traductor if t is not None]
+        else:
+            self.traductores = [traductor] if traductor is not None else []
+        self.traductor = self.traductores[0] if self.traductores else None
         self.fabrica = fabrica               # None => sin reabrir (una sola conexion, como B1/B2)
         self.cfg = reabrir or ConfigReabrir.desde_env()
         self.turnos_manuales = turnos_manuales   # False => VAD automatico del server (A/B B3)
         # rotulo de test/replay: explicito o el que declara el transporte (no se puede olvidar)
         self.rotulo = rotulo or getattr(transporte, "SOURCE_REPLAY", None)
         self.dedup = dedup
+        self.vocab = list(vocab or [])                # --vocab + glosario: excepciones de la regla 2
+        self.limpieza = limpieza_activa() if limpieza is None else bool(limpieza)
+        self._cola_limpieza: deque = deque()
+        self._limpiando: Optional[asyncio.Task] = None
         self._ultimo_texto: Optional[str] = None
         self._ultimo_a1: Optional[float] = None
         self._recientes: deque = deque(maxlen=5)   # (texto, audio_start, audio_end) emitidos: costura
@@ -706,7 +725,92 @@ class SessionWorker:
         return False
 
     def _emitir_asignaciones(self, asignaciones, con: Optional[_Conexion] = None) -> None:
+        """En orden. Un texto que pide LIMPIEZA (turno mergeado o con pegados, worker/normalizar.py)
+        se limpia en una tarea; los que llegan detras esperan en la cola (el seq no se desordena)."""
         for a in asignaciones:
+            if self._cola_limpieza or self._limpiando is not None:
+                self._cola_limpieza.append((a, con))
+                continue
+            if self._pide_limpieza(a):
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop is not None:
+                    self._cola_limpieza.append((a, con))
+                    self._limpiando = loop.create_task(self._limpiar_cola())
+                    continue
+            self._emitir_asignacion(a, con)
+
+    def _pide_limpieza(self, a) -> bool:
+        if not self.limpieza or self.traductor is None or getattr(a, "limpieza", None) is not None:
+            return False
+        return len(a.ventanas or []) > 1 or marcas_pegado(a.text or "", self.vocab)
+
+    async def _limpiar_cola(self) -> None:
+        try:
+            while self._cola_limpieza:
+                a, con = self._cola_limpieza[0]
+                if self._pide_limpieza(a):
+                    try:
+                        await self._limpiar(a)
+                    except Exception as e:          # nunca se cae la sala
+                        a.limpieza = {"ok": False, "estado": f"error:{type(e).__name__}"}
+                self._cola_limpieza.popleft()
+                try:
+                    self._emitir_asignacion(a, con)
+                except Exception as e:
+                    self.log(f"[{self.sid}] emision fallo: {type(e).__name__}: {e}")
+        finally:
+            self._limpiando = None
+
+    async def _limpiar(self, a) -> None:
+        """UNA llamada al modelo de texto (mismo cliente, limitador y reservas por key que el
+        traductor; thinking minimal lo pone TransporteGenAI). Timeout LIMPIEZA_TIMEOUT_S, sin cupo o
+        salida invalida => queda el texto con las reglas conservadoras."""
+        tr = self.traductor
+        base, _c = normalizar(a.text, self.vocab)
+        info = {"ok": False, "entrada": a.text}
+        a.limpieza = info
+        modelo, motivo = await tr.lim.elegir(espera_max=LIMPIEZA_ESPERA_CUPO_S)
+        if modelo is None:
+            info["estado"] = motivo
+            self.res.limpiezas_fallidas += 1
+            return
+        t0 = time.monotonic()
+        try:
+            raw = await asyncio.wait_for(tr.tr.generar(modelo, prompt_limpieza(base)), LIMPIEZA_TIMEOUT_S)
+            estado = "ok"
+        except asyncio.TimeoutError:
+            raw, estado = None, "timeout"
+        except Error429:
+            raw, estado = None, "429"
+        except Error5xx:
+            raw, estado = None, "5xx"
+        except Exception as e:
+            raw, estado = None, f"error:{type(e).__name__}"
+        ms = int((time.monotonic() - t0) * 1000)
+        info.update({"modelo": modelo, "ms": ms})
+        tr._anotar(modelo, 1, f"limpieza_{estado}", ms)
+        if raw is None:
+            tr.lim.fallo(modelo, estado)
+            info["estado"] = estado
+            self.res.limpiezas_fallidas += 1
+            return
+        tr.lim.exito(modelo)
+        limpio = salida_limpieza(raw)
+        ok, porque = validar_limpieza(base, limpio, self.lang)
+        info.update({"estado": "ok" if ok else "invalida", "validacion": porque})
+        if not ok:
+            info["descartada"] = limpio
+            self.res.limpiezas_fallidas += 1
+            return
+        info["ok"] = True
+        self.res.limpiezas_ok += 1
+        a.text = limpio
+
+    def _emitir_asignacion(self, a, con: Optional[_Conexion] = None) -> None:
+        if True:
             lim = con.limite_audio_end if con is not None else None
             corte = con.corte_nueva if con is not None else None
             # de la vieja se descarta todo texto que EMPIEZA en/despues del corte (lo cubre la nueva);
@@ -721,15 +825,23 @@ class SessionWorker:
                     self.rec.client("descartado_vieja", {"conexion": con.id, "text": a.text,
                                                          "audio_start": a.audio_start,
                                                          "audio_end": a.audio_end, "limite": lim})
-                continue
+                return
             if a.audio_start is None or a.audio_end is None:
                 # texto sin ventana asignable (no deberia pasar en vivo): se ancla a la posicion actual
                 # para que el mensaje cumpla el contrato (audio_* numericos)
                 a.audio_start = self.abierta.audio_start if self.abierta else round(self.pos_s, 3)
                 a.audio_end = round(max(self.pos_s, a.audio_start), 3)
                 a.t_captured = a.t_captured if a.t_captured is not None else self.reloj()
+            # reglas conservadoras (worker/normalizar.py) antes de dedup, emision y traduccion
+            crudo_norm = a.text
+            a.text, cambios = normalizar(a.text, self.vocab,
+                                         mergeado=len(a.ventanas or []) > 1 or self._en_costura(a, con))
             # el original sale YA con translations {}; la traduccion llega despues como `translation`
             extra = {"ventanas": a.ventanas, "conexion": con.id if con is not None else None}
+            if a.text != crudo_norm:
+                extra["normalizado"] = {"original": crudo_norm, **cambios}
+            if getattr(a, "limpieza", None) is not None:
+                extra["limpieza"] = a.limpieza
             if lim is not None and a.audio_end is not None and a.audio_end > lim:
                 extra["cruza_corte"] = {"corte_s": corte, "limite": lim}
             partes = [(a.text, a.audio_start, a.audio_end, True)]
@@ -752,7 +864,7 @@ class SessionWorker:
                     if self.rec:
                         self.rec.client("dedup_descartado", {"conexion": extra["conexion"], "text": a.text,
                                                              "ventanas": a.ventanas, "motivo": "contenido"})
-                    continue
+                    return
                 if tipo in ("contiene", "tirada"):
                     # se quitan los tramos que repiten textos ya emitidos; lo que queda (audio que la otra
                     # conexion no transcribio) sale ubicado entre los tramos repetidos
@@ -775,7 +887,7 @@ class SessionWorker:
                     extra = {**extra, "costura": {"original": a.text, "pedazos": len(partes), "tipo": tipo}}
                     if not partes:
                         self.res.dedup_descartados += 1
-                        continue
+                        return
             for texto, a0, a1, sigue in partes:
                 self._emitir_texto(texto, a0, a1, a, extra, sigue)
 
@@ -804,13 +916,15 @@ class SessionWorker:
         self._recientes.append((texto, a0, a1))
         msg = self.emitir("text", text=texto, audio_start=a0, audio_end=a1,
                           t_captured=a.t_captured, _casete=extra)
-        if self.traductor is not None:
-            self.traductor.agregar(msg["seq"], texto, msg["t_emit"])
+        for t in self.traductores:
+            t.agregar(msg["seq"], texto, msg["t_emit"])
 
-    def _on_traduccion(self, res) -> None:
+    def _on_traduccion(self, res, trad=None) -> None:
+        """Un `translation` POR IDIOMA destino (meta.lang_to = el del Traductor que lo produjo)."""
         from worker.traductor import meta_traduccion
+        t = trad if trad is not None else self.traductor
         self.emitir("translation", items=res.items,
-                    meta=meta_traduccion(res, self.traductor.a, {"vivo": True, "intentos": res.intentos}))
+                    meta=meta_traduccion(res, t.a, {"vivo": True, "intentos": res.intentos}))
 
     def _emitir_parcial(self, texto: str, con: _Conexion) -> None:
         # turno en curso = ventana mas vieja sin ACTIVITY_END del server; si no hay, la abierta
@@ -820,6 +934,7 @@ class SessionWorker:
             a0 = self.abierta.audio_start if self.abierta else None
         tc = self.ultima.t_captured if self.ultima is not None else None
         self.n_parciales += 1
+        texto, _c = normalizar(texto, self.vocab, mergeado=len(con.mapa.pend) > 1)
         self.emitir("partial", text=texto, audio_start=a0, t_captured=tc)
 
     async def _vigilar_textos(self) -> None:
@@ -905,10 +1020,10 @@ class SessionWorker:
         self.emitir("session_start", meta={
             "title": titulo, "source": self.source,
             # el indice ofrece el idioma destino desde el arranque (no recien con la 1a traduccion)
-            "translations_langs": [self.traductor.a] if self.traductor is not None else []})
-        if self.traductor is not None:
-            self.traductor.on_resultado = self._on_traduccion
-            self.traductor.iniciar()
+            "translations_langs": [t.a for t in self.traductores]})
+        for t in self.traductores:
+            t.on_resultado = (lambda res, _t=t: self._on_traduccion(res, _t))
+            t.iniciar()
         hb = asyncio.create_task(self._latido())
         vt = asyncio.create_task(self._vigilar_textos())
         vg = asyncio.create_task(self._vigia()) if self.fabrica is not None else None
@@ -954,8 +1069,14 @@ class SessionWorker:
         hb.cancel()
         vt.cancel()
         self._emitir_asignaciones(con.mapa.vaciar(), con)
-        if self.traductor is not None:
-            await self.traductor.cerrar(self.traductor.timeout_s + 5.0)   # ultimo lote + en vuelo
+        if self._limpiando is not None:              # limpieza en vuelo + cola detras (en orden)
+            try:
+                await asyncio.wait_for(asyncio.shield(self._limpiando), LIMPIEZA_TIMEOUT_S * 4 + 5)
+            except (asyncio.TimeoutError, Exception):
+                pass
+        if self.traductores:                      # ultimo lote + en vuelo, todos los idiomas a la vez
+            await asyncio.gather(*(t.cerrar(t.timeout_s + 5.0) for t in self.traductores),
+                                 return_exceptions=True)
         self._vivo = False
         cierre = con.cierre or {}
         if cierre.get("by") in ("server", "red") and cierre.get("code") not in (1000, None):

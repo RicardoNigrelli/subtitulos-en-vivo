@@ -113,6 +113,8 @@ dato honesto.
 
 ## Cómo levantar
 
+**¿Querés probarlo o conectarlo con lo que ya usás (OBS, vMix, tu app)?** Guía práctica con ejemplos probados: [`docs/integracion.md`](docs/integracion.md).
+
 Puerto del proyecto: **8080** (verificar que esté libre antes: `netstat -ano | findstr :8080`; en
 Windows el bind no falla si el puerto está tomado, se lo lleva el primer server que lo abrió).
 
@@ -523,6 +525,20 @@ atasco / preventiva / `GoAway`) con el audio perdido acumulado, y "sin texto hac
 (como en `docker compose`, sin el proxy de desarrollo `panel/servir.py`), la propia página tiene un
 campo para pegar el token, que queda guardado en el navegador (`sessionStorage`) y se manda en cada
 pedido; sin token el chip queda en "métricas: sin token" en vez de fallar en silencio.
+
+### Crear y controlar salas desde el panel
+
+El apartado **Salas** del panel crea una sala (nombre, idioma de la charla, idiomas de traducción, fuente: micrófono
+detectado, clip de prueba o stream), la arranca, la detiene y la borra, sin terminal. Lo sirve un proceso aparte,
+protegido con el mismo `HUB_TOKEN`:
+
+```bash
+.venv/Scripts/python -m ops.control --hub ws://localhost:8100/ingest --port 8110
+```
+
+Con fuente clip, el botón **Escuchar** reproduce el audio en el navegador sincronizado con la sala, para comparar lo
+que se oye con lo que se transcribe, y **Ver original** abre la charla en YouTube en ese minuto. Tests:
+`.venv/Scripts/python -m pytest ops/tests -q`. Detalle del contrato en `ops/control.py`.
 
 ## Export SRT / VTT / TXT (R8d)
 

@@ -154,6 +154,13 @@ button:focus-visible {
 .chip--conectando { color: var(--color-texto-secundario); }
 .chip--conectando::before { content: var(--chip-reconectando-simbolo); color: var(--color-atencion); }
 
+/* frontend-espera (25/09): la sala todavia no arranco (init.state=="waiting" o ausente de
+   /api/sesiones) pero la conexion con el hub esta sana — no es "sin texto" (eso implica que la
+   sala existe y esta en silencio) ni un problema de red, asi que usa el mismo simbolo/color de
+   "conectando" (esperando algo, no un error). */
+.chip--esperando-sala { color: var(--color-texto-secundario); }
+.chip--esperando-sala::before { content: var(--chip-reconectando-simbolo); color: var(--color-atencion); }
+
 .chip--en-vivo { color: var(--color-texto-secundario); }
 .chip--en-vivo::before { content: var(--chip-en-vivo-simbolo); color: var(--color-exito); }
 

@@ -25,6 +25,7 @@ Reemplazar antes de enviar: `https://github.com/RicardoNigrelli/subtitulos-en-vi
 
 - Repo: `https://github.com/RicardoNigrelli/subtitulos-en-vivo`
 - Video: `<YOUTUBE_URL>`
+- How to try it / connect it to your services: [`docs/integracion.md`](integracion.md)
 
 ## Built With
 

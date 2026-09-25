@@ -219,3 +219,5 @@ de ASR: sirven para desarrollar contra el hub real con `python -m hub.inyectar`.
 | `sesion-es.jsonl` | `ejemplo-es`, 20 `text` en español con `translations.en`; la línea 7 trae la traducción fallida |
 | `tipos.jsonl` | `ejemplo-tipos`: un mensaje de cada `type` en orden de vida de una sesión (los 7 de B1) |
 | `traduccion.jsonl` | `ejemplo-traduccion` (B2): 3 `partial`, 3 `text` con `translations: {}` y 2 `translation`: seq 2 ok, seq 3 fallida (`ok:false`) y seq 4 cuya traducción llega ANTES que el `text` (queda pendiente en el hub y se aplica al llegar) |
+
+**25/09 (aditivo):** `lang_origen` acepta además `pt`, `fr`, `de`, `it` (el worker los admite con aviso; probados en vivo sólo `en` y `es`). Una sala puede traducir a varios idiomas: una `translation` por idioma y `session_start.meta.translations_langs` con la lista.

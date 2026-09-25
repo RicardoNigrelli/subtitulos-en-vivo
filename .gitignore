@@ -24,6 +24,9 @@ node_modules/
 qa/out/
 *.log
 
+# Estado en memoria del servicio de control (ops/control.py), se reconstruye con el .json de ejemplo
+ops/salas.control.json
+
 # Audio completo: charlas enteras no se commitean, sólo clips citados (X3, decisión Ricardo 24/09
 # 12:55). Redundante con fixtures/audio/full/.gitignore, pero explícito acá también.
 fixtures/audio/full/

@@ -677,3 +677,126 @@ body[data-vista="informativa"] .pie { display: none; }
   .cabecera__subtitulo { display: none; }
   .cabecera__estado, .cabecera__botones { flex-wrap: wrap; }
 }
+
+/* ---------------------------------------------------------------- drawer de Salas (monitor,
+   control de salas vía servicio externo, ver panel/app.js "control de salas" y panel/README.md
+   "Salas"). Mismo patrón visual que el drawer de Configuración (.drawer de más arriba); un poco más
+   ancho porque tiene formulario. Estado nunca sólo por color (skill ui-subtitulos): cada franja de
+   color de sala-fila va SIEMPRE acompañada del texto en .sala-fila__estado. */
+.drawer--ancho { width: min(420px, 100vw); }
+@media (max-width: 480px) { .drawer--ancho { width: 100vw; } }
+
+.salas-aviso-servicio {
+  padding: var(--esp-3);
+  border: 1px solid var(--color-atencion-borde);
+  background: var(--color-atencion-fondo);
+  color: var(--color-atencion);
+  border-radius: var(--radio-medio);
+  font-size: var(--tam-chico);
+}
+.salas-aviso-servicio p { margin: 0; }
+
+.lista-salas { display: flex; flex-direction: column; gap: var(--esp-3); }
+.sala-fila {
+  background: var(--color-superficie-alta);
+  border: 1px solid var(--color-borde);
+  border-left: 3px solid var(--color-borde);
+  border-radius: var(--radio-medio);
+  padding: var(--esp-3);
+  font-size: var(--tam-chico);
+}
+.sala-fila--exito { border-left-color: var(--color-exito); }
+.sala-fila--aviso { border-left-color: var(--color-aviso); }
+.sala-fila--atencion { border-left-color: var(--color-atencion); }
+.sala-fila--error { border-left-color: var(--color-error); }
+.sala-fila--silenciado { border-left-color: var(--color-texto-silenciado); }
+.sala-fila__cabecera { display: flex; align-items: baseline; justify-content: space-between; gap: var(--esp-2); }
+.sala-fila__cabecera b { color: var(--color-texto); font-size: var(--tam-cuerpo); }
+.sala-fila__estado { white-space: nowrap; font-weight: 600; }
+.sala-fila__estado--exito { color: var(--color-exito); }
+.sala-fila__estado--aviso { color: var(--color-aviso); }
+.sala-fila__estado--atencion { color: var(--color-atencion); }
+.sala-fila__estado--error { color: var(--color-error); }
+.sala-fila__estado--silenciado { color: var(--color-texto-silenciado); }
+.sala-fila__idioma, .sala-fila__fuente, .sala-fila__meta {
+  margin: var(--esp-1) 0 0;
+  color: var(--color-texto-secundario);
+}
+.sala-fila__fuente a { color: var(--color-link); }
+.sala-fila__escuchar { margin-left: var(--esp-2); }
+.audio-slot { display: none; } /* el <audio> vive acá pero no tiene controles propios (usa el botón + volumen) */
+.sala-fila__volumen { width: 90px; vertical-align: middle; margin-left: var(--esp-2); accent-color: var(--color-acento); }
+.sala-fila__botones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--esp-2);
+  margin-top: var(--esp-2);
+}
+.sala-fila__botones button, .sala-fila__ver {
+  background: var(--color-superficie);
+  color: var(--color-texto);
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-chico);
+  padding: 4px 10px;
+  font-size: var(--tam-chico);
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+.sala-fila__botones button:hover, .sala-fila__ver:hover { background: var(--color-fondo); }
+.sala-fila__botones button:disabled { opacity: 0.45; cursor: not-allowed; }
+.sala-fila__botones button:focus-visible, .sala-fila__ver:focus-visible { outline: 2px solid var(--color-link); outline-offset: 1px; }
+
+.tarjeta__escuchar {
+  margin-left: var(--esp-2);
+  background: transparent;
+  color: var(--color-link);
+  border: none;
+  padding: 0;
+  font-size: var(--tam-diminuto);
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.form-salas { display: flex; flex-direction: column; gap: 2px; }
+.form-salas input[type="text"], .form-salas input[type="number"], .form-salas select {
+  width: 100%;
+  background: var(--color-fondo);
+  color: var(--color-texto);
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-chico);
+  padding: 6px 8px;
+  font-size: var(--tam-chico);
+  font-family: inherit;
+  margin-bottom: var(--esp-2);
+  box-sizing: border-box;
+}
+.form-salas input:focus-visible, .form-salas select:focus-visible { outline: 2px solid var(--color-link); outline-offset: 1px; }
+.form-salas__ayuda { margin: 0 0 var(--esp-2); font-size: var(--tam-diminuto); color: var(--color-texto-silenciado); }
+.form-salas__error {
+  margin: 0 0 var(--esp-2);
+  font-size: var(--tam-chico);
+  color: var(--color-error);
+}
+.salas-chips { display: flex; flex-wrap: wrap; gap: var(--esp-2); margin-bottom: 2px; }
+.salas-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--color-borde);
+  border-radius: var(--radio-pastilla);
+  font-size: var(--tam-chico);
+  color: var(--color-texto-secundario);
+}
+.salas-fuente-tabs { display: flex; gap: var(--esp-3); margin-bottom: var(--esp-2); font-size: var(--tam-chico); color: var(--color-texto-secundario); }
+.salas-fuente-panel { display: flex; gap: var(--esp-2); align-items: center; margin-bottom: var(--esp-2); }
+.salas-fuente-panel select { margin-bottom: 0; flex: 1 1 auto; }
+.salas-fuente-panel button { flex: none; }
+/* [hidden] y .salas-fuente-panel/.form-salas (display:flex) tienen la misma especificidad: sin esto
+   el display:flex del autor le gana al display:none del UA y "hidden" no ocultaría nada (mismo caso
+   ya resuelto arriba para .chip[hidden]). */
+.salas-fuente-panel[hidden] { display: none; }
+.form-salas[hidden] { display: none; }
+.icono-salas { width: 16px; height: 16px; }

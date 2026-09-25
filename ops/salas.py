@@ -104,7 +104,8 @@ def cargar_salas(ruta: str) -> list[Sala]:
 
 
 def comando_worker(
-    sala: Sala, *, hub: str, transporte: str | None, python: str, traducir_a: str | None = None
+    sala: Sala, *, hub: str, transporte: str | None, python: str, traducir_a: str | None = None,
+    duracion_s: float | None = None,
 ) -> list[str]:
     cmd = [python, "-m", "worker.run", "--sesion", sala.id, "--lang", sala.lang,
            "--titulo", sala.titulo, "--hub", hub]
@@ -124,7 +125,31 @@ def comando_worker(
         cmd += ["--transporte", transporte]
     if traducir_a:
         cmd += ["--traducir-a", traducir_a]
+    if duracion_s is not None:
+        cmd += ["--duracion", str(duracion_s)]
     return cmd
+
+
+def enviar_parada(proc: subprocess.Popen) -> None:
+    """Señal de parada limpia: CTRL_BREAK_EVENT en Windows (mismo grupo, ver CREATE_NEW_PROCESS_GROUP
+    al lanzar), SIGTERM en POSIX. Reutilizado por Supervisor.parar y por ops/control.py."""
+    try:
+        if os.name == "nt":
+            proc.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            proc.terminate()
+    except Exception:
+        pass
+
+
+def detener_proceso(proc: subprocess.Popen, timeout_s: float = 10.0) -> int:
+    """Pide parada limpia y espera hasta timeout_s; si no cerró, mata. Devuelve el returncode."""
+    enviar_parada(proc)
+    try:
+        return proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return proc.wait()
 
 
 class Supervisor:
@@ -228,13 +253,7 @@ class Supervisor:
             self._hilos.append(h)
 
     def _matar(self, proc: subprocess.Popen) -> None:
-        try:
-            if os.name == "nt":
-                proc.send_signal(signal.CTRL_BREAK_EVENT)
-            else:
-                proc.terminate()
-        except Exception:
-            pass
+        enviar_parada(proc)
 
     def parar(self) -> None:
         self._parando = True

@@ -43,10 +43,12 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
 import json  # noqa: E402
+import re  # noqa: E402
 import signal  # noqa: E402
 import sys  # noqa: E402
 import time  # noqa: E402
 from pathlib import Path  # noqa: E402
+from typing import Optional  # noqa: E402
 
 from worker import cuota  # noqa: E402
 from worker.seguridad import SLUG, sin_credenciales, validar_sesion  # noqa: E402
@@ -68,7 +70,8 @@ def _args(argv=None):
     ap.add_argument("--agenda", default=None, help="agenda JSON (R8c): glosario -> custom_vocabulary")
     ap.add_argument("--charla", default=None, help="id de la charla en la agenda (default: --sesion)")
     ap.add_argument("--sesion", required=True)
-    ap.add_argument("--lang", required=True, choices=["en", "es"])
+    ap.add_argument("--lang", required=True, choices=LANGS_ORIGEN,
+                    help="idioma de la charla; probados en vivo: en, es")
     ap.add_argument("--inicio", type=float, default=0.0)
     ap.add_argument("--duracion", type=float, default=None)
     ap.add_argument("--hub", default=None, help="ws://localhost:8100/ingest")
@@ -83,7 +86,9 @@ def _args(argv=None):
     ap.add_argument("--ventana-s", type=float, default=None, help="ventana objetivo (default env VENTANA_S o 3,0; tolerancia proporcional)")
     ap.add_argument("--gap-s", type=float, default=None, help="gap end->start (default 0,7)")
     ap.add_argument("--drenaje-s", type=float, default=30.0, help="espera de turnos al fin de la fuente")
-    ap.add_argument("--traducir-a", default="auto", help="es|en|none (auto: en->es, es->en)")
+    ap.add_argument("--traducir-a", default="auto",
+                    help="lista de idiomas destino separados por coma (es,pt,fr) | auto (en->es, "
+                         "es->en) | none. Un Traductor por idioma, misma key: cada idioma suma llamadas")
     ap.add_argument("--timeout-trad-s", type=float, default=20.0,
                     help="timeout por llamada del traductor (B4: 20 s, sin reintento por timeout)")
     ap.add_argument("--vad-auto", action="store_true",
@@ -97,6 +102,10 @@ def _args(argv=None):
         # el patron (se gastaria cuota contra una sala vacia)
         ap.error(f"--sesion {a.sesion!r} invalida: tiene que cumplir {SLUG.pattern} "
                  f"(minusculas, digitos, '-' y '_'; hasta 64; empieza con letra o digito)")
+    try:
+        destinos(a.traducir_a, a.lang)
+    except ValueError as e:
+        ap.error(f"--traducir-a: {e}")
     if a.fuente == "archivo" and not a.archivo:
         ap.error("--fuente archivo necesita --archivo")
     if a.fuente == "url" and not (a.url or a.archivo):
@@ -132,19 +141,58 @@ def armar_transportes(a, vocab: list[str]):
     return fabrica(0.0), fabrica
 
 
+# idioma de la charla (--lang). PROBADOS EN VIVO: en, es. El contrato (contracts/esquema.json#lang_origen)
+# hoy acepta solo en/es: con otro, el hub rechaza los mensajes hasta que backend amplie ese enum.
+LANGS_ORIGEN = ["en", "es", "pt", "fr", "de", "it"]
+LANGS_PROBADOS = ("en", "es")
+_LANG_DESTINO = re.compile(r"^[a-z]{2}(-[A-Z]{2})?$")      # = contracts/esquema.json#lang_destino
+
+
+def destinos(valor: Optional[str], lang: str) -> list[str]:
+    """--traducir-a -> lista de idiomas destino, sin repetir y sin el de origen. `auto` = el opuesto
+    en/es (en->es, es->en; otro origen -> es, R19); `none`/vacio = []. ValueError si un codigo no
+    cumple el patron del contrato."""
+    out: list[str] = []
+    for x in (valor or "").split(","):
+        x = x.strip()
+        if not x or x.lower() == "none":
+            continue
+        if x.lower() == "auto":
+            x = "en" if lang == "es" else "es"
+        if not _LANG_DESTINO.match(x):
+            raise ValueError(f"idioma destino invalido: {x!r} (codigo ISO: es, pt, pt-BR)")
+        if x != lang and x not in out:
+            out.append(x)
+    return out
+
+
+def armar_traductores(a) -> list:
+    """Un Traductor por idioma destino. Todos comparten el MISMO transporte (key --key) y el MISMO
+    Limitador: cortacircuito, token bucket y reservas por (key, modelo) son uno solo para la sala;
+    cada idioma suma sus llamadas a esa cuenta."""
+    langs = destinos(a.traducir_a, a.lang)
+    if not langs:
+        return []
+    from worker.traductor import Limitador, Traductor, TransporteGenAI, modelos_por_defecto
+    tr = TransporteGenAI(nombre_key=a.key)
+    modelos = modelos_por_defecto()
+    lim = Limitador(modelos, key=a.key) if len(langs) > 1 else None
+    return [Traductor(a.lang, x, timeout_s=a.timeout_trad_s, transporte=tr, modelos=modelos,
+                      limitador=lim) for x in langs]
+
+
 def armar_traductor(a):
     """Traductor de la sala o None (--traducir-a none). Usa la MISMA key que la Live API (--key): "una
     key/proyecto por sala" cubre las dos llamadas (antes el de texto usaba siempre GEMINI_API_KEY).
     FINAL 25/09: las reservas de texto entre procesos (reportes/cuota-texto-reservas.jsonl) se cuentan
     por (key, modelo): la key del traductor es la del transporte (--key)."""
-    destino = a.traducir_a
-    if destino == "auto":
-        destino = "es" if a.lang == "en" else "en"
-    if not destino or destino == "none":
-        return None
-    from worker.traductor import Traductor, TransporteGenAI
-    return Traductor(a.lang, destino, timeout_s=a.timeout_trad_s,
-                     transporte=TransporteGenAI(nombre_key=a.key))
+    t = armar_traductores(a)
+    return t[0] if t else None
+
+
+def _resumen_trad(t) -> dict:
+    return {"a": t.a, "llamadas": t.n_llamadas, "lotes": t.n_lotes, "lotes_ok_false": t.n_ok_false,
+            "timeouts": t.n_timeout, "por_modelo": t.por_modelo}
 
 
 async def correr(a) -> int:
@@ -196,7 +244,13 @@ async def correr(a) -> int:
     from worker.session import ConfigReabrir
     cfg_reabrir = ConfigReabrir.desde_env()
     cortador["cfg_reabrir"] = vars(cfg_reabrir)
-    traductor = armar_traductor(a)
+    traductores = armar_traductores(a)
+    traductor = traductores[0] if traductores else None
+    if a.lang not in LANGS_PROBADOS:
+        print(f"[run] AVISO: --lang {a.lang} NO probado en vivo (probados en vivo: en, es).", file=sys.stderr)
+    if len(traductores) > 1:
+        print(f"[run] traduccion a {','.join(t.a for t in traductores)}: {len(traductores)} llamadas "
+              f"por texto a la misma key", file=sys.stderr)
     rec = Grabador(casete, {"session_id": a.sesion, "lang": a.lang, "model": a.modelo,
                             "config": tr.config_enviada()["config"], "source": source,
                             "title": titulo, "cortador": cortador,
@@ -227,10 +281,10 @@ async def correr(a) -> int:
     w = SessionWorker(a.sesion, a.lang, tr, fuente, grabador=rec, emisor=emisor, titulo=titulo,
                       source=source, tope_envio_s=tope, espera_final_s=a.drenaje_s, gap_s=gap_s,
                       cortador=V.Cortador(ventana_s=ventana_s, tolerancia_s=tolerancia_s, gap_s=gap_s),
-                      traductor=traductor, seq_inicial=seq0,
+                      traductor=traductores or None, seq_inicial=seq0,
                       log=lambda s: print(s, file=sys.stderr, flush=True),
                       fabrica=None if a.sin_reabrir else fabrica, reabrir=cfg_reabrir,
-                      turnos_manuales=not a.vad_auto)
+                      turnos_manuales=not a.vad_auto, vocab=vocab)
     loop = asyncio.get_running_loop()
     senales = [signal.SIGINT, signal.SIGTERM] + ([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else [])
     previos = {}
@@ -279,6 +333,7 @@ async def correr(a) -> int:
                "descartados_vieja": res.descartados_vieja, "reenviados_s": round(res.reenviados_s, 1),
                "caidas_fuente": res.caidas_fuente,
                "turnos": "vad_auto" if a.vad_auto else "manuales", "transporte": a.transporte,
+               "traducciones": [_resumen_trad(t) for t in traductores],
                "traduccion": None if traductor is None else {
                    "a": traductor.a, "llamadas": traductor.n_llamadas, "lotes": traductor.n_lotes,
                    "lotes_ok_false": traductor.n_ok_false, "por_modelo": traductor.por_modelo,

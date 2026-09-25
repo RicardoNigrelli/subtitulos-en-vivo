@@ -29,7 +29,7 @@ Verificar el rótulo: `grep -n "SOURCE_REPLAY\|\[TEST\] \|REPLAY" worker/transpo
 --agenda AGENDA       agenda JSON (R8c): el glosario de la charla se SUMA a --vocab
 --charla ID           id de la charla en la agenda (default: --sesion)
 --sesion SESION       session_id público de la sala (obligatorio)
---lang {en,es}        idioma de origen (obligatorio)
+--lang {en,es,pt,fr,de,it}  idioma de origen (obligatorio; probados en vivo: en, es)
 --inicio INICIO       segundo de la fuente donde arranca (default 0)
 --duracion DURACION   segundos de fuente a enviar (default: toda)
 --hub HUB             ws://host:puerto/ingest (sin --hub no publica; igual graba el casete)
@@ -43,7 +43,7 @@ Verificar el rótulo: `grep -n "SOURCE_REPLAY\|\[TEST\] \|REPLAY" worker/transpo
 --ventana-s S         ventana objetivo del cortador
 --gap-s S             gap entre activity_end y el siguiente activity_start
 --drenaje-s S         espera de turnos pendientes al fin de la fuente
---traducir-a X        codigo ISO del idioma destino (es, en, pt...) | none | auto (en→es, es→en)
+--traducir-a X        lista de codigos ISO destino (es,pt,fr) | none | auto (en→es, es→en)
 --timeout-trad-s S    timeout por llamada del traductor
 --vad-auto            VAD automático del server (sin turnos manuales; sólo para el A/B)
 --sin-reabrir         desactiva la reapertura con solape (una sola conexión)
@@ -54,14 +54,21 @@ Defaults exactos: `python -m worker.run --help` y `grep -n "add_argument" worker
 
 **Qué idiomas acepta cada flag.**
 
-- `--lang {en,es}`: idioma de ORIGEN que recibe el modelo Live (`contracts/esquema.json#lang_origen`,
-  congelado por R18 a español/inglés). Verificado HOY con ASR real: `en` y `es` (ver filas R17a+R18 y
-  CHECKPOINT de `ESTADO.md`). Otros códigos: la API los rechazaría o el `argparse` los corta antes
-  (`choices=["en", "es"]`); no probados, no se afirma que funcionen.
+- `--lang {en,es,pt,fr,de,it}`: idioma de ORIGEN que recibe el modelo Live. **Probados en vivo: en,
+  es** (ver filas R17a+R18 y CHECKPOINT de `ESTADO.md`); `pt`, `fr`, `de`, `it` los acepta el
+  `argparse` con un AVISO en el log, sin prueba en vivo. Ojo: el contrato
+  (`contracts/esquema.json#lang_origen`) hoy sólo admite `en`/`es`: con otro idioma el hub RECHAZA los
+  mensajes hasta que backend amplíe ese enum.
+- `--traducir-a es,pt,fr` (25/09): LISTA de idiomas destino separada por comas; `auto` = el opuesto
+  en/es (en→es, es→en; otro origen → es); `none` = sin traducción. Un `Traductor` por idioma, todos con
+  el mismo transporte (key `--key`) y el mismo `Limitador` (reservas por (key, modelo)): **cada idioma
+  suma una llamada por texto a la misma key** (2 idiomas = el doble de RPM). Sale un `translation` por
+  idioma (`meta.lang_to`) y `session_start.meta.translations_langs` con la lista completa. Tests:
+  `worker/tests/test_multi_idioma.py`.
 - `--traducir-a` / `worker.traducir_casete --a`: idioma DESTINO de la traducción, GENÉRICO por código
   ISO (`contracts/esquema.json#lang_destino`, patrón `^[a-z]{2}(-[A-Z]{2})?$`: `es`, `en`, `pt`,
   `pt-BR`...; no es una lista cerrada de `{es,en}`). `worker/traductor.py` (`IDIOMAS`) le da un nombre
-  legible al prompt si lo conoce (`en`, `es`, `pt`) y usa el código tal cual si no; Gemini lo traduce
+  legible al prompt si lo conoce (`en`, `es`, `pt`, `fr`, `de`, `it`) y usa el código tal cual si no; Gemini lo traduce
   igual. R19 obliga EN→ES; ES→EN sale gratis (R14); **`pt` verificado offline contra un casete real**
   (B10: `reportes/audio-pipeline-b10-pt.md`). Otros códigos ISO: no verificados con una llamada real,
   pero el camino no distingue idiomas, así que no hay motivo para que sólo fallen ellos.
@@ -491,6 +498,11 @@ que la rotación con solape cubre.
 
 Siempre: sufijo del último emitido = prefijo del nuevo. Sólo en la costura de una rotación: contenido (≥ 10 caracteres), tirada común (≥ 6 palabras) y **frase corta**: un texto de ≥ 2 palabras IGUAL o CONTENIDO (normalizado, en borde de palabra) en un emitido con audio en los últimos 20 s se descarta.
 Caso real: `fixtures/casetes/evidencia-25-09/prueba-mic-20260925-090921.jsonl` ("Bueno, muy" re-emitido por la conexión vieja tras la reapertura); test `worker/tests/test_costura_corta.py`. Fuera de la costura nada cambia.
+
+## Pegados del servicio degradado (`worker/normalizar.py`)
+
+Antes de emitir `text`/`partial` y de traducir: espacio tras `.?!,;:` pegado a letra/dígito (salvo `3.5`, `10:30`, `e.g.`, `U.S.`, dominios, URLs) y entre `minúsculaMayúscula` (salvo PascalCase, lista de marcas y `--vocab`/glosario); la palabra repetida NO se quita (`NORMALIZAR_REPETIDAS=1` la prende sólo en turnos mergeados: en el casete `muestra-en-20260925-094954` "This this" es habla real y "build build" artefacto) y lo pegado sin marca ("saysay", "morein") no se toca.
+Turno mergeado (> 1 ventana) o con pegados: una llamada de limpieza al modelo de texto (mismo limitador/reservas, timeout `LIMPIEZA_TIMEOUT_S`=3 s, APAGADA por defecto, `LIMPIEZA_MERGE=1` la prende: en pruebas reales venció el timeout 2 de 2 veces y con 15 s borró una palabra real), validada (largo 85–105 %, sin palabras nuevas, ≥ 95 % de caracteres iguales, misma lengua); si falla sale el texto conservador. Tests: `worker/tests/test_normalizar.py`.
 
 ## Tests
 

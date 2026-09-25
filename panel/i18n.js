@@ -24,6 +24,7 @@
       vista_aria_label: 'Vista del panel',
 
       btn_config: 'Configuración',
+      btn_salas: 'Salas',
       btn_locale_aria: 'Idioma del panel',
 
       ayuda_aria_informativa: 'Cómo leer el panel',
@@ -51,6 +52,7 @@
       ayuda_bullet_urgencia: 'Las tarjetas se ordenan por urgencia: lo que hay que atender aparece primero.',
       ayuda_bullet_quehacer: '«Qué hacer» es una sugerencia concreta, no una orden.',
       ayuda_bullet_voz: 'Las alarmas también suenan en voz alta (se activan/desactivan y se les baja el volumen en Configuración → Avisos).',
+      ayuda_bullet_salas: 'El botón «Salas» (cabecera) crea, arranca, detiene y borra sesiones contra el servicio de control, sin usar la terminal.',
       ayuda_pie_tecnico: 'Detalles técnicos en la vista Técnica.',
       ayuda_contenido_tecnica:
         'Estado <code>live</code> con más de <code>15 s</code> sin un <code>type=text</code> nuevo se ' +
@@ -75,7 +77,10 @@
         'sesión y aparece junto a "Rotaciones"; el color de cada motivo (cierre/atasco/preventiva/' +
         'goaway) es un clasificador visual, el texto del motivo siempre está al lado. La franja de ' +
         'color a la izquierda de cada fila resume el estado de esa sesión (vivo/mudo/idle/ended/' +
-        'esperando), igual que el texto de la columna Estado.',
+        'esperando), igual que el texto de la columna Estado. El botón <b>Salas</b> habla con un ' +
+        'servicio de control aparte (<code>ops/control.py</code>), NO con el hub: usa el MISMO token ' +
+        'de Configuración → Acceso y, por defecto, <code>http://&lt;host&gt;:8110</code> ' +
+        '(<code>?control=host:puerto</code> lo cambia con la misma validación que <code>?hub=</code>).',
 
       config_titulo: 'Configuración',
       config_cerrar: 'Cerrar configuración',
@@ -94,6 +99,60 @@
       config_probar_aviso: 'probar aviso',
       voz_prueba: 'Este es un aviso de prueba del panel.',
 
+      salas_titulo: 'Salas',
+      salas_cerrar: 'Cerrar salas',
+      salas_seccion_lista: 'Salas activas',
+      salas_vacio: 'Todavía no hay salas. Creá la primera.',
+      salas_seccion_nueva: 'Nueva sala',
+      salas_campo_titulo: 'Nombre visible',
+      salas_campo_id: 'id',
+      salas_campo_id_ayuda: 'Se sugiere solo desde el nombre; editable. Minúsculas, dígitos, "-" y "_".',
+      salas_campo_lang: 'Idioma de la charla',
+      salas_campo_traducir_a: 'Traducir a',
+      salas_aviso_idiomas_extra: 'Cada idioma extra suma llamadas al modelo de traducción.',
+      salas_campo_fuente: 'Fuente',
+      salas_fuente_mic: 'Micrófono',
+      salas_fuente_archivo: 'Clip de prueba',
+      salas_fuente_url: 'Stream',
+      salas_actualizar: 'actualizar',
+      salas_fuente_url_ayuda: 'udp://, srt://, rtmp://',
+      salas_campo_key: 'Key',
+      salas_campo_duracion: 'Duración (s, opcional)',
+      salas_campo_arrancar: 'arrancar ahora',
+      salas_crear: 'Crear sala',
+      salas_copiar_comando: 'copiar comando',
+      salas_copiado: 'copiado',
+      salas_servicio_no_responde: 'El servicio de control no está corriendo: {comando}',
+      salas_falta_token: 'Cargá el token en Configuración.',
+      salas_sin_probar: '(sin probar en vivo)',
+      salas_sin_microfonos: 'No se detectaron micrófonos.',
+      salas_sin_archivos: 'No hay clips en fixtures/audio/clips/.',
+      salas_fuente_mic_legible: 'Micrófono: {valor}',
+      salas_fuente_archivo_legible: 'Clip: {valor}',
+      salas_fuente_url_legible: 'Stream: {valor}',
+      salas_estado_detenida: 'Detenida',
+      salas_estado_arrancando: 'Arrancando',
+      salas_estado_corriendo: 'Corriendo',
+      salas_estado_reiniciando: 'Reiniciando',
+      salas_estado_deteniendo: 'Deteniendo',
+      salas_estado_error: 'Error: {detalle}',
+      salas_btn_iniciar: 'Iniciar',
+      salas_btn_detener: 'Detener',
+      salas_btn_borrar: 'Borrar',
+      salas_ver_sala: 'Ver sala',
+      salas_confirmar_borrar: '¿Borrar la sala "{titulo}"? No se puede deshacer.',
+      salas_sin_traduccion: 'sin traducción',
+      salas_duracion_sin_limite: 'sin límite (modo sala)',
+      salas_duracion_valor: '{n} s',
+      salas_error_generico: 'No se pudo completar: {detalle}',
+      salas_error_crear: 'No se pudo crear la sala: {detalle}',
+      salas_intentos: '{n} intentos',
+      salas_pid: 'pid {pid}',
+      salas_id_repetido_sugerencia: 'Ya existe una sala con ese id; se sugirió uno nuevo.',
+      salas_escuchar: 'Escuchar',
+      salas_fuente_mic_en_vivo: 'Escuchás la sala en vivo.',
+      salas_ver_original: 'Ver original en YouTube (desde {m})',
+
       pruebas_sin: 'sin sesiones TEST',
       pruebas_singular: 'sesión TEST',
       pruebas_plural: 'sesiones TEST',
@@ -107,6 +166,7 @@
       actualizado: 'actualizado {hora}',
       chip_conexion: 'conexión panel: {n}/{total} en vivo',
       chip_hub_seguridad: 'hub externo ignorado por seguridad: "{valor}"',
+      chip_control_seguridad: 'control externo ignorado por seguridad: "{valor}"',
       aviso_sin_respuesta: 'No se pudo leer {url} ({detalle}). Los contadores que se ven quedaron en el último valor conocido.',
 
       resumen_en_vivo: 'en vivo',
@@ -192,6 +252,7 @@
       vista_aria_label: 'Panel view',
 
       btn_config: 'Settings',
+      btn_salas: 'Rooms',
       btn_locale_aria: 'Panel language',
 
       ayuda_aria_informativa: 'How to read the panel',
@@ -215,6 +276,7 @@
       ayuda_bullet_urgencia: 'Cards are sorted by urgency: whatever needs attention comes first.',
       ayuda_bullet_quehacer: '"What to do" is a concrete suggestion, not an order.',
       ayuda_bullet_voz: 'Alerts also sound out loud (turn them on/off and set the volume in Settings → Alerts).',
+      ayuda_bullet_salas: 'The "Rooms" button (header) creates, starts, stops and deletes sessions through the control service, no terminal needed.',
       ayuda_pie_tecnico: 'Technical details are in the Technical view.',
       ayuda_contenido_tecnica:
         'A <code>live</code> state with more than <code>15 s</code> without a new <code>type=text</code> ' +
@@ -239,7 +301,10 @@
         'appears next to "Rotations"; the color of each reason (cierre/atasco/preventiva/goaway) is a ' +
         'visual classifier, the reason\'s text is always alongside it. The colored stripe on the left of ' +
         'each row summarizes that session\'s state (live/mute/idle/ended/waiting), same as the text in ' +
-        'the Status column.',
+        'the Status column. The <b>Rooms</b> button talks to a separate control service ' +
+        '(<code>ops/control.py</code>), NOT the hub: it uses the SAME token from Settings → Access and, ' +
+        'by default, <code>http://&lt;host&gt;:8110</code> (<code>?control=host:port</code> overrides it ' +
+        'with the same validation as <code>?hub=</code>).',
 
       config_titulo: 'Settings',
       config_cerrar: 'Close settings',
@@ -258,6 +323,60 @@
       config_probar_aviso: 'test alert',
       voz_prueba: 'This is a test alert from the panel.',
 
+      salas_titulo: 'Rooms',
+      salas_cerrar: 'Close rooms',
+      salas_seccion_lista: 'Active rooms',
+      salas_vacio: 'No rooms yet. Create the first one.',
+      salas_seccion_nueva: 'New room',
+      salas_campo_titulo: 'Display name',
+      salas_campo_id: 'id',
+      salas_campo_id_ayuda: 'Suggested from the name; editable. Lowercase, digits, "-" and "_".',
+      salas_campo_lang: 'Talk language',
+      salas_campo_traducir_a: 'Translate to',
+      salas_aviso_idiomas_extra: 'Each extra language adds calls to the translation model.',
+      salas_campo_fuente: 'Source',
+      salas_fuente_mic: 'Microphone',
+      salas_fuente_archivo: 'Test clip',
+      salas_fuente_url: 'Stream',
+      salas_actualizar: 'refresh',
+      salas_fuente_url_ayuda: 'udp://, srt://, rtmp://',
+      salas_campo_key: 'Key',
+      salas_campo_duracion: 'Duration (s, optional)',
+      salas_campo_arrancar: 'start now',
+      salas_crear: 'Create room',
+      salas_copiar_comando: 'copy command',
+      salas_copiado: 'copied',
+      salas_servicio_no_responde: 'The control service is not running: {comando}',
+      salas_falta_token: 'Load the token in Settings.',
+      salas_sin_probar: '(untested live)',
+      salas_sin_microfonos: 'No microphones detected.',
+      salas_sin_archivos: 'No clips in fixtures/audio/clips/.',
+      salas_fuente_mic_legible: 'Microphone: {valor}',
+      salas_fuente_archivo_legible: 'Clip: {valor}',
+      salas_fuente_url_legible: 'Stream: {valor}',
+      salas_estado_detenida: 'Stopped',
+      salas_estado_arrancando: 'Starting',
+      salas_estado_corriendo: 'Running',
+      salas_estado_reiniciando: 'Restarting',
+      salas_estado_deteniendo: 'Stopping',
+      salas_estado_error: 'Error: {detalle}',
+      salas_btn_iniciar: 'Start',
+      salas_btn_detener: 'Stop',
+      salas_btn_borrar: 'Delete',
+      salas_ver_sala: 'View room',
+      salas_confirmar_borrar: 'Delete room "{titulo}"? This cannot be undone.',
+      salas_sin_traduccion: 'no translation',
+      salas_duracion_sin_limite: 'no limit (room mode)',
+      salas_duracion_valor: '{n} s',
+      salas_error_generico: 'Could not complete: {detalle}',
+      salas_error_crear: 'Could not create the room: {detalle}',
+      salas_intentos: '{n} attempts',
+      salas_pid: 'pid {pid}',
+      salas_id_repetido_sugerencia: 'That id already exists; a new one was suggested.',
+      salas_escuchar: 'Listen',
+      salas_fuente_mic_en_vivo: 'You\'re listening to the room live.',
+      salas_ver_original: 'View original on YouTube (from {m})',
+
       pruebas_sin: 'no TEST sessions',
       pruebas_singular: 'TEST session',
       pruebas_plural: 'TEST sessions',
@@ -271,6 +390,7 @@
       actualizado: 'updated {hora}',
       chip_conexion: 'panel connection: {n}/{total} live',
       chip_hub_seguridad: 'external hub ignored for security: "{valor}"',
+      chip_control_seguridad: 'external control ignored for security: "{valor}"',
       aviso_sin_respuesta: 'Could not read {url} ({detalle}). The counters shown are stuck at the last known value.',
 
       resumen_en_vivo: 'live',

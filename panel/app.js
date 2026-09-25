@@ -683,6 +683,13 @@
     var accionHtml = estado.accion ? '<p class="tarjeta__accion"><b>' + esc(t('accion_prefijo')) + '</b> ' + esc(estado.accion) + '</p>' : '';
     var espectadores = s.viewers || 0;
     var textoEspectadores = espectadores === 1 ? t('espectador_uno', { n: num(espectadores) }) : t('espectador_varios', { n: num(espectadores) });
+    // Addendum Ricardo ("escuchar el original"): botón chico sólo si el drawer de Salas conoce esta
+    // sesión y su fuente es un clip (salasEstado.porId, sección "control de salas" más abajo en este
+    // mismo archivo — hoisted, se resuelve en tiempo de ejecución, no de parseo).
+    var infoControl = (typeof salasEstado !== 'undefined' && salasEstado.porId) ? salasEstado.porId[s.id] : null;
+    var escucharHtml = (infoControl && infoControl.fuente && infoControl.fuente.tipo === 'archivo')
+      ? '<button type="button" class="tarjeta__escuchar" data-accion="escuchar-tarjeta" data-id="' + esc(s.id) + '">' + esc(t('salas_escuchar')) + '</button>'
+      : '';
     return (
       '<article class="tarjeta tarjeta--' + estado.clase + '" data-estado="' + estado.clase + '" data-id="' + esc(s.id) + '">' +
         '<header class="tarjeta__cabecera">' +
@@ -693,7 +700,7 @@
         '<p class="tarjeta__estado"><span class="tarjeta__icono" aria-hidden="true">' + estado.icono + '</span>' +
           esc(estado.texto) + '</p>' +
         accionHtml +
-        '<p class="tarjeta__pie">' + esc(textoEspectadores) + '</p>' +
+        '<p class="tarjeta__pie">' + esc(textoEspectadores) + escucharHtml + '</p>' +
       '</article>'
     );
   }
@@ -1040,6 +1047,7 @@
       if (onClickFueraLigado) { document.removeEventListener('click', onClickFueraLigado); onClickFueraLigado = null; }
       if (opciones && opciones.overlay) opciones.overlay.hidden = true;
       if (devolverFoco !== false) btn.focus();
+      if (opciones && typeof opciones.alCerrar === 'function') opciones.alCerrar();
     }
     btn.addEventListener('click', function () { abierto ? cerrar(true) : abrir(); });
     var botonesCerrar = elFlotante.querySelectorAll('[data-cerrar-popover]');
@@ -1106,7 +1114,7 @@
         '<span class="ayuda-lista__texto"><b>' + esc(t(f.tituloKey)) + '</b> — ' + esc(t(f.textoKey)) + '</span>' +
       '</li>';
     }).join('');
-    var bullets = ['ayuda_bullet_urgencia', 'ayuda_bullet_quehacer', 'ayuda_bullet_voz'].map(function (k) {
+    var bullets = ['ayuda_bullet_urgencia', 'ayuda_bullet_quehacer', 'ayuda_bullet_voz', 'ayuda_bullet_salas'].map(function (k) {
       return '<li>' + esc(t(k)) + '</li>';
     }).join('');
     el.innerHTML =
@@ -1150,8 +1158,516 @@
   });
   aplicarI18nEstatico();
 
+  // ---------------------------------------------------------------- control de salas (drawer "Salas")
+  // Servicio APARTE del hub (`ops/control.py`, o `qa/out/panel-control/stub_control.py` mientras no
+  // exista — ver reportes/monitor-control.md), mismo token que /api/metricas (leerToken() de arriba,
+  // Authorization: Bearer, NUNCA query string). Resolución de origen: default
+  // `http://<location.hostname>:8110`; `?control=host:puerto` la sobrescribe con la MISMA validación
+  // que `?hub=` (hubParamSeguro, ya definida arriba: sin userinfo, sin "@ / \ ? #", sólo localhost/
+  // 127.0.0.1/[::1]/el mismo host). Un valor rechazado se ignora completo y se avisa con texto
+  // (#chip-control-seguridad), igual que el hub.
+  var controlParamCrudo = params.get('control');
+  var controlParam = (controlParamCrudo && hubParamSeguro(controlParamCrudo)) ? controlParamCrudo : null;
+  var controlIgnoradoPorSeguridad = !!controlParamCrudo && !controlParam;
+  var PUERTO_DEV_CONTROL_DEFAULT = '8110';
+  var CONTROL_BASE = httpScheme + '://' + (controlParam || (location.hostname + ':' + PUERTO_DEV_CONTROL_DEFAULT));
+  var CONTROL_POLL_MS = 3000; // brief: refresco cada 3 s; corre siempre (drawer abierto o cerrado) para
+                              // que las tarjetas Informativa sepan qué salas tienen clip ("Escuchar").
+  var PUERTO_DEV_WEB = '8101';
+
+  var elChipControlSeguridad = document.getElementById('chip-control-seguridad');
+  function actualizarChipControlSeguridad() {
+    if (!elChipControlSeguridad) return;
+    if (controlIgnoradoPorSeguridad) {
+      elChipControlSeguridad.textContent = t('chip_control_seguridad', { valor: controlParamCrudo });
+      elChipControlSeguridad.hidden = false;
+    } else {
+      elChipControlSeguridad.hidden = true;
+    }
+  }
+  actualizarChipControlSeguridad();
+
+  // Misma lógica que web/index.html para armar el link "Ver sala": si el hub sirve panel Y web desde
+  // el mismo origen (mismoOrigen, definida arriba), la vista vive en location.origin; si no (dev,
+  // panel en 8102 aparte), en el puerto de dev de web/servir.py (8101) del mismo host.
+  function urlVistaSala(id, langMostrar) {
+    var qs = 'lang=' + encodeURIComponent(langMostrar);
+    if (mismoOrigen) return location.origin + '/s/' + encodeURIComponent(id) + '?' + qs;
+    return httpScheme + '://' + location.hostname + ':' + PUERTO_DEV_WEB + '/s/' + encodeURIComponent(id) + '?' + qs;
+  }
+
+  function fetchControl(path, method, body) {
+    var tok = leerToken();
+    var headers = {};
+    if (tok) headers.Authorization = 'Bearer ' + tok;
+    var opts = { method: method || 'GET', headers: headers };
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(CONTROL_BASE + path, opts);
+  }
+
+  var salasEstado = {
+    disponible: null,   // null: todavía no se supo · true/false
+    requiereToken: false,
+    salas: [],
+    porId: {},
+    fuentes: null,
+    audios: {}           // id -> <audio> persistido (addendum "escuchar": no recrear en cada poll)
+  };
+
+  function basename(p) { return String(p || '').split(/[\\/]/).pop(); }
+
+  function destinosDeTraducirA(traducirA, langOrigen) {
+    if (!traducirA || traducirA === 'none') return [];
+    if (traducirA === 'auto') return [langOrigen === 'en' ? 'es' : 'en']; // valor legado, por si acaso
+    return traducirA.split(',').filter(function (x) { return x && x !== langOrigen; });
+  }
+  function idiomaSalaTexto(sala) {
+    var origen = nombreIdioma(sala.lang);
+    var destinos = destinosDeTraducirA(sala.traducir_a, sala.lang);
+    if (!destinos.length) return origen + ' (' + t('salas_sin_traduccion') + ')';
+    return origen + ' → ' + destinos.map(nombreIdioma).join(', ');
+  }
+  function langParaVista(sala) {
+    var destinos = destinosDeTraducirA(sala.traducir_a, sala.lang);
+    return destinos.length ? destinos[0] : sala.lang;
+  }
+
+  function iconoEstadoSala(estado) {
+    if (estado === 'corriendo') return 'exito';
+    if (estado === 'arrancando' || estado === 'deteniendo') return 'aviso';
+    if (estado === 'reiniciando') return 'atencion';
+    if (estado === 'error') return 'error';
+    return 'silenciado'; // detenida
+  }
+  function textoEstadoSala(sala) {
+    if (sala.estado === 'corriendo') return t('salas_estado_corriendo');
+    if (sala.estado === 'arrancando') return t('salas_estado_arrancando');
+    if (sala.estado === 'reiniciando') return t('salas_estado_reiniciando');
+    if (sala.estado === 'deteniendo') return t('salas_estado_deteniendo');
+    if (sala.estado === 'error') return t('salas_estado_error', { detalle: sala.ultimo_error || '—' });
+    return t('salas_estado_detenida');
+  }
+  function fuenteLegible(fuente) {
+    if (!fuente) return '—';
+    if (fuente.tipo === 'mic') return t('salas_fuente_mic_legible', { valor: fuente.valor });
+    if (fuente.tipo === 'archivo') return t('salas_fuente_archivo_legible', { valor: basename(fuente.valor) });
+    if (fuente.tipo === 'url') return t('salas_fuente_url_legible', { valor: fuente.valor });
+    return '—';
+  }
+  function fmtMinSeg(s) {
+    s = Math.max(0, Math.round(s || 0));
+    return Math.floor(s / 60) + ':' + pad2(s % 60);
+  }
+  function urlYoutubeConTiempo(videoOrigen) {
+    var sep = videoOrigen.url.indexOf('?') > -1 ? '&' : '?';
+    return videoOrigen.url + sep + 't=' + Math.round(videoOrigen.inicio_s || 0) + 's';
+  }
+
+  // ---- reproducción sincronizada del clip (addendum "escuchar el original") ----
+  function obtenerAudioEl(sala) {
+    if (!salasEstado.audios[sala.id]) {
+      var el = document.createElement('audio');
+      el.preload = 'none';
+      salasEstado.audios[sala.id] = el;
+    }
+    return salasEstado.audios[sala.id];
+  }
+  function urlAudioClip(fuente) {
+    return CONTROL_BASE + '/api/control/audio/' + encodeURIComponent(basename(fuente.valor));
+  }
+  function sincronizarYReproducir(sala, audioEl, volumen) {
+    if (!audioEl.src) audioEl.src = urlAudioClip(sala.fuente);
+    var anchor = sala.audio_inicio;
+    function posicionar() {
+      var pos = anchor ? (Date.now() / 1000 - anchor) : 0;
+      if (!isFinite(pos) || pos < 0) pos = 0;
+      if (audioEl.duration && isFinite(audioEl.duration) && pos >= audioEl.duration) pos = 0;
+      try { audioEl.currentTime = pos; } catch (e) { /* metadata todavía no cargó: se reintenta abajo */ }
+    }
+    if (audioEl.readyState >= 1) posicionar();
+    else audioEl.addEventListener('loadedmetadata', posicionar, { once: true });
+    audioEl.volume = (volumen == null ? 0.7 : volumen);
+    var p = audioEl.play();
+    if (p && p.catch) p.catch(function (e) { console.warn('panel: no se pudo reproducir el clip', e); });
+  }
+  function alternarEscuchar(sala, volumenPorDefecto) {
+    var audioEl = obtenerAudioEl(sala);
+    if (!audioEl.paused) { audioEl.pause(); return; }
+    sincronizarYReproducir(sala, audioEl, audioEl.volume || volumenPorDefecto || 0.7);
+  }
+
+  // ---- polling: /api/control/salas y /api/control/fuentes ----
+  function actualizarSalas() {
+    return fetchControl('/api/control/salas').then(function (r) {
+      if (r.status === 401) {
+        salasEstado.disponible = true;
+        salasEstado.requiereToken = true;
+        salasEstado.salas = [];
+        return;
+      }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json().then(function (data) {
+        salasEstado.disponible = true;
+        salasEstado.requiereToken = false;
+        salasEstado.salas = Array.isArray(data.salas) ? data.salas : [];
+      });
+    }).catch(function () {
+      salasEstado.disponible = false;
+      salasEstado.salas = [];
+    }).then(function () {
+      salasEstado.porId = {};
+      salasEstado.salas.forEach(function (s) { salasEstado.porId[s.id] = s; });
+      if (!elPanelSalas || !elPanelSalas.hidden) renderSalas();
+      render(); // refresca las tarjetas Informativa (botón "Escuchar" por sesión)
+    });
+  }
+  function actualizarFuentes() {
+    return fetchControl('/api/control/fuentes').then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).then(function (data) {
+      salasEstado.fuentes = data;
+      poblarSelectsFuente();
+    }).catch(function (e) { console.warn('panel: no se pudo leer /api/control/fuentes', e); });
+  }
+
+  // ---- acciones ----
+  function mostrarErrorGeneral(msg) {
+    var el = document.getElementById('salas-error-general');
+    if (!el) return;
+    el.textContent = msg;
+    el.hidden = false;
+  }
+  function accionSala(id, accion) {
+    fetchControl('/api/control/salas/' + encodeURIComponent(id) + '/' + accion, 'POST').then(function (r) {
+      if (!r.ok) return r.json().catch(function () { return {}; }).then(function (d) {
+        throw new Error(d.error || ('HTTP ' + r.status));
+      });
+      return actualizarSalas();
+    }).catch(function (e) { mostrarErrorGeneral(t('salas_error_generico', { detalle: e.message || String(e) })); });
+  }
+  function borrarSala(id) {
+    fetchControl('/api/control/salas/' + encodeURIComponent(id), 'DELETE').then(function (r) {
+      if (!(r.ok || r.status === 204)) throw new Error('HTTP ' + r.status);
+      return actualizarSalas();
+    }).catch(function (e) { mostrarErrorGeneral(t('salas_error_generico', { detalle: e.message || String(e) })); });
+  }
+
+  // ---- render del drawer ----
+  var COMANDO_OPS_CONTROL = 'python -m ops.control --hub ws://localhost:8100/ingest';
+  function salaFilaHtml(sala) {
+    var claseEstado = iconoEstadoSala(sala.estado);
+    var puedeIniciar = sala.estado === 'detenida' || sala.estado === 'error';
+    var puedeDetener = sala.estado === 'corriendo' || sala.estado === 'arrancando' || sala.estado === 'reiniciando';
+    var link = urlVistaSala(sala.id, langParaVista(sala));
+    var fuenteHtml = '';
+    if (sala.fuente && sala.fuente.tipo === 'mic') {
+      fuenteHtml = '<p class="sala-fila__fuente">' + esc(fuenteLegible(sala.fuente)) +
+        ' — <span class="form-salas__ayuda">' + esc(t('salas_fuente_mic_en_vivo')) + '</span></p>';
+    } else if (sala.fuente && sala.fuente.tipo === 'url') {
+      fuenteHtml = '<p class="sala-fila__fuente">' + esc(fuenteLegible(sala.fuente)) + ' — <a href="' +
+        esc(sala.fuente.valor) + '" target="_blank" rel="noopener">' + esc(sala.fuente.valor) + '</a></p>';
+    } else if (sala.fuente && sala.fuente.tipo === 'archivo') {
+      var origenHtml = (sala.video_origen && sala.video_origen.url)
+        ? ' · <a href="' + esc(urlYoutubeConTiempo(sala.video_origen)) + '" target="_blank" rel="noopener">' +
+          esc(t('salas_ver_original', { m: fmtMinSeg(sala.video_origen.inicio_s) })) + '</a>'
+        : '';
+      fuenteHtml =
+        '<p class="sala-fila__fuente">' + esc(fuenteLegible(sala.fuente)) +
+          ' <button type="button" class="sala-fila__escuchar" data-accion="escuchar" data-id="' + esc(sala.id) + '">' +
+            esc(t('salas_escuchar')) + '</button>' +
+          '<span id="audio-slot-' + cssEscape(sala.id) + '" class="audio-slot"></span>' +
+          '<input type="range" class="sala-fila__volumen" min="0" max="100" value="70" data-accion="volumen" data-id="' + esc(sala.id) + '" aria-label="volumen">' +
+          origenHtml +
+        '</p>';
+    }
+    return (
+      '<article class="sala-fila sala-fila--' + claseEstado + '">' +
+        '<div class="sala-fila__cabecera">' +
+          '<b>' + esc(sala.titulo || sala.id) + '</b>' +
+          '<span class="sala-fila__estado sala-fila__estado--' + claseEstado + '">' +
+            '<span aria-hidden="true">●</span> ' + esc(textoEstadoSala(sala)) + '</span>' +
+        '</div>' +
+        '<p class="sala-fila__idioma">' + esc(idiomaSalaTexto(sala)) + '</p>' +
+        fuenteHtml +
+        '<p class="sala-fila__meta">' + esc(t('salas_intentos', { n: num(sala.intentos || 0) })) +
+          (sala.pid ? ' · ' + esc(t('salas_pid', { pid: sala.pid })) : '') + '</p>' +
+        '<div class="sala-fila__botones">' +
+          '<button type="button" data-accion="iniciar" data-id="' + esc(sala.id) + '"' + (puedeIniciar ? '' : ' disabled') + '>' + esc(t('salas_btn_iniciar')) + '</button>' +
+          '<button type="button" data-accion="detener" data-id="' + esc(sala.id) + '"' + (puedeDetener ? '' : ' disabled') + '>' + esc(t('salas_btn_detener')) + '</button>' +
+          '<button type="button" data-accion="borrar" data-id="' + esc(sala.id) + '" data-titulo="' + esc(sala.titulo || sala.id) + '">' + esc(t('salas_btn_borrar')) + '</button>' +
+          '<a class="sala-fila__ver" href="' + esc(link) + '" target="_blank" rel="noopener">' + esc(t('salas_ver_sala')) + '</a>' +
+        '</div>' +
+      '</article>'
+    );
+  }
+
+  var elPanelSalas = document.getElementById('panel-salas');
+  var elAvisoServicio = document.getElementById('salas-aviso-servicio');
+  var elAvisoServicioTexto = document.getElementById('salas-aviso-servicio-texto');
+  var elBtnCopiarComando = document.getElementById('salas-btn-copiar-comando');
+  var elListaSalas = document.getElementById('lista-salas');
+  var elSalasVacio = document.getElementById('salas-vacio');
+  var elFormNuevaSala = document.getElementById('form-nueva-sala');
+
+  function renderSalas() {
+    if (!elListaSalas) return;
+    if (salasEstado.disponible === false) {
+      if (elAvisoServicio) elAvisoServicio.hidden = false;
+      if (elAvisoServicioTexto) elAvisoServicioTexto.textContent = t('salas_servicio_no_responde', { comando: COMANDO_OPS_CONTROL });
+      if (elBtnCopiarComando) elBtnCopiarComando.hidden = false;
+      elListaSalas.innerHTML = ''; delete elListaSalas.dataset.ultimoHtml;
+      if (elSalasVacio) elSalasVacio.hidden = true;
+      if (elFormNuevaSala) elFormNuevaSala.hidden = true;
+      return;
+    }
+    if (elFormNuevaSala) elFormNuevaSala.hidden = false;
+    if (salasEstado.requiereToken) {
+      if (elAvisoServicio) elAvisoServicio.hidden = false;
+      if (elAvisoServicioTexto) elAvisoServicioTexto.textContent = t('salas_falta_token');
+      if (elBtnCopiarComando) elBtnCopiarComando.hidden = true;
+      elListaSalas.innerHTML = ''; delete elListaSalas.dataset.ultimoHtml;
+      if (elSalasVacio) elSalasVacio.hidden = true;
+      return;
+    }
+    if (elAvisoServicio) elAvisoServicio.hidden = true;
+    var salas = salasEstado.salas;
+    if (elSalasVacio) elSalasVacio.hidden = salas.length !== 0;
+    // Sólo se redibuja si algo cambió: redibujar cada 3 s reemplazaba los botones y un clic en
+    // "Detener" justo en ese instante se perdía (visto en la prueba de punta a punta del 25/09).
+    var htmlSalas = salas.map(salaFilaHtml).join('');
+    if (htmlSalas === elListaSalas.dataset.ultimoHtml) return;
+    elListaSalas.dataset.ultimoHtml = htmlSalas;
+    elListaSalas.innerHTML = htmlSalas;
+    // Reinsertar los <audio> ya creados (obtenerAudioEl): recrearlos en cada poll de 3 s cortaría la
+    // reproducción en curso.
+    salas.forEach(function (sala) {
+      if (sala.fuente && sala.fuente.tipo === 'archivo') {
+        var slot = document.getElementById('audio-slot-' + cssEscape(sala.id));
+        if (slot && !slot.contains(salasEstado.audios[sala.id])) slot.appendChild(obtenerAudioEl(sala));
+      }
+    });
+  }
+
+  if (elListaSalas) {
+    elListaSalas.addEventListener('click', function (e) {
+      var btn = e.target.closest ? e.target.closest('[data-accion]') : null;
+      if (!btn) return;
+      var accion = btn.getAttribute('data-accion');
+      var id = btn.getAttribute('data-id');
+      if (accion === 'iniciar' || accion === 'detener') accionSala(id, accion);
+      else if (accion === 'borrar') {
+        var titulo = btn.getAttribute('data-titulo') || id;
+        if (window.confirm(t('salas_confirmar_borrar', { titulo: titulo }))) borrarSala(id);
+      } else if (accion === 'escuchar') {
+        var sala = salasEstado.porId[id];
+        if (sala) {
+          var rango = elListaSalas.querySelector('input[data-accion="volumen"][data-id="' + id + '"]');
+          alternarEscuchar(sala, rango ? (parseInt(rango.value, 10) || 70) / 100 : 0.7);
+        }
+      }
+    });
+    elListaSalas.addEventListener('input', function (e) {
+      var el = e.target;
+      if (el.getAttribute && el.getAttribute('data-accion') === 'volumen') {
+        var sala = salasEstado.porId[el.getAttribute('data-id')];
+        if (sala) obtenerAudioEl(sala).volume = (parseInt(el.value, 10) || 0) / 100;
+      }
+    });
+  }
+
+  // Botón "Escuchar" en la tarjeta Informativa (mismo <audio> compartido, ver tarjetaHtml() arriba).
+  elTarjetas && elTarjetas.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('[data-accion="escuchar-tarjeta"]') : null;
+    if (!btn) return;
+    var sala = salasEstado.porId[btn.getAttribute('data-id')];
+    if (sala) alternarEscuchar(sala, 0.7);
+  });
+
+  if (elBtnCopiarComando) elBtnCopiarComando.addEventListener('click', function () {
+    if (!(navigator.clipboard && navigator.clipboard.writeText)) return;
+    navigator.clipboard.writeText(COMANDO_OPS_CONTROL).then(function () {
+      var prev = t('salas_copiar_comando');
+      elBtnCopiarComando.textContent = t('salas_copiado');
+      setTimeout(function () { elBtnCopiarComando.textContent = prev; }, 1500);
+    }).catch(function () { /* el comando ya está visible arriba como texto para copiar a mano */ });
+  });
+
+  // ---- formulario "Nueva sala" ----
+  function slugify(s) {
+    var out = String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+    if (out && !/^[a-z0-9]/.test(out)) out = 's' + out;
+    return out;
+  }
+  var elInputTitulo = document.getElementById('salas-input-titulo');
+  var elInputId = document.getElementById('salas-input-id');
+  var elSelectLang = document.getElementById('salas-select-lang');
+  var elChipsTraducir = document.getElementById('salas-chips-traducir');
+  var elSelectMic = document.getElementById('salas-select-mic');
+  var elSelectArchivo = document.getElementById('salas-select-archivo');
+  var elSelectKey = document.getElementById('salas-select-key');
+  var elInputUrl = document.getElementById('salas-input-url');
+  var elInputDuracion = document.getElementById('salas-input-duracion');
+  var elCheckArrancar = document.getElementById('salas-check-arrancar');
+  var elPanelMic = document.getElementById('salas-fuente-panel-mic');
+  var elPanelArchivo = document.getElementById('salas-fuente-panel-archivo');
+  var elPanelUrl = document.getElementById('salas-fuente-panel-url');
+  var elBtnActualizarFuentes = document.getElementById('salas-btn-actualizar-fuentes');
+  var idTocadoManualmente = false;
+
+  if (elInputId) elInputId.addEventListener('input', function () { idTocadoManualmente = true; });
+  if (elInputTitulo) elInputTitulo.addEventListener('input', function () {
+    if (!idTocadoManualmente && elInputId) elInputId.value = slugify(elInputTitulo.value);
+  });
+
+  var IDIOMAS_DEFAULT = [{ codigo: 'en', probado: true }, { codigo: 'es', probado: true }];
+  function idiomasDisponibles() { return (salasEstado.fuentes && salasEstado.fuentes.idiomas) || IDIOMAS_DEFAULT; }
+  function poblarChipsTraducir() {
+    if (!elChipsTraducir) return;
+    var langOrigen = elSelectLang ? elSelectLang.value : 'en';
+    var opuesto = langOrigen === 'en' ? 'es' : (langOrigen === 'es' ? 'en' : null);
+    var previos = Array.prototype.map.call(elChipsTraducir.querySelectorAll('input:checked'), function (i) { return i.value; });
+    elChipsTraducir.innerHTML = idiomasDisponibles().filter(function (idi) { return idi.codigo !== langOrigen; }).map(function (idi) {
+      var marcar = previos.length ? (previos.indexOf(idi.codigo) > -1) : (idi.codigo === opuesto);
+      return '<label class="salas-chip"><input type="checkbox" value="' + esc(idi.codigo) + '"' + (marcar ? ' checked' : '') + '> ' + esc(nombreIdioma(idi.codigo)) + '</label>';
+    }).join('');
+  }
+  function poblarIdiomas() {
+    var idiomas = idiomasDisponibles();
+    if (elSelectLang) {
+      var actual = elSelectLang.value;
+      elSelectLang.innerHTML = idiomas.map(function (idi) {
+        var sufijo = idi.probado ? '' : ' ' + t('salas_sin_probar');
+        return '<option value="' + esc(idi.codigo) + '">' + esc(nombreIdioma(idi.codigo) + sufijo) + '</option>';
+      }).join('');
+      elSelectLang.value = idiomas.some(function (i) { return i.codigo === actual; }) ? actual : (idiomas[0] ? idiomas[0].codigo : 'en');
+    }
+    poblarChipsTraducir();
+  }
+  if (elSelectLang) elSelectLang.addEventListener('change', poblarChipsTraducir);
+
+  function tipoFuenteSeleccionado() {
+    var marcado = document.querySelector('input[name="salas-fuente-tipo"]:checked');
+    return marcado ? marcado.value : 'mic';
+  }
+  function actualizarPanelFuente() {
+    var tipo = tipoFuenteSeleccionado();
+    if (elPanelMic) elPanelMic.hidden = tipo !== 'mic';
+    if (elPanelArchivo) elPanelArchivo.hidden = tipo !== 'archivo';
+    if (elPanelUrl) elPanelUrl.hidden = tipo !== 'url';
+  }
+  document.querySelectorAll('input[name="salas-fuente-tipo"]').forEach(function (r) {
+    r.addEventListener('change', actualizarPanelFuente);
+  });
+  actualizarPanelFuente();
+
+  function poblarSelectsFuente() {
+    var f = salasEstado.fuentes || { microfonos: [], archivos: [], keys: [] };
+    if (elSelectMic) {
+      elSelectMic.innerHTML = (f.microfonos || []).length
+        ? f.microfonos.map(function (m) { return '<option value="' + esc(m) + '">' + esc(m) + '</option>'; }).join('')
+        : '<option value="" disabled selected>' + esc(t('salas_sin_microfonos')) + '</option>';
+    }
+    if (elSelectArchivo) {
+      elSelectArchivo.innerHTML = (f.archivos || []).length
+        ? f.archivos.map(function (p) { return '<option value="' + esc(p) + '">' + esc(basename(p)) + '</option>'; }).join('')
+        : '<option value="" disabled selected>' + esc(t('salas_sin_archivos')) + '</option>';
+    }
+    if (elSelectKey) {
+      elSelectKey.innerHTML = (f.keys || []).map(function (k) { return '<option value="' + esc(k) + '">' + esc(k) + '</option>'; }).join('');
+    }
+    poblarIdiomas();
+  }
+  if (elBtnActualizarFuentes) elBtnActualizarFuentes.addEventListener('click', actualizarFuentes);
+
+  function limpiarErroresForm() {
+    ['salas-error-id', 'salas-error-fuente', 'salas-error-general'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) { el.hidden = true; el.textContent = ''; }
+    });
+  }
+  function mostrarErrorCampo(id, msg) {
+    var el = document.getElementById(id);
+    if (el) { el.textContent = msg; el.hidden = false; }
+  }
+
+  if (elFormNuevaSala) elFormNuevaSala.addEventListener('submit', function (e) {
+    e.preventDefault();
+    limpiarErroresForm();
+    var titulo = elInputTitulo ? elInputTitulo.value.trim() : '';
+    var id = elInputId ? elInputId.value.trim() : '';
+    var lang = elSelectLang ? elSelectLang.value : 'en';
+    var destinos = elChipsTraducir
+      ? Array.prototype.map.call(elChipsTraducir.querySelectorAll('input:checked'), function (i) { return i.value; })
+      : [];
+    var traducirA = destinos.length ? destinos.join(',') : 'none';
+    var tipo = tipoFuenteSeleccionado();
+    var valor = tipo === 'mic' ? (elSelectMic ? elSelectMic.value : '')
+      : tipo === 'archivo' ? (elSelectArchivo ? elSelectArchivo.value : '')
+      : (elInputUrl ? elInputUrl.value.trim() : '');
+    var duracionRaw = elInputDuracion ? elInputDuracion.value : '';
+    var duracion = duracionRaw ? parseFloat(duracionRaw) : null;
+    var arrancar = !!(elCheckArrancar && elCheckArrancar.checked);
+    var key = elSelectKey ? elSelectKey.value : '';
+
+    if (!titulo) return mostrarErrorCampo('salas-error-general', t('salas_error_generico', { detalle: 'nombre requerido' }));
+    if (!id) return mostrarErrorCampo('salas-error-id', t('salas_error_generico', { detalle: 'id requerido' }));
+    if (!valor) return mostrarErrorCampo('salas-error-fuente', t('salas_error_generico', { detalle: 'fuente requerida' }));
+
+    var body = {
+      id: id, titulo: titulo, lang: lang, traducir_a: traducirA,
+      fuente: { tipo: tipo, valor: valor }, key: key, duracion_s: duracion, arrancar: arrancar
+    };
+    fetchControl('/api/control/salas', 'POST', body).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (data) {
+        if (r.status === 201) {
+          idTocadoManualmente = false;
+          elFormNuevaSala.reset();
+          if (elCheckArrancar) elCheckArrancar.checked = true;
+          actualizarPanelFuente();
+          poblarIdiomas();
+          return actualizarSalas();
+        }
+        if (r.status === 409 && /id/.test(String(data.error || ''))) {
+          var nuevo = id, i = 1;
+          do { i += 1; nuevo = id + '-' + i; } while (salasEstado.porId[nuevo]);
+          if (elInputId) elInputId.value = nuevo;
+          idTocadoManualmente = true;
+          return mostrarErrorCampo('salas-error-id', t('salas_id_repetido_sugerencia'));
+        }
+        mostrarErrorCampo('salas-error-general', t('salas_error_crear', { detalle: data.error || ('HTTP ' + r.status) }));
+      });
+    }).catch(function (e) {
+      mostrarErrorCampo('salas-error-general', t('salas_error_crear', { detalle: e.message || String(e) }));
+    });
+  });
+
+  // ---- abrir/cerrar el drawer (mismo patrón que Configuración, crearFlotante ya definida arriba) ----
+  var elBtnSalas = document.getElementById('btn-salas');
+  var elOverlaySalas = document.getElementById('overlay-salas');
+  var elBtnSalasCerrar = document.getElementById('btn-salas-cerrar');
+  if (elBtnSalas && elPanelSalas) {
+    var drawerSalas = crearFlotante(elBtnSalas, elPanelSalas, {
+      overlay: elOverlaySalas,
+      alAbrir: function () {
+        renderSalas();
+        actualizarFuentes();
+        if (elInputTitulo) elInputTitulo.focus();
+      }
+    });
+    if (elOverlaySalas) elOverlaySalas.addEventListener('click', function () { drawerSalas.cerrar(false); });
+    if (elBtnSalasCerrar) elBtnSalasCerrar.addEventListener('click', function () { drawerSalas.cerrar(true); });
+  }
+
   // ---------------------------------------------------------------- arranque
   pollSesiones();
   setInterval(pollSesiones, POLL_MS);
   setInterval(render, TICK_MS);
+  actualizarSalas();
+  actualizarFuentes();
+  setInterval(actualizarSalas, CONTROL_POLL_MS);
 })();

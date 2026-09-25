@@ -18,6 +18,14 @@
       <div class="cabecera__botones">
         <button type="button" id="btn-ayuda-informativa" class="ayuda__boton ayuda-informativa" aria-haspopup="dialog" aria-expanded="false" aria-controls="popover-ayuda-informativa" data-i18n-attr="aria-label:ayuda_aria_informativa">?</button>
         <button type="button" id="btn-ayuda-tecnica" class="ayuda__boton ayuda-tecnica" aria-haspopup="dialog" aria-expanded="false" aria-controls="popover-ayuda-tecnica" data-i18n-attr="aria-label:ayuda_aria_tecnica" hidden>?</button>
+        <button type="button" id="btn-salas" class="btn-icono" aria-haspopup="dialog" aria-expanded="false" aria-controls="panel-salas">
+          <svg class="icono-salas" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+            <rect x="1.5" y="4" width="7" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/>
+            <rect x="11.5" y="4" width="7" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/>
+            <rect x="6.5" y="12" width="7" height="6" rx="1" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          </svg>
+          <span data-i18n="btn_salas"></span>
+        </button>
         <button type="button" id="btn-config" class="btn-icono" aria-haspopup="dialog" aria-expanded="false" aria-controls="panel-config">
           <svg class="icono-engranaje" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
             <path fill="currentColor" d="M8.4 1.6h3.2l.45 2.1c.5.17.98.4 1.42.68l1.9-.98 2.26 2.26-.98 1.9c.28.44.5.92.68 1.42l2.1.45v3.2l-2.1.45a6.9 6.9 0 0 1-.68 1.42l.98 1.9-2.26 2.26-1.9-.98c-.44.28-.92.5-1.42.68l-.45 2.1H8.4l-.45-2.1a6.9 6.9 0 0 1-1.42-.68l-1.9.98-2.26-2.26.98-1.9a6.9 6.9 0 0 1-.68-1.42l-2.1-.45v-3.2l2.1-.45c.17-.5.4-.98.68-1.42l-.98-1.9L4.63 3.4l1.9.98c.44-.28.92-.5 1.42-.68l.45-2.1ZM10 13.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/>
@@ -33,6 +41,7 @@
         <span id="ultima-actualizacion" class="chip"></span>
         <span id="chip-conexion" class="chip">—</span>
         <span id="chip-hub-seguridad" class="chip chip--warn" hidden></span>
+        <span id="chip-control-seguridad" class="chip chip--warn" hidden></span>
       </div>
     </div>
   </header>
@@ -92,6 +101,87 @@
         <div class="drawer__botones">
           <button type="button" id="btn-probar-aviso" data-i18n="config_probar_aviso"></button>
         </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Drawer de Salas (crear/arrancar/detener/borrar salas vía el servicio de control externo,
+       `ops/control.py` o el stub de desarrollo `qa/out/panel-control/stub_control.py`; ver
+       panel/app.js sección "control de salas" y panel/README.md "Salas"). Mismo patrón que el
+       drawer de Configuración: overlay + drawer lateral, foco al abrir/cerrar. -->
+  <div id="overlay-salas" class="overlay" hidden></div>
+  <div id="panel-salas" class="drawer drawer--ancho" role="dialog" aria-modal="false" aria-labelledby="panel-salas-titulo" hidden>
+    <div class="drawer__cabecera">
+      <h2 id="panel-salas-titulo" data-i18n="salas_titulo"></h2>
+      <button type="button" id="btn-salas-cerrar" class="popover__cerrar" data-i18n-attr="aria-label:salas_cerrar">×</button>
+    </div>
+    <div class="drawer__contenido">
+      <div id="salas-aviso-servicio" class="salas-aviso-servicio" hidden>
+        <p id="salas-aviso-servicio-texto"></p>
+        <div class="drawer__botones">
+          <button type="button" id="salas-btn-copiar-comando" data-i18n="salas_copiar_comando" hidden></button>
+        </div>
+      </div>
+
+      <section class="drawer__seccion">
+        <h3 data-i18n="salas_seccion_lista"></h3>
+        <div id="lista-salas" class="lista-salas"></div>
+        <p id="salas-vacio" class="tarjetas-vacio" data-i18n="salas_vacio" hidden></p>
+      </section>
+
+      <section class="drawer__seccion">
+        <h3 data-i18n="salas_seccion_nueva"></h3>
+        <form id="form-nueva-sala" class="form-salas" novalidate>
+          <label class="drawer__campo" for="salas-input-titulo" data-i18n="salas_campo_titulo"></label>
+          <input type="text" id="salas-input-titulo" autocomplete="off" required>
+
+          <label class="drawer__campo" for="salas-input-id" data-i18n="salas_campo_id"></label>
+          <input type="text" id="salas-input-id" autocomplete="off" spellcheck="false" required>
+          <p class="form-salas__ayuda" data-i18n="salas_campo_id_ayuda"></p>
+          <p id="salas-error-id" class="form-salas__error" hidden></p>
+
+          <label class="drawer__campo" for="salas-select-lang" data-i18n="salas_campo_lang"></label>
+          <select id="salas-select-lang"></select>
+
+          <span class="drawer__campo" data-i18n="salas_campo_traducir_a"></span>
+          <div id="salas-chips-traducir" class="salas-chips" role="group" aria-labelledby="salas-chips-traducir-label"></div>
+          <p class="form-salas__ayuda" data-i18n="salas_aviso_idiomas_extra"></p>
+
+          <span class="drawer__campo" data-i18n="salas_campo_fuente"></span>
+          <div class="salas-fuente-tabs" role="radiogroup" aria-label="fuente">
+            <label><input type="radio" name="salas-fuente-tipo" value="mic" checked> <span data-i18n="salas_fuente_mic"></span></label>
+            <label><input type="radio" name="salas-fuente-tipo" value="archivo"> <span data-i18n="salas_fuente_archivo"></span></label>
+            <label><input type="radio" name="salas-fuente-tipo" value="url"> <span data-i18n="salas_fuente_url"></span></label>
+          </div>
+
+          <div id="salas-fuente-panel-mic" class="salas-fuente-panel">
+            <select id="salas-select-mic"></select>
+            <button type="button" id="salas-btn-actualizar-fuentes" data-i18n="salas_actualizar"></button>
+          </div>
+          <div id="salas-fuente-panel-archivo" class="salas-fuente-panel" hidden>
+            <select id="salas-select-archivo"></select>
+          </div>
+          <div id="salas-fuente-panel-url" class="salas-fuente-panel" hidden>
+            <input type="text" id="salas-input-url" placeholder="udp://…" autocomplete="off">
+            <p class="form-salas__ayuda" data-i18n="salas_fuente_url_ayuda"></p>
+          </div>
+          <p id="salas-error-fuente" class="form-salas__error" hidden></p>
+
+          <label class="drawer__campo" for="salas-select-key" data-i18n="salas_campo_key"></label>
+          <select id="salas-select-key"></select>
+
+          <label class="drawer__campo" for="salas-input-duracion" data-i18n="salas_campo_duracion"></label>
+          <input type="number" id="salas-input-duracion" min="1" step="1" placeholder="—">
+
+          <label class="toggle-pruebas" for="salas-check-arrancar">
+            <input type="checkbox" id="salas-check-arrancar" checked> <span data-i18n="salas_campo_arrancar"></span>
+          </label>
+
+          <p id="salas-error-general" class="form-salas__error" hidden></p>
+          <div class="drawer__botones">
+            <button type="submit" id="salas-btn-crear" data-i18n="salas_crear"></button>
+          </div>
+        </form>
       </section>
     </div>
   </div>

@@ -492,9 +492,13 @@
     "lang_origen": {
       "enum": [
         "en",
-        "es"
+        "es",
+        "pt",
+        "fr",
+        "de",
+        "it"
       ],
-      "description": "Idioma ORIGINAL de la sesion (R18: espanol o ingles)."
+      "description": "Idioma ORIGINAL de la sesion (R18: espanol o ingles; 25/09 se agregan pt, fr, de, it, no probados en vivo)."
     },
     "lang_destino": {
       "type": "string",

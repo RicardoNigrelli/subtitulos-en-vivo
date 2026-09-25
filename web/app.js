@@ -144,8 +144,17 @@
                                    // real del socket; despues de esa, una caida es "reconectando…"
   var chipEstadoActual = null;    // ultimo estado puesto por setChip (alimenta actualizarEstadoVacio)
   var elEstadoVacio = null;       // <p> en #lineas con el estado vacio (conectando/esperando/sin
-                                   // conexion/sala inexistente); se borra solo con contenido real
-  var sesionInexistente = false;  // A1: /api/sesiones respondio pero no lista este session_id
+                                   // conexion/sala en espera); se borra solo con contenido real
+  // ARREGLO frontend-espera (25/09, defecto visto en vivo por Ricardo: alguien escanea el QR
+  // antes de que arranque la charla): "sala no encontrada" es un estado de ESPERA, no terminal.
+  // `salaEnEspera` reemplaza a la vieja `sesionInexistente` (que quedaba pegada para siempre y
+  // nunca reintentaba). `salaResuelta` evita que un chequeo tardio de /api/sesiones (o el reintento
+  // cada 5s) reactive la espera despues de que YA supimos por otra via (mensaje en vivo, backfill,
+  // o el propio init) que la sala existe.
+  var salaEnEspera = false;       // true: pintar "esta sala todavia no empezo" + chip "esperando la sala"
+  var salaResuelta = false;       // true en cuanto sabemos, por CUALQUIER via, que la sala existe
+  var reintentoSalaTimer = null;  // setTimeout en vuelo de verificarSalaExiste()
+  var REINTENTO_SALA_MS = 5000;   // brief: "la vista sigue reintentando /api/sesiones cada 5 s"
 
   // ---------- B4: monitor de conexión (chip de 4 estados) ----------
   // Todo en reloj del HUB (t_hub, epoch segundos) anclado con Date.now() local sólo para
@@ -172,7 +181,8 @@
       'en-vivo': 'en vivo',
       'sin-texto': 'sin texto hace ' + n + ' s',
       'reconectando': 'reconectando…',
-      'desconectado': 'desconectado'
+      'desconectado': 'desconectado',
+      'esperando-sala': 'esperando la sala' // frontend-espera: conexion sana, sala aun no arranco
     };
     var texto = textos[estado] || estado;
     if (elChip.textContent !== texto) elChip.textContent = texto;
@@ -203,8 +213,13 @@
     }
     elEstadoVacio.dataset.tipo = tipo;
     elEstadoVacio.textContent = '';
-    if (tipo === 'inexistente') {
-      elEstadoVacio.appendChild(document.createTextNode('No encontramos la sala «' + (sessionId || '') + '». '));
+    if (tipo === 'sala-espera') {
+      // frontend-espera: NO es un error terminal ("No encontramos…" invitaba a irse y nunca se
+      // borraba solo). La vista sigue conectada y reintentando (verificarSalaExiste + el propio
+      // WS, ya suscripto): en cuanto llegue cualquier señal de vida de esta sala, este párrafo
+      // desaparece solo (ver resolverSalaEnEspera), sin recargar.
+      elEstadoVacio.appendChild(document.createTextNode(
+        'Esta sala todavía no empezó. Se va a mostrar sola cuando arranque. '));
       var a = document.createElement('a');
       a.href = '/';
       a.className = 'volver-indice-inline';
@@ -219,10 +234,53 @@
   }
   function actualizarEstadoVacio() {
     if (huboContenidoReal()) { ocultarEstadoVacio(); return; }
-    if (sesionInexistente) { mostrarEstadoVacio('inexistente'); return; }
+    if (salaEnEspera) { mostrarEstadoVacio('sala-espera'); return; }
     if (chipEstadoActual === 'desconectado') { mostrarEstadoVacio('sin-conexion'); return; }
     if (chipEstadoActual === 'conectando') { mostrarEstadoVacio('conectando'); return; }
     mostrarEstadoVacio('esperando'); // en-vivo/sin-texto/reconectando sin ninguna linea todavia
+  }
+
+  // ---------- frontend-espera: resolver/reintentar la existencia de la sala ----------
+  // Se llama apenas tenemos CUALQUIER señal de que la sala existe: un match en /api/sesiones, un
+  // `init` con state != "waiting", o cualquier mensaje en vivo/backfill de esta sesion (la unica
+  // forma de que exista un mensaje de esta sesion es que el hub ya la haya visto). Idempotente.
+  function resolverSalaEnEspera() {
+    salaResuelta = true;
+    if (!salaEnEspera) return;
+    salaEnEspera = false;
+    if (reintentoSalaTimer) { clearTimeout(reintentoSalaTimer); reintentoSalaTimer = null; }
+    actualizarEstadoVacio();
+  }
+
+  function programarReintentoSala() {
+    if (reintentoSalaTimer || salaResuelta) return;
+    reintentoSalaTimer = setTimeout(function () {
+      reintentoSalaTimer = null;
+      verificarSalaExiste();
+    }, REINTENTO_SALA_MS);
+  }
+
+  // Mismo chequeo que cargarTituloInicial, pero para los reintentos periodicos mientras
+  // salaEnEspera siga en true (brief: "la vista sigue reintentando /api/sesiones cada 5 s").
+  function verificarSalaExiste() {
+    if (salaResuelta) return;
+    var miSessionId = sessionId;
+    fetch(httpScheme + '://' + hubHost + '/api/sesiones').then(function (resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    }).then(function (lista) {
+      if (miSessionId !== sessionId || salaResuelta) return;
+      var s = (lista || []).filter(function (x) { return x.session_id === sessionId; })[0];
+      if (s) {
+        if (s.title) actualizarTituloReal(s.title);
+        resolverSalaEnEspera();
+      } else {
+        programarReintentoSala();
+      }
+    }).catch(function (err) {
+      console.warn('[sala] no se pudo reintentar /api/sesiones:', err);
+      if (!salaResuelta) programarReintentoSala();
+    });
   }
 
   // Recalcula el estado del chip cada 250ms: heartbeat sano (con tolerancia) decide entre
@@ -244,6 +302,13 @@
     }
     if (sano) {
       cayendoDesde = null;
+      // frontend-espera: con la conexion sana pero la sala todavia sin arrancar, "sin texto hace
+      // N s" es enganoso (implica que la sala existe y esta en silencio). Chip aparte, sin reloj.
+      if (salaEnEspera) {
+        setChip('esperando-sala');
+        purgarPendientesVencidos(ahora);
+        return;
+      }
       var segSinTexto = null;
       if (ultimoTextoTHub !== null && ultimoHeartbeatTHub !== null) {
         segSinTexto = (ultimoHeartbeatTHub - ultimoTextoTHub) + (ahora - ultimoHeartbeatLocalMs) / 1000;
@@ -547,12 +612,15 @@
       var s = (lista || []).filter(function (x) { return x.session_id === sessionId; })[0];
       if (s) {
         if (s.title) actualizarTituloReal(s.title);
-      } else {
-        // A1: el hub respondió pero no lista este session_id. No se puede afirmar con certeza
-        // (una sesión recién arrancada puede tardar en aparecer en /api/sesiones), pero mientras
-        // no llegue ningún dato real por el WS es mejor decir esto que dejar la pantalla negra.
-        sesionInexistente = true;
+        resolverSalaEnEspera();
+      } else if (!salaResuelta) {
+        // A1 + frontend-espera: el hub respondió pero no lista este session_id todavía — puede ser
+        // que la sala no arrancó (alguien escaneó el QR antes de la charla) o que recién arrancó y
+        // no llegó a aparecer en /api/sesiones. Mientras no llegue ningún dato real, mejor decir
+        // esto (y seguir reintentando) que dejar la pantalla negra o un error que nunca se borra.
+        salaEnEspera = true;
         actualizarEstadoVacio();
+        programarReintentoSala();
       }
     }).catch(function (err) {
       console.warn('[titulo] no se pudo leer /api/sesiones:', err);
@@ -560,6 +628,8 @@
   }
 
   // ---------- selector de idioma (R6: original + translations_langs), cambia ?lang= sin recarga ----------
+  // Nombre de cada idioma en su propia lengua (práctica estándar de selectores de idioma).
+  var NOMBRE_IDIOMA = { en: 'English', es: 'Español', pt: 'Português', fr: 'Français', de: 'Deutsch', it: 'Italiano' };
   function construirSelector() {
     if (!elSelectorIdioma) return;
     var idiomas = [];
@@ -576,7 +646,9 @@
       qs.set('lang', xx);
       a.href = location.pathname + '?' + qs.toString();
       a.className = 'link-idioma' + (xx === lang ? ' link-idioma--activo' : '');
-      a.textContent = xx === sessionLang ? (xx + ' (original)') : xx;
+      var nombre = NOMBRE_IDIOMA[xx] || xx;
+      a.textContent = xx === sessionLang ? (nombre + ' (original)') : nombre;
+      a.setAttribute('lang', xx);
       if (xx === lang) a.setAttribute('aria-current', 'page');
       a.addEventListener('click', function (ev) {
         if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
@@ -731,6 +803,9 @@
 
   // ---------- procesamiento de UN mensaje ya resuelto por seq (vivo directo, historial o buffer) ----------
   function aplicarMensajeConSeq(msg) {
+    // frontend-espera: cualquier mensaje de la sesion (vivo, backfill o buffer) es prueba de que
+    // el hub ya la conoce — se llega aca para TODO tipo salvo heartbeat/init (ver manejarMensaje).
+    resolverSalaEnEspera();
     if (msg.replay === true) marcarReplay();
 
     // contracts/README.md: "seq monotónico POR SESIÓN, cubre todos los tipos salvo heartbeat/partial/
@@ -838,6 +913,9 @@
 
   // ---------- init: primera vez (pinta lines) o reconexion (dispara backfill si hubo novedad) ----------
   function manejarInit(msg) {
+    // frontend-espera: si el init ya llega con state != "waiting", la sala existe (puede pasar en
+    // una reconexion, o si /api/sesiones todavia no la había listado pero el init sí la conoce).
+    if (msg.state && msg.state !== 'waiting') resolverSalaEnEspera();
     sessionLang = msg.session_lang || sessionLang;
     if (Array.isArray(msg.translations_langs)) translationsLangs = msg.translations_langs;
     if (msg.title) actualizarTituloReal(msg.title); // item 3 (B3)
