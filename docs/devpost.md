@@ -261,3 +261,94 @@ de quién construyó qué está en `PROMPTS.md`, en la raíz del repo).
   sesiones simultáneas contra Gemini (nivel pago / varios proyectos), más espectadores por sesión (ya
   demostrado a nivel del hub solo), y un "modo replay" sin API key que puede mostrar un despliegue
   completo de varias salas para una demo o una conversación comercial.
+
+---
+
+## How it fits in a room / Cómo encaja en una sala
+
+**EN:** Matches what Nerdearla staff described for the actual venue this week: a sound card feeds a
+3.5 mm cable into a small PC by the stage, which either opens the browser locally or forwards the
+audio over the network. Two ways to get audio in: on that PC, `worker.run --fuente mic --dispositivo
+"<dshow name>"` (implemented; audio delivery **not verified** on our dev machine on 09/24 because OBS
+held the device), or send the audio over the network to the server running the worker with `--fuente
+url` (**verified with a real 30 s UDP run on 09/24**, `reportes/audio-pipeline-b8.md`), e.g. `ffmpeg
+-f dshow -i audio="<device>" -ac 1 -ar 16000 -f mpegts udp://SERVER:9000` from the mini PC. Screens in
+front of the stage open `http://SERVER:8080/s/<room>?lang=es&modo=proyeccion` (verified in a browser
+on 09/24); phones scan a per-session QR code from the index, with room and language living in the
+URL — no app, no login. For the stream, an OBS browser source or a vMix Web Browser input pointed at
+`.../s/<room>?lang=en&modo=obs` renders a transparent background with two lines at the bottom —
+**verified over real video in OBS on 09/25** (the browser source shows the speaker's video through it
+with the caption lines on top, `reportes/obs-transparencia.md`, screenshot
+`reportes/obs-transparencia.png`). Capture (`worker`) and
+screens (`web`) are separate processes: the worker reopens its own Gemini session on a server-side
+close, a stall, or every 240 s of sent audio (`rotation` in the panel, with accumulated
+`audio_lost_s`), and the viewer's page reconnects on its own and recovers what it missed from history
+(69/69 messages recovered in the reconnection test, `qa/out/reconexion-b2.log`) — that a screen reload
+doesn't interrupt transcription follows from that split-process design, it is not a measured figure.
+If translation falls behind, the original text shows first and gets marked "untranslated" after 120 s.
+
+**ES:** Coincide con lo que describió el staff de Nerdearla para la sala real de esta semana: una
+placa de audio manda un cable de 3,5 mm a una mini PC junto al escenario, que abre el navegador ahí
+mismo o reenvía el audio por red. Dos formas de meter el audio: en esa PC, `worker.run --fuente mic
+--dispositivo "<nombre dshow>"` (implementado; entrega de audio **NO verificada** en la máquina de
+desarrollo el 24/09 porque OBS tenía tomado el dispositivo), o mandar el audio por red al servidor que
+corre el worker con `--fuente url` (**verificado con una corrida real de 30 s por UDP el 24/09**,
+`reportes/audio-pipeline-b8.md`), por ejemplo `ffmpeg -f dshow -i audio="<dispositivo>" -ac 1 -ar
+16000 -f mpegts udp://SERVIDOR:9000` desde la mini PC. Las pantallas frente al escenario abren
+`http://SERVIDOR:8080/s/<sala>?lang=es&modo=proyeccion` (verificado en navegador el 24/09); los
+celulares escanean el QR de cada sesión desde el índice, con la sala y el idioma en la URL, sin
+instalar nada ni loguearse. Para el stream, una fuente de navegador de OBS o una entrada Web Browser
+de vMix apuntando a `.../s/<sala>?lang=en&modo=obs` da fondo transparente con dos líneas abajo —
+**verificado sobre video real en OBS el 25/09** (la fuente de navegador deja ver el video del orador
+con las líneas de subtítulo encima, `reportes/obs-transparencia.md`, captura
+`reportes/obs-transparencia.png`). La captura (`worker`) y las
+pantallas (`web`) son procesos separados: el worker reabre sola la sesión con Gemini ante un cierre
+del servidor, un atasco o cada 240 s de audio enviado (`rotation` en el panel, con `audio_lost_s`
+acumulado), y la vista se reconecta sola y recupera por historial lo perdido (69/69 mensajes
+recuperados en la prueba de reconexión, `qa/out/reconexion-b2.log`) — que recargar la pantalla no
+corte la transcripción es consecuencia de ese diseño con procesos separados, no una cifra medida. Si
+la traducción se atrasa, primero se ve el original y a los 120 s sin traducir se marca "sin
+traducir".
+
+---
+
+## What happens when… / Qué pasa si…
+
+**EN:** Questions the Nerdearla staff raised about live-talk deal breakers (same Discord thread).
+Translation lag doesn't stop transcription: the line stays gray as pending and resolves as
+"untranslated" after 120 s (`reportes/frontend-b4-pendiente-120s.txt`); the panel counts failed
+translations. If Gemini closes the session or stalls, the worker reopens it with overlap on its own —
+close / stall / a 240 s preventive refresh / a stuck send — with no F5 and no remote desktop
+(`qa/out/smoke-b5r.log`: 5 rotations, 0 silent gaps over a real 2×11 min run). If the hub restarts or
+the network between worker and hub drops, the worker reconnects and resends what's pending, and the
+viewer's page recovers the missed lines from history (`qa/out/reconexion-b2.log`: 69/69 recovered). A
+screen reload doesn't interrupt capture, by design (worker and web are separate processes) — not a
+measured figure. A few lost seconds of audio inside a rotation show up as `audio_lost_s` on the panel
+and as "[gap: N s]" in the transcript (`reportes/frontend-b4-huecos.txt`). If the quota runs out or
+the key is missing, the worker stops with a clear message instead of failing silently, and the same
+deployment can start in a labeled replay mode for tests (`docs/costos.md` for the paid-tier /
+multiple-projects path). For a vMix-style stream with no built-in translation, one transparent
+browser source per language (`?modo=obs&lang=xx`) covers it, verified against real video in OBS on
+09/25 (`reportes/obs-transparencia.md`). One number for scale, about our own run only: perceived
+transcription latency was p50 ≈ 0.44 s in the real run (`qa/out/final/`, `04-latencia.log`) — we make
+no claim about any other team's setup.
+
+**ES:** Preguntas que hizo el staff de Nerdearla sobre qué sería un "deal breaker" en una charla en
+vivo (mismo hilo de Discord). El atraso en la traducción no frena la transcripción: la línea queda
+gris como pendiente y a los 120 s se confirma como "sin traducir" (`reportes/frontend-b4-pendiente-120s.txt`);
+el panel cuenta las traducciones fallidas. Si Gemini cierra la sesión o se atasca, el worker la
+reabre solo, con solape — cierre / atasco / preventiva a los 240 s / un envío trabado — sin F5 ni
+escritorio remoto (`qa/out/smoke-b5r.log`: 5 rotaciones, 0 tramos mudos en una corrida real de 2×11
+min). Si el hub se reinicia o se cae la red entre el worker y el hub, el worker reconecta y reenvía lo
+pendiente, y la vista recupera por historial lo que se perdió (`qa/out/reconexion-b2.log`: 69/69
+recuperados). Recargar la pantalla no corta la captura, por diseño (worker y web son procesos
+separados) — no es una cifra medida. Si se pierden unos segundos de audio en una rotación, el panel
+lo muestra como `audio_lost_s` y la vista marca "[tramo sin texto: N s]"
+(`reportes/frontend-b4-huecos.txt`). Si se acaba la cuota o falta la key, el worker corta con un
+mensaje claro en vez de fallar en silencio, y el mismo despliegue puede arrancar en modo replay
+rotulado para pruebas (`docs/costos.md` para el camino de nivel pago / varios proyectos). Para un
+stream tipo vMix sin traducción propia, una fuente de navegador transparente por idioma
+(`?modo=obs&lang=xx`) alcanza, verificado sobre video real en OBS el 25/09
+(`reportes/obs-transparencia.md`). Una cifra de referencia, sólo sobre nuestra propia corrida: la
+latencia percibida de transcripción fue p50 ≈ 0,44 s en la corrida real (`qa/out/final/`,
+`04-latencia.log`) — sin afirmar nada sobre el equipo de nadie más.

@@ -824,24 +824,22 @@
 
   // ---------- Modo proyección (Bloque 10, C5): pantalla completa para proyectar en la sala.
   // CSS puro (body.modo-proyeccion, ver estilo.css) + este flag: no reescribe texto ya pintado,
-  // no cambia ids/clases existentes, sólo agrega/quita una clase en <body> y persiste la
-  // preferencia (best-effort, nunca bloqueante si localStorage falla).
+  // no cambia ids/clases existentes, sólo agrega/quita una clase en <body>.
+  // Arreglo 25/09 00:35 (reportes/verificacion-final.md #1): el modo YA NO se persiste entre
+  // cargas de página. Vive sólo en memoria durante la pestaña/sesión actual (variable JS, no
+  // localStorage/sessionStorage) y se activa ÚNICAMENTE por `?modo=proyeccion` en la URL o por la
+  // tecla `p` mientras la página sigue cargada; una URL sin `modo` SIEMPRE arranca en vista normal,
+  // sin importar lo que se haya activado antes. Se borra la clave vieja de localStorage por si
+  // quedó de una versión anterior (best-effort, nunca bloqueante).
   // `?modo=obs` (pedido del orquestador, integración OBS/vMix R8a) es un modo aparte, NO
   // interactivo, pensado para una fuente de navegador que quema los subtítulos en el stream: si
   // está presente, gana y no se engancha el botón/atajo de proyección (ver web/README.md).
   var elBotonProyeccion = document.getElementById('boton-proyeccion');
-  var LS_CLAVE_PROYECCION = 'subtitulos-modo-proyeccion';
+  try { localStorage.removeItem('subtitulos-modo-proyeccion'); } catch (e) { /* nunca bloqueante */ }
 
-  function leerPreferenciaProyeccion() {
-    try { return localStorage.getItem(LS_CLAVE_PROYECCION) === '1'; } catch (e) { return false; }
-  }
-  function guardarPreferenciaProyeccion(activo) {
-    try { localStorage.setItem(LS_CLAVE_PROYECCION, activo ? '1' : '0'); } catch (e) { /* nunca bloqueante */ }
-  }
   function setModoProyeccion(activo) {
     document.body.classList.toggle('modo-proyeccion', activo);
     if (elBotonProyeccion) elBotonProyeccion.setAttribute('aria-pressed', activo ? 'true' : 'false');
-    guardarPreferenciaProyeccion(activo);
   }
   function toggleModoProyeccion() {
     setModoProyeccion(!document.body.classList.contains('modo-proyeccion'));
@@ -858,7 +856,7 @@
       if (enCampo || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       toggleModoProyeccion();
     });
-    setModoProyeccion(params.get('modo') === 'proyeccion' || leerPreferenciaProyeccion());
+    setModoProyeccion(params.get('modo') === 'proyeccion');
   }
 
   // ---------- arranque ----------

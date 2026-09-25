@@ -257,6 +257,80 @@ Los dos tramos de audio comparados no son idénticos (arrancan en segundos disti
 es una sola corrida por configuración: es un indicio a favor del glosario, **no una mejora
 demostrada**. Comando: `python -m worker.medir_glosario <casete> "Grady Booch,Booch,Nerdearla,Plato,Jim Rumbaugh,Ivar Jacobson,Simula,Golden Age"`.
 
+## Cómo encaja en una sala
+
+Pensado para el esquema real de un evento (hilo de Discord de la vibeathon, respuestas del staff de
+Nerdearla): placa de audio → cable de 3,5 mm → una mini PC junto al escenario → audio al navegador o
+al servidor; la captura queda escuchando hasta que alguien la frena, y alguien entra por escritorio
+remoto a apretar F5 si una pantalla se traba.
+
+- **Entrada de audio desde la mini PC**, de dos formas posibles:
+  - El worker corre EN la mini PC, contra el cable de 3,5 mm como entrada de audio:
+    ```bash
+    .venv/Scripts/python -m worker.run --fuente mic --dispositivo "<nombre dshow>" --sesion sala-1 --lang es --hub ws://SERVIDOR:8080/ingest
+    ```
+    Implementado; **entrega de audio NO verificada en la máquina de desarrollo el 24/09 porque OBS
+    tenía tomado el dispositivo** (mismo estado que en "Fuentes de audio en vivo" arriba).
+  - O la mini PC manda el audio por red y el worker corre en el servidor, con `--fuente url`
+    (**VERIFICADO con una corrida real de 30 s por UDP el 24/09**, `reportes/audio-pipeline-b8.md`).
+    Ejemplo en la mini PC, mandando el cable de 3,5 mm por UDP:
+    ```bash
+    ffmpeg -f dshow -i audio="<dispositivo>" -ac 1 -ar 16000 -f mpegts udp://SERVIDOR:9000
+    ```
+    y en el servidor: `worker.run --fuente url --url udp://SERVIDOR:9000 --sesion sala-1 --lang es
+    --hub ws://localhost:8080/ingest` (mismo patrón que en "Fuentes de audio en vivo", cambiando
+    `127.0.0.1` por la IP de la mini PC).
+- **Pantallas frente al escenario:** `http://SERVIDOR:8080/s/<sala>?lang=es&modo=proyeccion`
+  (verificado en navegador el 24/09) — sólo el texto, sin el resto de la interfaz.
+- **Celulares del público:** el QR de cada sesión, en el índice (`http://SERVIDOR:8080/`), apunta
+  directo a `/s/<sala>?lang=..`; sala e idioma quedan en la URL; sin instalar nada ni loguearse.
+- **Stream (R8a, opcional):** fuente de navegador de OBS, o entrada Web Browser de vMix, apuntando a
+  `http://SERVIDOR:8080/s/<sala>?lang=en&modo=obs` (fondo transparente, dos líneas abajo).
+  **Verificado sobre video en OBS el 25/09**: la fuente de navegador deja ver el video del orador con
+  las líneas de subtítulo encima (`reportes/obs-transparencia.md`, captura
+  `reportes/obs-transparencia.png`).
+- **Operación durante la charla:** la captura (`worker`) y las pantallas (`web`) son procesos
+  separados — apagar o recargar una pantalla no toca al worker, que sigue mandando audio y recibiendo
+  texto (consecuencia del diseño, no una cifra medida). El worker además reabre solo la sesión con
+  Gemini ante un cierre del servidor, un atasco, o cada 240 s de audio enviado (`rotation` en el
+  panel, con `audio_lost_s` acumulado; las cinco causas completas están en "Cómo escalar" más abajo).
+  Del lado de la pantalla, si el hub se reinicia la vista se reconecta sola y recupera por historial
+  lo perdido: 69/69 textos recuperados en la prueba de reconexión (`qa/out/reconexion-b2.log`). Si la
+  traducción se atrasa, primero se ve el original y recién a los 120 s sin traducción se marca "sin
+  traducir" en pantalla.
+
+### Qué pasa si…
+
+Preguntas que hizo el staff de Nerdearla sobre qué sería un "deal breaker" en una charla real (mismo
+hilo de Discord citado arriba). Filas con lo medido en una corrida real o deducido del diseño
+(rotuladas "por diseño" cuando no hay una medición puntual para ese caso):
+
+| Situación | Qué hace el sistema | Evidencia |
+|---|---|---|
+| La traducción se atrasa | La transcripción NO se detiene, sigue en el idioma original. La línea queda gris como pendiente y a los 120 s sin traducción se confirma con la marca "sin traducir" (con el original ya pintado); el panel cuenta las traducciones que llegaron `ok:false`. | `reportes/frontend-b4-pendiente-120s.txt`; `panel/app.js` (contador `traduccionesOkFalse`); corrida real 25/09 en `qa/out/final/` (`04-traduccion.log`: EN→ES 15/17, ES→EN 15/15) |
+| Gemini cierra la sesión o se atasca | Reapertura automática con solape, sin F5 ni escritorio remoto: por cierre del servidor, atasco/mudez, preventiva a los 240 s de audio enviado, `GoAway`, o un envío que se traba. El panel muestra `rotation` con `audio_lost_s` acumulado. | `qa/out/smoke-b5r.log` (corrida real, 5 rotaciones y 0 tramos con voz sin texto en 2 × 11 min); `qa/out/watchdog-b3.log` (reapertura por mudez, sin API) |
+| Se cae la red entre el worker y el hub, o se reinicia el hub | El worker reconecta y reenvía lo pendiente; la vista se reconecta sola y recupera lo perdido pidiendo `historial?desde=`. | `qa/out/reconexion-b2.log` (backlog 69/69 recuperado); `reportes/frontend-b3.md` (backfill en la vista, 0 perdidas / 0 duplicadas) |
+| Se recarga la pantalla de la sala | La captura sigue: worker y pantalla son procesos separados. Al reconectar, la vista pinta las últimas líneas guardadas y pide por historial lo que se perdió. | Por diseño (separación worker/web); `reportes/verificacion-final.md` no tiene una fila que mida específicamente una recarga de pantalla (sí mide la reconexión del hub, ítem 5b) |
+| Se pierde audio unos segundos en una rotación | El panel lo muestra acumulado (`audio_lost_s`) y la vista marca, en el lugar exacto, "[tramo sin texto: N s]". | `reportes/frontend-b4-huecos.txt` |
+| Se acaba la cuota o falla la key | El worker no falla en silencio: si falta la key corta con un mensaje claro (`GEMINI_API_KEY no esta definida en .env ni en el entorno`); ante un envío o una conexión que fallan, registra el error y, si no logra reabrir, termina. El sistema puede arrancar igual en modo replay, rotulado como tal, para pruebas y demos; para producción, nivel pago de Gemini o repartir sesiones entre varios proyectos (estimación de costo en `docs/costos.md`). Por diseño: no se forzó una cuota agotada real en esta vibeathon. | `worker/gemini.py` (función `api_key`); `worker/session.py` (`_caida`, `_SinReabrir`); `ops/entrypoint-worker.sh` (cae a replay si falta la key); `docs/costos.md` |
+| Stream virtual sin traducción propia (idea del staff: vMix) | Una fuente de navegador POR IDIOMA, `?modo=obs&lang=xx`, fondo transparente sobre el video, dos líneas abajo. | `reportes/obs-transparencia.md` y captura `reportes/obs-transparencia.png` (verificado sobre video real en OBS el 25/09) |
+
+### Qué se conserva de la operación actual
+
+De lo que el staff describió que ya funciona bien en la sala real (pantallas frente al escenario, QR,
+arranque simple, sin un operador dedicado mirando la mini PC) esto se mantiene o se refuerza:
+
+- **Pantallas frente al escenario:** siguen siendo sólo una URL (`?modo=proyeccion`), texto sin el
+  resto de la interfaz — nada nuevo que instalar en esas pantallas.
+- **QR para el público:** cada sesión tiene el suyo desde el índice; sala e idioma quedan en la URL,
+  sin instalar nada ni loguearse.
+- **Arranque en un comando:** `docker compose up` (con `.env` real) o `MODO=replay docker compose up`
+  (sin credenciales) levanta hub, vista y panel juntos.
+- **Nadie tiene que quedarse mirando la mini PC:** como la sesión con Gemini se reabre sola (fila de
+  arriba), no hace falta escritorio remoto ni F5 manual cuando se traba; quien monitorea lo hace desde
+  el panel remoto con token (`/panel/`, sección "Panel de monitoreo" más abajo), no parado junto al
+  escenario.
+
 ## Cómo escalar a más sesiones (R21, C3) — tres ejes
 
 La fuerza bruta no alcanza: hay tres cuellos de botella distintos y cada uno se resuelve distinto.
