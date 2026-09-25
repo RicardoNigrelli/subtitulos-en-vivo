@@ -7,7 +7,7 @@ como si fuera absoluta, generalizar cada cuántos segundos aparece un subtítulo
 sin comando). Verificación de esto último: `reportes/demo-b4.md` §2 (`grep` sobre este archivo).
 
 Reemplazar antes de enviar: `https://github.com/RicardoNigrelli/subtitulos-en-vivo` (repo público, lo crea ops/Ricardo, B6-B7) y
-`<YOUTUBE_URL>` (video subido por Ricardo, B6/B10).
+`https://youtu.be/cxSG4hmvxfQ` (video subido por Ricardo, B6/B10).
 
 ---
 
@@ -24,7 +24,7 @@ Reemplazar antes de enviar: `https://github.com/RicardoNigrelli/subtitulos-en-vi
 ## Links
 
 - Repo: `https://github.com/RicardoNigrelli/subtitulos-en-vivo`
-- Video: `<YOUTUBE_URL>`
+- Video: `https://youtu.be/cxSG4hmvxfQ`
 - How to try it / connect it to your services: [`docs/integracion.md`](integracion.md)
 
 ## Built With
@@ -55,7 +55,7 @@ full breakdown of who built what).
 - Takes in live audio from a file, a stream, or a microphone (at least one real source is required
   and works today).
 - Transcribes it in real time, in the original language (Spanish or English).
-- Translates it in real time from English to Spanish (and, offline-verified, Spanish to English).
+- Translates it in real time from English to Spanish (and, also measured live, Spanish to English).
 - Shows the captions on a web page where every viewer independently picks the session (room) and
   the language they want to read; the view renders ONLY the chosen language (an animated "…"
   placeholder holds the line's place while its translation is in flight, `reportes/frontend-final.md`).
@@ -422,8 +422,7 @@ más.
 
 ## Antes de enviar / Before submitting
 
-- [ ] Reemplazar `<YOUTUBE_URL>` (dos veces: `## Links` arriba y en Devpost) por el link real del
-  video subido a YouTube.
+- [x] Link del video reemplazado: https://youtu.be/cxSG4hmvxfQ (enviado en Devpost el 25/09, ~11:41 AR).
 - [ ] Probar ese link en una ventana privada/incógnito (sin sesión de Google logueada) y confirmar
   que reproduce y tiene subtítulos en inglés disponibles (R14).
 - [ ] Confirmar que el repositorio de `## Links` es público y que la licencia (Apache 2.0, R15) se ve

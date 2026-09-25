@@ -1,5 +1,7 @@
 # Subtítulos en vivo para conferencias — Nerdearla Vibeathon 2026
 
+**Video (1–2 min):** https://youtu.be/cxSG4hmvxfQ
+
 ## English summary (for judges who don't read Spanish)
 
 Open source **live transcription + translation for conferences**: live audio in → real-time
