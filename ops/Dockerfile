@@ -21,11 +21,14 @@ COPY . .
 # corrían como root). El hub no escribe nada dentro del contenedor; el worker en modo replay sí
 # escribe (casetes de salida bajo fixtures/casetes/ si se usa CASETE_REPLAY de escritura, y logs
 # propios bajo reportes/). reportes/ está en .dockerignore y no llega con el COPY de arriba: se
-# crea acá a mano para que exista con dueño correcto antes del chown.
+# crea acá a mano para que exista con dueño correcto antes del chown. /run/vibeathon: punto de
+# montaje del volumen nombrado con el HUB_TOKEN compartido entre hub y worker (token-init,
+# ops/docker-compose.yml); se crea con dueño app:app para que, cuando Docker inicialice el volumen
+# vacío copiando esta carpeta, el usuario sin privilegios pueda escribir/leer el archivo del token.
 RUN groupadd -g 10001 app \
     && useradd -u 10001 -g app -M -s /usr/sbin/nologin app \
-    && mkdir -p /app/reportes /app/fixtures/casetes \
-    && chown -R app:app /app
+    && mkdir -p /app/reportes /app/fixtures/casetes /run/vibeathon \
+    && chown -R app:app /app /run/vibeathon
 
 USER app
 

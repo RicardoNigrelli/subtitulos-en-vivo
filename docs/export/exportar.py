@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -111,20 +112,34 @@ def _leer_casete(path: Path) -> list[dict]:
     return msgs
 
 
+SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+LIMITE_HISTORIAL = 1000   # tope del hub por pedido (hub/app.py api_historial, `limit`); se pagina con `desde`
+
+
 def _leer_hub(hub: str, sesion: str, desde: int) -> list[dict]:
-    """GET /api/sesiones/<sesion>/historial?desde=<desde>: ya son solo type=text, ya mergeadas
-    las traducciones, ya ordenadas por seq (contracts/README.md; hub/app.py:163 api_historial)."""
-    url = f"{hub.rstrip('/')}/api/sesiones/{sesion}/historial?desde={desde}"
-    try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            cuerpo = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        detalle = e.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"ERROR {url} -> HTTP {e.code}: {detalle}")
-    except urllib.error.URLError as e:
-        raise SystemExit(f"ERROR no se pudo conectar a {url}: {e}")
-    datos = json.loads(cuerpo)
-    return [m for m in datos if m.get("type") == "text"]
+    """GET /api/sesiones/<sesion>/historial?desde=<desde>&limit=1000, paginado con `desde` hasta que
+    el hub devuelva menos que el limite: ya son solo type=text, ya mergeadas las traducciones, ya
+    ordenadas por seq (contracts/README.md; hub/app.py api_historial)."""
+    if not SLUG.match(sesion):
+        raise SystemExit(f"ERROR --sesion invalido: {sesion!r} (esperado ^[a-z0-9][a-z0-9_-]{{0,63}}$)")
+    textos: list[dict] = []
+    while True:
+        url = f"{hub.rstrip('/')}/api/sesiones/{sesion}/historial?desde={desde}&limit={LIMITE_HISTORIAL}"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                cuerpo = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            detalle = e.read().decode("utf-8", errors="replace")
+            raise SystemExit(f"ERROR {url} -> HTTP {e.code}: {detalle}")
+        except urllib.error.URLError as e:
+            raise SystemExit(f"ERROR no se pudo conectar a {url}: {e}")
+        datos = json.loads(cuerpo)
+        textos.extend(m for m in datos if m.get("type") == "text")
+        seqs = [m.get("seq") for m in datos if isinstance(m.get("seq"), int)]
+        if len(datos) < LIMITE_HISTORIAL or not seqs or max(seqs) + 1 <= desde:
+            break
+        desde = max(seqs) + 1
+    return textos
 
 
 def _texto_de(m: dict, lang: str | None) -> str:

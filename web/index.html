@@ -31,15 +31,21 @@
   // B10 (seguridad, aviso del orquestador): mismo chequeo que app.js — ?hub= sólo admite
   // localhost/127.0.0.1/[::1]/el propio location.hostname, para que un enlace armado por un
   // tercero no pueda hacer que esta página le pida la lista de sesiones a un host arbitrario.
-  function nombreHost(hostPuerto) {
-    var m = /^\[([^\]]+)\](?::\d+)?$/.exec(hostPuerto);
-    if (m) return m[1];
-    var partes = hostPuerto.split(':');
-    return partes.length <= 2 ? partes[0] : hostPuerto;
-  }
+  // Arreglo M1 (adversario-final-seguridad): ver el mismo comentario en app.js. "localhost:8100@evil.example"
+  // pasaba antes porque el parser tomaba "lo que está antes de los dos puntos" como host; en la URL
+  // real armada (ws://localhost:8100@evil.example/...) eso es USERINFO, y el host real es evil.example.
   function hubHostPermitido(hostPuerto) {
-    var host = nombreHost(hostPuerto).toLowerCase();
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' ||
+    if (typeof hostPuerto !== 'string' || hostPuerto === '') return false;
+    if (/[@/\\?#]/.test(hostPuerto)) return false;
+    var url;
+    try {
+      url = new URL('http://' + hostPuerto);
+    } catch (e) {
+      return false;
+    }
+    if (url.username || url.password) return false;
+    var host = url.hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' ||
       host === location.hostname.toLowerCase();
   }
   var hubParamCrudo = params.get('hub');
@@ -262,17 +268,29 @@
     });
   }
 
+  // M3+M4 (adversario-final-ux): antes se rehacía TODO el DOM cada 5s aunque nada hubiera
+  // cambiado (perdía el foco de teclado, cortaba el "Copiado", regeneraba los QR) y un error
+  // aislado borraba toda la lista + mostraba la URL y "Failed to fetch" en inglés.
+  var ultimoJsonTexto = null; // string crudo de la última respuesta que SÍ se pintó
+  var seCargoAlgunaVez = false;
   function cargar() {
     fetch(apiUrl).then(function (resp) {
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      return resp.json();
-    }).then(render).catch(function (err) {
+      return resp.text();
+    }).then(function (texto) {
+      if (texto === ultimoJsonTexto) return; // sin cambios: no se rehace el DOM (conserva foco/estado)
+      var sesiones = JSON.parse(texto); // si esto tira, cae al catch de abajo (mismo mensaje llano)
+      ultimoJsonTexto = texto;
+      seCargoAlgunaVez = true;
+      render(sesiones);
+    }).catch(function (err) {
+      console.error('error cargando /api/sesiones', err);
+      if (seCargoAlgunaVez) return; // ya hay una lista buena en pantalla: un error aislado no la borra
       cont.textContent = '';
       var p = document.createElement('p');
       p.className = 'estado-error';
-      p.textContent = 'No se pudo conectar al hub (' + apiUrl + '): ' + err.message;
+      p.textContent = 'No pudimos cargar las salas. Reintentamos cada 5 s.';
       cont.appendChild(p);
-      console.error('error cargando /api/sesiones', err);
     });
   }
 

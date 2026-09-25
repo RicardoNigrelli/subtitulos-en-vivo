@@ -24,7 +24,7 @@ import time
 from collections import Counter, deque
 from typing import Any
 
-from contracts import FUENTES_TEST, TIPOS_AUDIENCIA, errores
+from contracts import FUENTES_TEST, TIPOS_AUDIENCIA, errores, esquema
 
 from .config import Config
 
@@ -33,6 +33,9 @@ log = logging.getLogger("hub")
 CIERRE_LENTO = 1013   # "try again later": se le lleno la cola, que reconecte
 CIERRE_APAGADO = 1001  # going away
 LANG_DESTINO = re.compile(r"^[a-z]{2}(-[A-Z]{2})?$")  # = $defs/lang_destino de contracts/esquema.json
+# M2: campos de primer nivel del contrato. Lo que venga fuera de esto (additionalProperties) NO se
+# guarda ni se reparte: pasa la validacion pero no ocupa memoria del historial. `meta` si se guarda.
+CAMPOS_CONTRATO = frozenset(esquema()["properties"])
 
 
 def dumps(obj: Any) -> str:
@@ -209,6 +212,21 @@ class Hub:
             s = self.sesiones[session_id] = Sesion(session_id, self.config.history)
         return s
 
+    def n_conocidas(self) -> int:
+        return sum(1 for s in self.sesiones.values() if s.conocida)
+
+    def admitir(self, session_id: str) -> str | None:
+        """M3: None si el espectador entra; si no, el motivo (se cierra con 1013). Topes GLOBALES, no
+        por IP (detras de un NAT toda la audiencia comparte IP)."""
+        total = sum(len(s.clientes) for s in self.sesiones.values())
+        if total >= self.config.max_audiencia:
+            return f"hub lleno: {total} espectadores (HUB_MAX_AUDIENCIA)"
+        if session_id not in self.sesiones:
+            espera = len(self.sesiones) - self.n_conocidas()
+            if espera >= self.config.max_espera:
+                return f"demasiadas salas en espera: {espera} (HUB_MAX_ESPERA)"
+        return None
+
     def conocidas(self) -> list[Sesion]:
         return sorted((s for s in self.sesiones.values() if s.conocida), key=lambda s: s.session_id)
 
@@ -229,6 +247,12 @@ class Hub:
             return "rechazado", errs
 
         ahora = time.time()
+        previa = self.sesiones.get(msg["session_id"])
+        if (previa is None or not previa.conocida) and self.n_conocidas() >= self.config.max_sesiones:
+            self.rechazados_sin_sesion += 1  # M2: tope de salas en memoria (las terminadas no se liberan)
+            return "rechazado", [f"tope de sesiones: el hub ya tiene {self.config.max_sesiones} salas en "
+                                 f"memoria (HUB_MAX_SESIONES); no se crea {msg['session_id']!r}. "
+                                 f"Las terminadas se liberan al reiniciar el hub."]
         s = self.sesion(msg["session_id"])
         if not s.conocida:
             s.conocida, s.t_primera = True, ahora
@@ -267,7 +291,7 @@ class Hub:
                         "Si es otra corrida del worker con el mismo session_id, sus seq <= %s se pierden.",
                         s.session_id, seq, msg["type"], s.last_seq, s.last_seq)
 
-        m = dict(msg)
+        m = {k: v for k, v in msg.items() if k in CAMPOS_CONTRATO}  # M2: sin additionalProperties
         m["t_hub"] = ahora
         if m["type"] == "text":
             # copia propia: el merge la modifica en el lugar (historial e init devuelven lo mergeado)

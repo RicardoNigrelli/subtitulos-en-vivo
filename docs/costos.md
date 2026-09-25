@@ -115,9 +115,17 @@ Modelos usados (ver `.env.example`): `gemini-3.5-transcribe-live` (transcripció
 | Gemini 3.1 Flash-Lite (texto) | 0,25 USD por 1M tokens | 1,50 USD por 1M tokens |
 
 La misma página indica que el audio se cuenta a **25 tokens por segundo**, lo que coincide con el único
-`usageMetadata` observado (7072 tokens / 282,8 s). El nivel gratuito figura como "Free of charge" con los
-límites de frecuencia citados en `README.md` (15 RPM / 500 RPD por modelo de texto; TPM 20K en transcripción).
-Los precios pueden cambiar: volver a consultar la página antes de presupuestar un evento.
+`usageMetadata` observado (7072 tokens / 282,8 s). El nivel gratuito figura ahí como "Free of charge",
+pero los NÚMEROS de esos límites (15 RPM / 500 RPD por modelo de texto; 20 000 TPM en transcripción,
+citados en `README.md`) no están en esa página de precios ni en ninguna documentación pública: son los
+**vistos en la vista de límites de AI Studio de la cuenta el 24/09; pueden cambiar** (no "según la
+documentación"). Sí está documentado ([ai.google.dev/gemini-api/docs/rate-limits](https://ai.google.dev/gemini-api/docs/rate-limits),
+"Rate limits are applied per project, not per API key"): los límites son por PROYECTO de Google Cloud,
+no por key ni por máquina — por eso repartir sesiones entre varios proyectos (cada key de uno
+distinto) multiplica el cupo (ver "Cómo escalar a más sesiones" en el README). El nivel pago tiene
+límites más altos, pero tampoco publicados: hay que verificarlos en AI Studio antes de presupuestar.
+Los precios de la tabla de arriba sí son públicos y pueden cambiar: volver a consultar la página antes
+de presupuestar un evento.
 
 **Orden de magnitud para un evento (estimación), cuenta reproducible en una línea:**
 `python -c "m=5*8*60; print(round(m*0.00525,1), round(m*0.004,1), round(m*0.0023,1), round(m*(0.00525+0.004+0.0023),1))"`

@@ -27,6 +27,14 @@ el replay) hacia el hub por `/ingest`; el hub le agrega `t_hub` y lo reparte a l
 `/ws/<session_id>`. Esquema formal: [`esquema.json`](esquema.json) (JSON Schema 2020-12).
 `additionalProperties` queda abierto: cualquiera puede **agregar** campos sin romper a nadie.
 
+**Ojo (25/09, seguridad M2):** el hub valida con `additionalProperties` abierto, pero **guarda y
+reparte sólo los campos de primer nivel declarados en `esquema.json` `properties`** (`v type
+session_id seq lang text translations audio_start audio_end t_captured t_emit t_hub replay meta
+items`). Un campo nuevo de primer nivel tiene que AGREGARSE a `properties` para llegar a la audiencia
+y al historial; lo extensible sin tocar el esquema es `meta`. Frame máximo en `/ingest`: 64 KiB
+(`HUB_MAX_MSG_BYTES`). Límite conocido tras un reinicio del hub (traducciones previas perdidas,
+"[tramo perdido]" falso): ver `hub/README.md`, "Seguridad y límites conocidos".
+
 ```bash
 .venv/Scripts/python -m contracts.validate contracts/ejemplos/*.jsonl   # exit 0 = todo válido
 .venv/Scripts/python -m contracts.validate fixtures/casetes/x.jsonl     # casete: valida las líneas dir=emit
@@ -175,7 +183,7 @@ Códigos de cierre del hub: `4401` auth inválida (sólo ingesta) · `1013` clie
 |---|---|---|
 | `GET /health` | no | `200 {"ok":true,...}` |
 | `GET /api/sesiones` | no | lista `[{session_id, lang, title, replay, last_seq, last_t_emit, state, translations_langs, ...}]`; `state`: `live` (el hub recibió algo de la sesión en los últimos 30 s) · `idle` · `ended` (llegó `session_end`); `translations_langs` (B2): idiomas destino vistos, p. ej. `["es"]` |
-| `GET /api/sesiones/<id>/historial?desde=<seq>` | no | lista de mensajes `type=text` con `seq > desde`, ordenados por `seq`, con las traducciones YA MERGEADAS (404 si la sesión no existe). Con `&tipos=todos`: todos los tipos guardados (no `partial` ni `translation`, que no se guardan) |
+| `GET /api/sesiones/<id>/historial?desde=<seq>` | no | lista de mensajes `type=text` con `seq > desde`, ordenados por `seq`, con las traducciones YA MERGEADAS (404 si la sesión no existe). Con `&tipos=todos`: todos los tipos guardados (no `partial` ni `translation`, que no se guardan). (25/09, aditivo) `&limit=N` 1-1000, default **500**: los `limit` más viejos después de `desde`; si quedaron más, cabecera `X-Historial-Truncado: <n>` y se sigue con `desde=<último seq>` |
 | `GET /api/metricas` | `Authorization: Bearer <HUB_TOKEN>` | contadores del hub por sesión (clientes, descartes, duplicados) |
 | `GET /api` | no | (B4) lista de rutas activas |
 

@@ -25,6 +25,20 @@ LATIDOS_KEY = web.AppKey("latidos", asyncio.Task)
 SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 LANG = re.compile(r"^[a-z]{2}(-[A-Z]{2})?$")
 CIERRE_AUTH = 4401
+CIERRE_LLENO = 1013   # M3: "try again later" (tope de audiencia o de salas en espera)
+MAX_ERROR = 300       # B1: cada error/valor repetido en `rechazado` y en el log se corta aca
+HISTORIAL_LIMIT = 500      # M2/escala: default de ?limit= en GET .../historial
+HISTORIAL_LIMIT_MAX = 1000
+
+
+def _corto(v, n: int = MAX_ERROR):
+    """B1: valor apto para repetir en un rechazo o en el log: escalares cortos tal cual, strings
+    truncados, contenedores solo por tipo (un repr de algo muy anidado tambien puede recursar)."""
+    if v is None or isinstance(v, (bool, int, float)):
+        return v if not isinstance(v, int) or abs(v) < 10 ** 18 else f"<int de {len(str(v))} digitos>"
+    if isinstance(v, str):
+        return v if len(v) <= n else v[:n] + f" [cortado: +{len(v) - n} caracteres]"
+    return f"<{type(v).__name__}>"
 
 
 def _json(data, status: int = 200) -> web.Response:
@@ -79,12 +93,15 @@ async def ws_ingest(request: web.Request) -> web.WebSocketResponse:
     if primero is not None and primero.type == WSMsgType.TEXT:
         try:
             frame = json.loads(primero.data)
-        except ValueError:
+        except (ValueError, RecursionError):  # M4: muy anidado -> RecursionError, no traceback
             frame = None
     if not (isinstance(frame, dict) and frame.get("type") == "auth" and _token_ok(frame.get("token"), cfg)):
         hub.auth_fallidas += 1
         log.warning("ingesta: auth invalida o ausente desde %s; se cierra con %d", peer, CIERRE_AUTH)
         await ws.close(code=CIERRE_AUTH, message=b"auth invalida")
+        # aiohttp 3.14 re-arma el heartbeat al leer la respuesta al close que inicia el server: cada
+        # intento fallido quedaba vivo ~30 s (~75 KB). Se cancela a mano (API privada, con getattr).
+        getattr(ws, "_cancel_heartbeat", lambda: None)()
         return ws
 
     hub.productores.add(ws)
@@ -95,14 +112,18 @@ async def ws_ingest(request: web.Request) -> web.WebSocketResponse:
             if msg.type == WSMsgType.TEXT:
                 try:
                     obj = json.loads(msg.data)
-                except ValueError as e:
-                    await _rechazar(ws, None, [f"JSON invalido: {e}"])
+                except (ValueError, RecursionError) as e:  # M4
+                    await _rechazar(ws, None, [f"JSON invalido: {type(e).__name__}: {e}"])
                     continue
-                estado, errs = hub.ingerir(obj)
+                try:
+                    estado, errs = hub.ingerir(obj)
+                except RecursionError:  # M4: valido como JSON pero demasiado anidado para validarlo
+                    estado, errs = "rechazado", ["mensaje demasiado anidado"]
                 if estado == "rechazado":
+                    errs = [_corto(e) for e in errs]  # B1
                     log.warning("ingesta: mensaje rechazado (%s seq=%s): %s",
-                                obj.get("session_id") if isinstance(obj, dict) else "?",
-                                obj.get("seq") if isinstance(obj, dict) else "?", "; ".join(errs[:3]))
+                                _corto(obj.get("session_id")) if isinstance(obj, dict) else "?",
+                                _corto(obj.get("seq")) if isinstance(obj, dict) else "?", "; ".join(errs[:3]))
                     await _rechazar(ws, obj, errs)
             elif msg.type == WSMsgType.BINARY:
                 await _rechazar(ws, None, ["frame binario: se esperaba un mensaje JSON en texto"])
@@ -117,9 +138,9 @@ async def ws_ingest(request: web.Request) -> web.WebSocketResponse:
 
 async def _rechazar(ws: web.WebSocketResponse, obj, errs: list[str]) -> None:
     frame = {"type": "rechazado",
-             "session_id": obj.get("session_id") if isinstance(obj, dict) else None,
-             "seq": obj.get("seq") if isinstance(obj, dict) else None,
-             "errores": errs}
+             "session_id": _corto(obj.get("session_id")) if isinstance(obj, dict) else None,
+             "seq": _corto(obj.get("seq")) if isinstance(obj, dict) else None,
+             "errores": [_corto(e) for e in errs]}
     try:
         await asyncio.wait_for(ws.send_str(dumps(frame)), timeout=2.0)
     except Exception:
@@ -135,6 +156,15 @@ async def ws_audiencia(request: web.Request) -> web.StreamResponse:
         return _error(400, "session_id invalido: se espera un slug ^[a-z0-9][a-z0-9_-]{0,63}$")
     if lang is not None and not LANG.fullmatch(lang):
         return _error(400, "lang invalido: se espera un codigo como es, en o pt-BR")
+    lleno = hub.admitir(sid)  # M3: tope global de audiencia y de salas en espera (NO por IP: NAT)
+    if lleno:
+        # SIN heartbeat: con heartbeat, aiohttp deja vivo cada WS rechazado (timer de ping/pong) y un
+        # flood de rechazos crecia ~75 KB por intento (medido: 1951 rechazos -> +150 MB).
+        ws = web.WebSocketResponse(max_msg_size=1024)
+        await ws.prepare(request)
+        log.warning("audiencia: %s rechazado con %d: %s", sid, CIERRE_LLENO, lleno)
+        await ws.close(code=CIERRE_LLENO, message=lleno.encode()[:120])
+        return ws
     ws = web.WebSocketResponse(heartbeat=20.0, max_msg_size=64 * 1024)
     await ws.prepare(request)
     c = hub.suscribir(ws, sid, lang, request.transport)
@@ -173,10 +203,20 @@ async def api_historial(request: web.Request) -> web.Response:
         desde = int(request.query.get("desde", "-1"))
     except ValueError:
         return _error(400, "desde debe ser un entero (seq)")
+    try:
+        limit = int(request.query.get("limit", str(HISTORIAL_LIMIT)))
+    except ValueError:
+        return _error(400, "limit debe ser un entero")
+    if not 1 <= limit <= HISTORIAL_LIMIT_MAX:
+        return _error(400, f"limit fuera de rango: de 1 a {HISTORIAL_LIMIT_MAX} (default {HISTORIAL_LIMIT})")
     todos = request.query.get("tipos") == "todos"
     msgs = sorted((m for m in s.historial if m["seq"] > desde and (todos or m["type"] == "text")),
                   key=lambda m: m["seq"])
-    return _json(msgs)
+    # los `limit` MAS VIEJOS despues de `desde`: se pagina con desde=<ultimo seq recibido>
+    resp = _json(msgs[:limit])
+    if len(msgs) > limit:
+        resp.headers["X-Historial-Truncado"] = str(len(msgs) - limit)  # cuantos quedaron afuera
+    return resp
 
 
 async def api_metricas(request: web.Request) -> web.Response:
@@ -191,7 +231,7 @@ async def api_metricas(request: web.Request) -> web.Response:
 async def raiz(request: web.Request) -> web.Response:
     cfg = request.app[HUB_KEY].config
     rutas = ["GET /health", "GET /api", "GET /api/sesiones",
-             "GET /api/sesiones/<id>/historial?desde=<seq>[&tipos=todos]",
+             "GET /api/sesiones/<id>/historial?desde=<seq>[&tipos=todos][&limit=<1-1000, default 500>]",
              "GET /api/metricas (Bearer)", "WS /ws/<session_id>?lang=<xx>", "WS /ingest (auth en el primer frame)"]
     if cfg.web_dir:
         rutas += ["GET / (web/index.html)", "GET /s/<session_id> (web/sesion.html)", "GET /<archivo> (web/)"]
@@ -209,6 +249,17 @@ def _silenciar_resets(loop: asyncio.AbstractEventLoop, contexto: dict) -> None:
         log.debug("conexion cortada por el cliente: %s", contexto.get("message"))
         return
     loop.default_exception_handler(contexto)
+
+
+async def _cabeceras(request: web.Request, resp: web.StreamResponse) -> None:
+    """B2/B5: en TODA respuesta (API, estaticos, errores, upgrade de WS). `Server` sin version (aiohttp
+    hace setdefault despues de esta senal). X-Frame-Options solo en /panel/ (tiene el campo del token);
+    la vista queda enmarcable a proposito (OBS / embebidos)."""
+    resp.headers["Server"] = "vibeathon-hub"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    if request.path == "/panel" or request.path.startswith("/panel/"):
+        resp.headers["X-Frame-Options"] = "SAMEORIGIN"
 
 
 async def _al_arrancar(app: web.Application) -> None:
@@ -241,6 +292,7 @@ def crear_app(config: Config) -> web.Application:
     app.router.add_get("/api/metricas", api_metricas)
     # B4: estaticos DESPUES de la API (el comodin de web va ultimo y no tapa /api, /ws, /ingest, /health)
     estaticos.montar(app, config.web_dir, config.panel_dir)
+    app.on_response_prepare.append(_cabeceras)
     app.on_startup.append(_al_arrancar)
     app.on_shutdown.append(_al_apagar)
     app.on_cleanup.append(_al_limpiar)

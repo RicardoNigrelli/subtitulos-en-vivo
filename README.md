@@ -133,11 +133,36 @@ MODO=replay docker compose -f ops/docker-compose.yml up -d --build
 docker compose -f ops/docker-compose.yml down
 ```
 
-Levanta dos servicios (`hub` y `worker`) sobre una única imagen (`ops/Dockerfile`). El hub sirve TODO
-en el `:8080`: índice de sesiones (`GET /`), la vista por sesión (`/s/<id>?lang=es`) y el panel de
-monitoreo (`/panel/`). **El modo replay reproduce sesiones grabadas: no cumple R17a ni R21 por sí
-solo** (no es audio en vivo); sirve para mostrar el pipeline completo (hub + vista + panel +
-fan-out) sin credenciales ni costo (eje 3 de escalabilidad, ver más abajo).
+Levanta tres servicios sobre una única imagen (`ops/Dockerfile`): `token-init`, `hub` y `worker`. El
+hub sirve TODO en el `:8080`: índice de sesiones (`GET /`), la vista por sesión (`/s/<id>?lang=es`) y
+el panel de monitoreo (`/panel/`). **El modo replay reproduce sesiones grabadas: no cumple R17a ni
+R21 por sí solo** (no es audio en vivo); sirve para mostrar el pipeline completo (hub + vista + panel
++ fan-out) sin credenciales ni costo (eje 3 de escalabilidad, ver más abajo).
+
+**`HUB_TOKEN` (token de ingesta worker→hub y de `/api/metricas` del panel) es OBLIGATORIO fuera de
+`127.0.0.1`/`localhost`**: con `HUB_HOST=0.0.0.0` (lo que fija este compose), si el token es
+`dev-token`, está vacío o tiene menos de 16 caracteres, **el hub no arranca** (exit 2; ver
+`hub/config.py::revisar_token`, `reportes/backend-seguridad.md`). Para no obligar a generarlo a mano
+antes de un `docker compose up` de un jurado, el servicio `token-init` genera uno una sola vez
+(`secrets.token_urlsafe(24)`) en un volumen compartido si `HUB_TOKEN` no vino ni del entorno ni de
+`.env`; `hub` y `worker` lo leen del mismo volumen y quedan con el MISMO valor. Si `.env` sí trae un
+`HUB_TOKEN` propio (16+ caracteres, generado con el comando de abajo), ambos usan ese en cambio. En
+ningún caso el token viaja por query string (`?token=`): queda en los access logs.
+
+```bash
+# generar un token propio (para un evento real; opcional para levantar la demo)
+python -c "import secrets;print(secrets.token_urlsafe(24))"   # pegarlo en HUB_TOKEN en .env
+
+# ver el token que terminó usando el compose (el propio o el generado por token-init), para
+# pegarlo en el campo de token del panel (http://localhost:8080/panel/). Doble barra en la ruta
+# ("//run/...") por Git Bash en Windows: reescribe una barra sola como si fuera una ruta local
+# incluso dentro de `docker exec` (en Linux/macOS o PowerShell, una barra alcanza):
+docker compose -f ops/docker-compose.yml exec hub cat //run/vibeathon/hub-token
+
+# el arranque de cada contenedor también dice el ORIGEN del token y sus primeros 4 caracteres
+# (nunca el valor completo):
+docker compose -f ops/docker-compose.yml logs hub worker | grep HUB_TOKEN
+```
 
 La imagen (`ops/Dockerfile`) corre hub y worker con un usuario sin privilegios (`app`, uid 10001),
 no root. Desde este commit, los servidores de desarrollo (`web/servir.py`, `panel/servir.py`)
@@ -180,7 +205,7 @@ Detalle completo de cada variable, comentado, en `.env.example`; resumen:
 | `GEMINI_API_KEY_RESERVA` | opcional: segunda key de OTRO proyecto de Google Cloud, cupo propio; sólo como reserva de emergencia para el video, no hace falta para levantar el proyecto |
 | `GEMINI_LIVE_MODEL` | `gemini-3.5-transcribe-live` — transcripción en vivo (R18) |
 | `GEMINI_TEXT_MODEL` / `GEMINI_TEXT_MODEL_ALT` | `gemini-3.5-flash-lite` / `gemini-3.1-flash-lite` — traducción de texto EN↔ES (R19); la Live API no traduce, hace falta un segundo paso con un modelo de texto |
-| `HUB_TOKEN` | token de ingesta (worker→hub) y de `GET /api/metricas`; cambiar el default `dev-token` en un evento real |
+| `HUB_TOKEN` | token de ingesta (worker→hub) y de `GET /api/metricas`. **Obligatorio** (16+ caracteres, no `dev-token`) si el hub escucha fuera de `127.0.0.1`/`localhost` (Docker, evento real): si no, el hub no arranca. Con Docker Compose, si queda vacío, `token-init` genera uno y lo comparte con `hub` y `worker` (ver "Con Docker Compose" arriba); generar uno propio: `python -c "import secrets;print(secrets.token_urlsafe(24))"`. Nunca por query string |
 
 ## Audios de prueba e importar (R17b)
 
@@ -338,24 +363,44 @@ arranque simple, sin un operador dedicado mirando la mini PC) esto se mantiene o
 La fuerza bruta no alcanza: hay tres cuellos de botella distintos y cada uno se resuelve distinto.
 
 1. **Sesiones contra la API de Gemini.** Cada sesión de transcripción en vivo consume el cupo de
-   *Transcribe Live* del proyecto de Google Cloud (nivel gratuito: 20 000 TPM). Antes de la
-   vibeathon se midieron **7 sesiones concurrentes** con ese cupo; en esta entrega el MVP corrió
-   **2 sesiones reales de ~11 min en simultáneo** (tabla de arriba). Para más salas que las que
-   entran en el nivel gratuito: pasar a un **nivel pago** de Gemini, o repartir sesiones entre
+   *Transcribe Live* del proyecto de Google Cloud. Los límites de frecuencia (RPM/RPD/TPM) son **por
+   PROYECTO, no por key**: está documentado textual en
+   [ai.google.dev/gemini-api/docs/rate-limits](https://ai.google.dev/gemini-api/docs/rate-limits):
+   *"Rate limits are applied per project, not per API key"*. Por eso cada `GEMINI_API_KEY` adicional
+   tiene que ser de un **proyecto de Google Cloud distinto**: usar la misma cuenta con dos keys del
+   mismo proyecto NO suma cupo. Los valores concretos del nivel gratuito (20 000 TPM en
+   transcripción, 15 RPM / 500 RPD por modelo de texto) **no están publicados** en esa página ni en
+   ninguna documentación pública: son los que se vieron en la vista de límites de AI Studio de esta
+   cuenta el 24/09/2026 y pueden cambiar sin aviso — nunca "según la documentación". Igual con **7
+   sesiones Live concurrentes**: es una **medición propia** hecha antes del evento con esta cuenta
+   (no una cifra documentada por Google), y en esta entrega el MVP corrió **2 sesiones reales de
+   ~11 min en simultáneo** (tabla de arriba). Para más salas que las que entran en el nivel
+   gratuito: pasar a un **nivel pago** de Gemini (límites más altos, pero tampoco publicados —
+   verificar en AI Studio antes de presupuestar, no asumir un número), o repartir sesiones entre
    **varios proyectos de Google Cloud** (cada uno con su propia `GEMINI_API_KEY` y su propio cupo;
    cada sala elige la suya con `python -m worker.run --key GEMINI_API_KEY_B ...`, donde el valor es el
    NOMBRE de la variable en `.env`). Con dos salas del mismo proyecto vimos más atascos del server que
    con una (fila "Dos o más salas" de "Qué pasa si…"): escalonar el arranque 20–30 s o una key por sala.
-   El segundo modelo que traduce el texto (R19, no es la Live API) comparte cupo entre TODAS las
-   sesiones de una misma key: 15 RPM por modelo en el nivel gratuito, con un tope propio de **12
-   llamadas por modelo por minuto** repartido entre procesos mediante un archivo de reservas con
-   lock (detalle en [`worker/README.md`](worker/README.md#llamadas-al-modelo-de-texto-entre-procesos-cuota-texto-reservasjsonl)).
-   Verificado con 2 sesiones reales en paralelo: 26 reservas entre 2 procesos, máximo 12 por modelo
-   en cualquier ventana de 60 s (nunca 13); ese tope se comparte por MÁQUINA (el archivo de reservas
-   `CUOTA_TEXTO_RESERVAS`), no por key: con 2 salas ya se alcanza (≈ 97 % traducido), con 3 quedan ≈ 3 de cada 4
-   líneas traducidas y con 5 la mitad (simulación con el limitador real, `qa/out/adv-final/e4_traductor_sim.py`).
-   Para más salas por máquina: un archivo de reservas por key o proyecto (`CUOTA_TEXTO_RESERVAS` distinto en cada
-   sala, cada una con su key), lotes más grandes (`TRADUCTOR_LOTE_MAX`, `TRADUCTOR_LOTE_S`) o nivel pago.
+   El segundo modelo que traduce el texto (R19, no es la Live API) tiene, según lo visto en AI Studio
+   el 24/09 (no documentado, puede cambiar), 15 RPM por modelo en el nivel gratuito; el worker se
+   autoimpone un tope propio de **12 llamadas por modelo por minuto**, y desde el arreglo del 25/09
+   ese tope se cuenta **por (key, modelo)** — coherente con que el límite real de Google también es
+   por proyecto: dos salas con `--key` distinta (dos proyectos) tienen cada una su propio cupo de
+   12/modelo/60 s, aunque compartan el mismo archivo de reservas (`CUOTA_TEXTO_RESERVAS`) y la misma
+   máquina (detalle en
+   [`worker/README.md`](worker/README.md#llamadas-al-modelo-de-texto-entre-procesos-cuota-texto-reservasjsonl)).
+   Con lotes por defecto (`TRADUCTOR_LOTE_MAX=2 TRADUCTOR_LOTE_S=4`) entran **2 salas por key** en el
+   nivel gratuito; con lotes más grandes (`TRADUCTOR_LOTE_MAX=3 TRADUCTOR_LOTE_S=6`, ~2 s más de
+   atraso) entran **3 por key**. Corrida REAL de **5 salas simultáneas** (25/09 08:02 AR, 2 keys —
+   3 salas con la principal y 2 con `GEMINI_API_KEY_RESERVA`, arranques escalonados 5 s): las 5
+   conexiones Live abrieron y transcribieron (ningún `1011` por cupo); las 3 salas que compartían
+   key tradujeron 78 % / 74 % / 50 % de sus líneas, y las 2 con key propia el 100 %
+   ([`docs/evidencia.md`](docs/evidencia.md), sección "1b. Cinco salas reales en simultáneo"). Para
+   10 salas: 4–5 keys/proyectos (repartidas de a 2 o 3 por key según el lote) o nivel pago —
+   receta completa en [`worker/README.md`](worker/README.md#cómo-llegar-a-5-y-10-salas). Hay además
+   un *hedge*: si un lote no respondió en `TRADUCTOR_HEDGE_S` segundos (default 4, "0" lo apaga) se
+   lo manda también al otro modelo con cupo libre y gana el primero que conteste, sin quitarle cupo
+   a lotes nuevos (`TRADUCTOR_HEDGE_MARGEN`, default 3 lugares reservados).
 2. **Espectadores por sesión.** El hub hace fan-out por sesión + idioma, con una cola propia por
    cliente: uno lento o colgado no afecta a los demás (se lo desconecta con `1013` y reconecta
    solo). No gasta cupo de Gemini — es tráfico entre el hub y los navegadores. Medido con clientes
@@ -380,6 +425,14 @@ En los cinco casos el worker reabre una conexión nueva con solape y sigue emiti
 proveedor**. Corrida real de referencia (2 × ~11 min, mismo comando citado en "Reproducir los
 números de R21"): 5 rotaciones (3 en la sesión EN, 2 en la ES; todas preventiva o cierre en esa
 corrida en particular), cobertura 1,0 en las dos sesiones, sin ningún tramo con voz y sin texto.
+
+El hub es **un único proceso Python en un núcleo** (estado en memoria, sin forma de repartirlo entre
+CPUs ni entre máquinas): eso, y no la API de Gemini, es el techo del eje 2. Medido: 1000 espectadores
+sintéticos sobre UNA sala, sin pérdidas ni cierres (`hub.carga --clientes 1000`, comando de arriba); y
+20 sesiones en simultáneo en modo replay sin problemas de memoria del hub (`qa/smoke.py --sesiones 20
+--replay <lista de .jsonl de fixtures/casetes/ separados por coma> --tag veinte-salas`, reutiliza los
+casetes existentes para tener 20 sesiones aunque haya menos de 20 archivos). Detalle de CPU/RAM en los
+reportes de bloque del equipo (no versionados por tamaño, ver "Verificación" más abajo).
 
 ## Panel de monitoreo (R8e)
 
@@ -433,12 +486,21 @@ reportes de bloque del equipo, no versionados por tamaño — lo reproducible es
 
 ## Limitaciones conocidas
 
-- El hub no limita todavía clientes por IP ni sesiones por productor autenticado (hallazgo medio de la revisión de
-  seguridad, `reportes/seguridad.md` en el repo de trabajo); en un evento real ponelo detrás de un proxy inverso con
-  límites por IP. El token de ingesta y de métricas (`HUB_TOKEN`) hay que cambiarlo del default.
+- El hub no limita todavía clientes por IP ni sesiones por productor autenticado (`hub/README.md`,
+  "Seguridad y límites conocidos"); en un evento real ponelo detrás de un proxy inverso con límites
+  por IP y TLS (el token viaja en claro por `ws://`). El token débil (`dev-token`, vacío o < 16
+  caracteres) ya no es sólo una recomendación: el hub directamente no arranca con él fuera de
+  `127.0.0.1`/`localhost` (ver "Con Docker Compose" arriba).
+- **Un reinicio del hub pierde las traducciones ya entregadas** (el hub sólo guarda estado en
+  memoria): el worker reenvía sus `text` (llegan con `translations: {}`) pero no vuelve a mandar las
+  `translation` que ya había entregado antes del reinicio. Quien ya estaba mirando conserva las que
+  tenía; quien entra después, hace backfill de ese tramo, o exporta desde el hub (no desde el
+  casete), los ve sin traducir (detalle y números medidos en `hub/README.md`, "Seguridad y límites
+  conocidos"). No aplica al modo replay reproducido de nuevo, ni a exportar directamente desde el
+  casete (`docs/export/exportar.py --casete ...`).
 - `hub/tests/test_fanout.py` (200 y 500 clientes) colgaba la noche de la vibeathon por dos defectos del propio test
   (cola de 10 mensajes que atrapaba al cliente vivo; mensajes de 62 KB que el contrato rechaza); corregido el 25/09, la
-  suite del hub pasa completa (41).
+  suite del hub pasa completa (63, con los 22 nuevos de seguridad).
 - Fuente de micrófono implementada pero no verificada en esta máquina (OBS retenía el dispositivo).
 
 ## Licencia

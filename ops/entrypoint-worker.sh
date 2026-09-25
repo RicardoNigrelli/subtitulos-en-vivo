@@ -24,6 +24,22 @@ HUB_PORT="${HUB_PORT:-8080}"
 HUB_URL="ws://hub:${HUB_PORT}/ingest"
 MODO="${MODO:-replay}"
 
+# HUB_TOKEN compartido con el hub (ops/docker-compose.yml, servicio token-init): si vino del
+# entorno o de ../.env (env_file de este servicio) se usa tal cual -mismo criterio que
+# ops/entrypoint-hub.sh, así los dos quedan con el mismo valor sin pasar por el archivo-; si no
+# (vacío incluido), se toma el que token-init generó en el volumen compartido. worker/emisor.py lee
+# HUB_TOKEN del entorno (token_hub()); sin este paso caería en silencio al "dev-token" de desarrollo,
+# que el hub en Docker (HUB_HOST=0.0.0.0) rechaza (4401).
+TOKEN_FILE=/run/vibeathon/hub-token
+if [ -n "${HUB_TOKEN:-}" ]; then
+    ORIGEN_TOKEN="entorno-o-.env"
+else
+    HUB_TOKEN="$(cat "$TOKEN_FILE")"
+    ORIGEN_TOKEN="generado por token-init ($TOKEN_FILE)"
+fi
+export HUB_TOKEN
+echo "[entrypoint-worker] HUB_TOKEN origen=$ORIGEN_TOKEN primeros4=$(printf '%s' "$HUB_TOKEN" | cut -c1-4)... (nunca se imprime entero)"
+
 replay_en_bucle() {
     echo "[entrypoint-worker] MODO REPLAY (rotulado; no cumple R17a/R21 por si solo) -> $HUB_URL"
     encontrados=0
@@ -70,6 +86,7 @@ asr_real() {
         --titulo "The Third Golden Age - Grady Booch (clip 300s)" \
         --url "https://www.youtube.com/watch?v=cPaqkFCqWeg" \
         --vocab "Nerdearla,Grady Booch" &
+    pid_en=$!
     python -m worker.run \
         --archivo fixtures/audio/clips/nerdearla-es-paez-300s-60s.wav \
         --sesion docker-es --lang es --duracion 60 \
@@ -77,7 +94,15 @@ asr_real() {
         --titulo "Brownfield Engineering - Nicolas Paez (clip 300s)" \
         --url "https://www.youtube.com/watch?v=V2YxvP-XXEc" \
         --vocab "Nerdearla,Nicolas Paez,brownfield" &
-    wait
+    pid_es=$!
+    # `wait` sin argumentos siempre devuelve 0 aunque un hijo haya fallado: se espera cada PID por
+    # separado. No importa el código exacto de cada uno, sólo que el del script deje de ser 0 si
+    # cualquiera de las dos sesiones ASR reales se cayó (compose necesita esto para poder marcar el
+    # contenedor como fallido en vez de "Up" con el worker muerto adentro).
+    estado=0
+    wait "$pid_en" || estado=1
+    wait "$pid_es" || estado=1
+    return "$estado"
 }
 
 if [ "$MODO" = "replay" ]; then

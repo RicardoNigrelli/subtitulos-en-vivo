@@ -18,7 +18,7 @@ from aiohttp import web
 
 from . import estaticos
 from .app import crear_app
-from .config import TOKEN_DEV, cargar_config
+from .config import TOKEN_DEV, cargar_config, revisar_token
 
 log = logging.getLogger("hub")
 
@@ -59,6 +59,12 @@ def main(argv: list[str] | None = None) -> int:
                     "desarrollo '%s'. No usar asi en un evento.", TOKEN_DEV)
     else:
         log.info("HUB_TOKEN leido de %s (%d caracteres; no se imprime)", cfg.token_origen, len(cfg.token))
+    fatal, aviso = revisar_token(cfg)  # A1
+    if fatal:
+        log.error("%s", fatal)
+        return 2
+    if aviso:
+        log.warning("%s", aviso)
     ocupado = puerto_ocupado(cfg.host, cfg.port)
     if ocupado:
         log.error("el puerto %d ya contesta en %s: otro proceso lo tiene. No se levanta el hub "

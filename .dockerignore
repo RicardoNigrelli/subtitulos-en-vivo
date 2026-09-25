@@ -10,3 +10,6 @@ fixtures/audio/full
 __pycache__
 **/__pycache__
 node_modules
+ESTADO.md
+.pytest_cache
+**/.pytest_cache

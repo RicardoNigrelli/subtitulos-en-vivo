@@ -40,15 +40,24 @@
   // (la vista no maneja token, pero igual no hay razón para hablarle a un host que no pedimos
   // nosotros). Fuera de esos hosts: se ignora (como si no hubiera ?hub=) y se avisa en un chip
   // aparte (#chip-hub-invalido) + consola, nunca en silencio.
-  function nombreHost(hostPuerto) {
-    var m = /^\[([^\]]+)\](?::\d+)?$/.exec(hostPuerto); // [::1] o [::1]:8100
-    if (m) return m[1];
-    var partes = hostPuerto.split(':');
-    return partes.length <= 2 ? partes[0] : hostPuerto; // ipv6 pelado (sin corchetes): se compara entero
-  }
+  // Arreglo M1 (adversario-final-seguridad): el parser viejo tomaba "lo que está antes de los
+  // dos puntos" como host, así que "localhost:8100@evil.example" pasaba como si el host fuera
+  // "localhost" cuando en realidad, armado en una URL real (ws://localhost:8100@evil.example/...),
+  // "localhost:8100" es USERINFO y el host de verdad es evil.example. Ahora: 1) se rechaza de
+  // entrada cualquier valor con @ / \ ? # (esos caracteres no tienen nada que hacer en un
+  // "host:puerto"), y 2) se parsea con el WHATWG URL real y se exige que no traiga username/password.
   function hubHostPermitido(hostPuerto) {
-    var host = nombreHost(hostPuerto).toLowerCase();
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' ||
+    if (typeof hostPuerto !== 'string' || hostPuerto === '') return false;
+    if (/[@/\\?#]/.test(hostPuerto)) return false;
+    var url;
+    try {
+      url = new URL('http://' + hostPuerto);
+    } catch (e) {
+      return false;
+    }
+    if (url.username || url.password) return false;
+    var host = url.hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]' ||
       host === location.hostname.toLowerCase();
   }
   var hubParamCrudo = params.get('hub');
@@ -80,9 +89,13 @@
     return wsScheme + '://' + hubHost + '/ws/' + encodeURIComponent(sessionId || '') + '?lang=' + encodeURIComponent(idioma);
   }
 
+  // Addendum de backend (25/09, hub nuevo): /historial acepta `limit` (default 500, máximo 1000).
+  // Sin esto, un backfill de más de 500 mensajes (posible tras una caída larga) se truncaba en el
+  // default del hub ANTES de que aplicarListaBackfill pudiera aplicar su propio límite de 50 líneas
+  // visibles — se pide el máximo (1000) para que el recorte real lo siga decidiendo el cliente.
   function historialUrl(desde) {
     return httpScheme + '://' + hubHost + '/api/sesiones/' + encodeURIComponent(sessionId || '') +
-      '/historial?desde=' + encodeURIComponent(desde) + '&tipos=todos';
+      '/historial?desde=' + encodeURIComponent(desde) + '&tipos=todos&limit=1000';
   }
 
   // ---------- elementos ----------
@@ -122,10 +135,17 @@
   var BACKOFF_MAX = 10000;
   var reconnectTimer = null;
   var elParcial = null;    // nodo DOM de la unica linea parcial visible (o null)
-  var pendientes = {};     // seq -> {nodo, span, creadoTHub}: lineas en idioma traducido esperando su traduccion
+  var pendientes = {};     // seq -> {nodo, span, creadoTHub, original, langOriginal}: lineas
+                            // esperando su traduccion (placeholder "…", ver agregarLineaPendiente)
   var enBackfill = false;  // B3: hay un GET .../historial en vuelo tras una reconexion
   var bufferEnVivo = [];   // B3: mensajes en vivo (ya parseados) recibidos mientras enBackfill es true,
                             // en orden de llegada; se aplican DESPUES del historial (finalizarBackfill).
+  var conectadoAlgunaVez = false; // decisión Ricardo/A1-B1: "conectando…" solo antes de la 1a apertura
+                                   // real del socket; despues de esa, una caida es "reconectando…"
+  var chipEstadoActual = null;    // ultimo estado puesto por setChip (alimenta actualizarEstadoVacio)
+  var elEstadoVacio = null;       // <p> en #lineas con el estado vacio (conectando/esperando/sin
+                                   // conexion/sala inexistente); se borra solo con contenido real
+  var sesionInexistente = false;  // A1: /api/sesiones respondio pero no lista este session_id
 
   // ---------- B4: monitor de conexión (chip de 4 estados) ----------
   // Todo en reloj del HUB (t_hub, epoch segundos) anclado con Date.now() local sólo para
@@ -144,8 +164,11 @@
   var siguiendoAlFondo = true;
 
   function setChip(estado, n) {
-    // 4 estados, siempre con TEXTO (nunca sólo color, skill ui-subtitulos):
+    // 4 estados "de socket" + "conectando" como caso inicial (B1, distinto de "reconectando":
+    // no hubo ninguna conexión previa que se haya caído). Siempre con TEXTO (nunca sólo color,
+    // skill ui-subtitulos):
     var textos = {
+      'conectando': 'conectando…',
       'en-vivo': 'en vivo',
       'sin-texto': 'sin texto hace ' + n + ' s',
       'reconectando': 'reconectando…',
@@ -155,6 +178,51 @@
     if (elChip.textContent !== texto) elChip.textContent = texto;
     var clase = 'chip chip--' + estado;
     if (elChip.className !== clase) elChip.className = clase;
+    chipEstadoActual = estado;
+    actualizarEstadoVacio();
+  }
+
+  // ---------- A1+A2: estado vacío en #lineas (nunca pantalla negra sin explicación) ----------
+  // Prioridad: sala inexistente > sin conexión > conectando > esperando texto. Se oculta apenas
+  // hay CUALQUIER línea real (confirmada, pendiente, parcial o hueco): nunca pisa contenido ya
+  // pintado (append puro).
+  var TEXTOS_ESTADO_VACIO = {
+    conectando: 'Conectando…',
+    esperando: 'Esperando la primera frase…',
+    'sin-conexion': 'Sin conexión con el servidor de subtítulos. Reintentando…'
+  };
+  function huboContenidoReal() {
+    return !!elLineas.querySelector('.linea');
+  }
+  function mostrarEstadoVacio(tipo) {
+    if (elEstadoVacio && elEstadoVacio.dataset.tipo === tipo) return; // ya está, no reescribir
+    if (!elEstadoVacio) {
+      elEstadoVacio = document.createElement('p');
+      elEstadoVacio.className = 'estado-vacio-lineas';
+      elLineas.appendChild(elEstadoVacio);
+    }
+    elEstadoVacio.dataset.tipo = tipo;
+    elEstadoVacio.textContent = '';
+    if (tipo === 'inexistente') {
+      elEstadoVacio.appendChild(document.createTextNode('No encontramos la sala «' + (sessionId || '') + '». '));
+      var a = document.createElement('a');
+      a.href = '/';
+      a.className = 'volver-indice-inline';
+      a.textContent = 'Volver al índice';
+      elEstadoVacio.appendChild(a);
+    } else {
+      elEstadoVacio.textContent = TEXTOS_ESTADO_VACIO[tipo] || '';
+    }
+  }
+  function ocultarEstadoVacio() {
+    if (elEstadoVacio) { elEstadoVacio.remove(); elEstadoVacio = null; }
+  }
+  function actualizarEstadoVacio() {
+    if (huboContenidoReal()) { ocultarEstadoVacio(); return; }
+    if (sesionInexistente) { mostrarEstadoVacio('inexistente'); return; }
+    if (chipEstadoActual === 'desconectado') { mostrarEstadoVacio('sin-conexion'); return; }
+    if (chipEstadoActual === 'conectando') { mostrarEstadoVacio('conectando'); return; }
+    mostrarEstadoVacio('esperando'); // en-vivo/sin-texto/reconectando sin ninguna linea todavia
   }
 
   // Recalcula el estado del chip cada 250ms: heartbeat sano (con tolerancia) decide entre
@@ -187,7 +255,13 @@
       }
     } else {
       if (cayendoDesde === null) cayendoDesde = ahora;
-      setChip((ahora - cayendoDesde) >= UMBRAL_DESCONECTADO_MS ? 'desconectado' : 'reconectando');
+      if ((ahora - cayendoDesde) >= UMBRAL_DESCONECTADO_MS) {
+        setChip('desconectado');
+      } else {
+        // B1: "conectando…" sólo antes de la primera apertura real del socket; una caída
+        // posterior a esa es "reconectando…" (ver conectadoAlgunaVez, marcado en 'open').
+        setChip(conectadoAlgunaVez ? 'reconectando' : 'conectando');
+      }
     }
     purgarPendientesVencidos(ahora);
   }
@@ -215,6 +289,7 @@
     // "append puro": una linea confirmada, una vez pintada, no cambia mas de contenido.
     var div = document.createElement('div');
     div.className = 'linea' + (opts.especial ? ' linea--especial' : '');
+    if (opts.lang) div.lang = opts.lang; // M2: lang real de ESTE texto (puede diferir del ?lang= de la vista)
 
     var span = document.createElement('span');
     span.className = 'linea__texto';
@@ -235,6 +310,7 @@
       marcarComoNueva(div);
     }
     autoScroll();
+    actualizarEstadoVacio();
     return div;
   }
 
@@ -257,31 +333,45 @@
   }
 
   // ---------- linea PENDIENTE (vista traducida, texto final sin su traduccion todavia) ----------
-  // Regla (documentada tambien en el reporte): al llegar un `text` sin `translations[lang]`
-  // todavia, se pinta el ORIGINAL en gris como linea PENDIENTE (reemplazable, igual que un parcial).
-  // Cuando llega su item de `translation` con ok:true, esa linea pasa a CONFIRMADA en blanco con el
-  // texto traducido. Si llega ok:false, pasa a CONFIRMADA con el ORIGINAL (que ya estaba pintado) +
-  // la marca "sin traducir". Una vez CONFIRMADA (por cualquiera de los dos caminos) la linea NUNCA
-  // se vuelve a tocar: es la unica mutacion permitida (pendiente -> confirmada), consistente con
-  // "las lineas confirmadas nunca se reescriben" (append puro) y con "no reescribís texto ya
-  // mostrado" (brief del agente).
-  // B3: sin timeout (una traduccion real puede llegar despues de session_end).
+  // DECISIÓN DE PRODUCTO (Ricardo, opción a, tras adversario-final-ux A5): la vista en un idioma
+  // traducido muestra SÓLO ese idioma, sin mezclar. Al llegar un `text` sin `translations[lang]`
+  // todavía, en vez de pintar el ORIGINAL (que antes se veía en gris, en otro idioma, mezclado con
+  // líneas en castellano — lo que la skill señala como lo que más cansa), se pinta un INDICADOR
+  // discreto ("…" con animación suave, ver estilo.css `.linea--pendiente`) que sólo ocupa el lugar
+  // de esa `seq` para conservar el ORDEN; aria-hidden porque no hay nada que anunciar todavía (M2).
+  // Cuando llega su `translation` con ok:true, esa línea pasa a CONFIRMADA con el texto traducido:
+  // única mutación permitida (placeholder -> texto), igual que "las líneas confirmadas nunca se
+  // reescriben" (append puro). Si falla (ok:false) o vence el tope, se llena con el ORIGINAL +
+  // una marca chica de idioma ("EN") en vez del rótulo "SIN TRADUCIR" (el original completo sigue
+  // disponible en el chip "en (original)" del selector). La traducción puede llegar fuera de orden
+  // (medido por el adversario: 0–3 por toma): cada `translation` resuelve SU propio seq en
+  // `pendientes`, sin importar el orden de llegada.
+  // B3: sin timeout salvo el de abajo (una traduccion real puede llegar despues de session_end).
   // B4 (pedido del adversario en el cierre de B3: "estado terminal para lineas pendientes"): tope
   // de 120s en reloj del HUB (creadoTHub, el t_hub del `text` que abrió la línea pendiente) contra
   // el t_hub del latido más reciente (ver tick()/purgarPendientesVencidos). Pasado el tope, se
-  // resuelve exactamente como un ok:false real: "sin traducir" con el original ya pintado.
-  function agregarLineaPendiente(seq, textoOriginal, creadoTHub) {
+  // resuelve exactamente como un ok:false real.
+  function agregarLineaPendiente(seq, textoOriginal, creadoTHub, langOriginal) {
     var div = document.createElement('div');
     div.className = 'linea linea--pendiente';
+    div.setAttribute('aria-hidden', 'true'); // M2: indicador, no anuncia nada; el texto real llega despues
     var span = document.createElement('span');
     span.className = 'linea__texto';
-    span.textContent = textoOriginal;
+    span.textContent = '…';
     div.appendChild(span);
     elLineas.appendChild(div);
     autoScroll();
-    pendientes[seq] = { nodo: div, span: span, creadoTHub: (typeof creadoTHub === 'number' ? creadoTHub : null) };
+    pendientes[seq] = {
+      nodo: div, span: span,
+      creadoTHub: (typeof creadoTHub === 'number' ? creadoTHub : null),
+      original: textoOriginal,
+      langOriginal: langOriginal || sessionLang || null
+    };
+    actualizarEstadoVacio();
   }
 
+  // resultado: { texto: 'traduccion' } (ok:true) o { fallback: true } (ok:false / vencida: se
+  // llena con el ORIGINAL guardado en `pendientes` + marca de idioma).
   function resolverPendiente(seq, resultado) {
     var p = pendientes[seq];
     if (!p) return; // ya resuelta, o el item no le corresponde a ninguna linea pendiente: se ignora
@@ -289,17 +379,21 @@
                      // llega mergeado" — el hub ya hizo el merge del lado del texto)
     delete pendientes[seq];
     p.nodo.classList.remove('linea--pendiente');
-    if (resultado.texto != null) {
-      p.span.textContent = resultado.texto; // unica reescritura permitida: pendiente -> confirmada
-    }
-    if (resultado.marca) {
+    p.nodo.removeAttribute('aria-hidden'); // ya es texto real: se anuncia como cualquier otra línea confirmada
+    if (resultado.fallback) {
+      p.span.textContent = p.original; // única reescritura permitida: placeholder -> texto (el original)
+      p.nodo.lang = p.langOriginal || '';
       var marca = document.createElement('span');
       marca.className = 'marca-sin-traducir';
-      marca.textContent = resultado.marca;
+      marca.textContent = (p.langOriginal || '').toUpperCase();
       p.nodo.appendChild(marca);
+    } else if (typeof resultado.texto === 'string') {
+      p.span.textContent = resultado.texto; // única reescritura permitida: placeholder -> texto (la traducción)
+      p.nodo.lang = lang;
     }
     marcarComoNueva(p.nodo);
     autoScroll();
+    actualizarEstadoVacio();
   }
 
   function limpiarPendientes() {
@@ -315,7 +409,7 @@
       var p = pendientes[seqStr];
       if (p.creadoTHub === null) return; // sin ancla real (no debería pasar: todo text trae t_hub)
       if ((ahoraTHub - p.creadoTHub) > TOPE_PENDIENTE_S) {
-        resolverPendiente(Number(seqStr), { marca: 'sin traducir' });
+        resolverPendiente(Number(seqStr), { fallback: true });
       }
     });
   }
@@ -336,6 +430,8 @@
     if (!elParcial) {
       elParcial = document.createElement('div');
       elParcial.className = 'linea linea--parcial';
+      elParcial.setAttribute('aria-hidden', 'true'); // M2: se reemplaza cada ~3s, no se anuncia
+      elParcial.lang = lang; // el parcial solo existe en la vista del idioma original (ver el switch de abajo)
       var span = document.createElement('span');
       span.className = 'linea__texto';
       elParcial.appendChild(span);
@@ -346,6 +442,7 @@
     }
     elParcial.firstChild.textContent = texto;
     autoScroll();
+    actualizarEstadoVacio();
   }
 
   function limpiarParcial() {
@@ -404,20 +501,24 @@
 
     if (lang === item.lang) {
       // vista del idioma ORIGINAL: siempre confirmada de una, nunca pendiente (no se traduce a si misma)
-      agregarLinea(item.text);
+      agregarLinea(item.text, { lang: item.lang });
       return;
     }
     var trad = item.translations ? item.translations[lang] : undefined;
     if (trad && trad.ok === true && typeof trad.text === 'string' && trad.text.length > 0) {
       // "init.lines/historial mergeadas: pintá directo la traducción si está" — mismo camino para
       // vivo, init y backfill.
-      agregarLinea(trad.text);
+      agregarLinea(trad.text, { lang: lang });
     } else if (trad && trad.ok === false) {
-      agregarLinea(item.text, { marca: 'sin traducir' });
+      // Ya vino mergeada con ok:false (init/historial): pinta el ORIGINAL con la marca de idioma,
+      // igual que el camino en vivo (resolverPendiente con fallback:true), sin pasar por el
+      // placeholder (nunca hubo "pendiente": ya sabemos el resultado final).
+      agregarLinea(item.text, { lang: item.lang, marca: (item.lang || '').toUpperCase() });
     } else {
-      // {} o ausente: todavia no hay traduccion. Pendiente hasta que llegue su translation, con
-      // tope de 120s en reloj del hub (ver agregarLineaPendiente/purgarPendientesVencidos, B4).
-      agregarLineaPendiente(item.seq, item.text, item.t_hub);
+      // {} o ausente: todavia no hay traduccion. Pendiente (placeholder "…") hasta que llegue su
+      // translation, con tope de 120s en reloj del hub (ver agregarLineaPendiente/
+      // purgarPendientesVencidos, B4).
+      agregarLineaPendiente(item.seq, item.text, item.t_hub, item.lang);
     }
   }
 
@@ -444,7 +545,15 @@
     }).then(function (lista) {
       if (miSessionId !== sessionId) return; // no deberia cambiar sin recargar, defensivo igual
       var s = (lista || []).filter(function (x) { return x.session_id === sessionId; })[0];
-      if (s && s.title) actualizarTituloReal(s.title);
+      if (s) {
+        if (s.title) actualizarTituloReal(s.title);
+      } else {
+        // A1: el hub respondió pero no lista este session_id. No se puede afirmar con certeza
+        // (una sesión recién arrancada puede tardar en aparecer en /api/sesiones), pero mientras
+        // no llegue ningún dato real por el WS es mejor decir esto que dejar la pantalla negra.
+        sesionInexistente = true;
+        actualizarEstadoVacio();
+      }
     }).catch(function (err) {
       console.warn('[titulo] no se pudo leer /api/sesiones:', err);
     });
@@ -493,13 +602,27 @@
     if (cambio) construirSelector();
   }
 
+  // A3 (adversario-final-ux): a 390/360px el título de 12px cortado + jerga "· es (original en)"
+  // era ilegible. Se pintan DOS versiones (misma info, CSS elige cuál mostrar según el viewport,
+  // ver estilo.css ≤480px): la completa de siempre, y una corta (sólo el título real o el id, SIN
+  // el sufijo de idioma — ya lo dice el selector de idioma al lado).
   function actualizarTitulo() {
     if (!elTitulo) return;
     var base = (sessionLang && sessionLang !== lang)
       ? (sessionId + ' · ' + lang + ' (original ' + sessionLang + ')')
       : (sessionId + ' · ' + lang);
     // item 3 (B3): titulo real de la sesion, cuando ya lo sabemos, antepuesto al id/idioma.
-    elTitulo.textContent = tituloSesionReal ? (tituloSesionReal + ' — ' + base) : base;
+    var completo = tituloSesionReal ? (tituloSesionReal + ' — ' + base) : base;
+    var corto = tituloSesionReal || sessionId;
+    elTitulo.textContent = '';
+    var spanCompleto = document.createElement('span');
+    spanCompleto.className = 'titulo-texto-completo';
+    spanCompleto.textContent = completo;
+    var spanCorto = document.createElement('span');
+    spanCorto.className = 'titulo-texto-corto';
+    spanCorto.textContent = corto;
+    elTitulo.appendChild(spanCompleto);
+    elTitulo.appendChild(spanCorto);
   }
 
   function resetVista() {
@@ -512,6 +635,8 @@
     limpiarPendientes();
     elParcial = null;
     elLineas.textContent = '';
+    elLineas.lang = lang; // M2: el idioma de #lineas es el de ESTA vista (?lang=)
+    elEstadoVacio = null; // el textContent='' de arriba ya se lo llevó puesto del DOM
     lastSeq = null;
     haveInit = false;
     enBackfill = false;
@@ -655,10 +780,11 @@
 
       case 'translation':
         // En vivo llega aparte del text (que salió antes con translations:{}). Si meta.lang_to no es
-        // el idioma que estamos viendo, no nos sirve. Por item: ok:true reemplaza el texto pendiente
-        // por el traducido; ok:false deja el original (ya pintado) y agrega la marca. Si la linea ya
-        // no esta pendiente (resuelta antes, o el text todavia no llego: el hub ya se lo merge cuando
-        // llegue) resolverPendiente no hace nada — contracts/README.md lo permite explícitamente.
+        // el idioma que estamos viendo, no nos sirve. Por item: ok:true reemplaza el placeholder "…"
+        // por el traducido; ok:false lo llena con el ORIGINAL guardado + marca de idioma (A5). Si la
+        // linea ya no esta pendiente (resuelta antes, o el text todavia no llego: el hub ya se lo
+        // merge cuando llegue) resolverPendiente no hace nada — contracts/README.md lo permite
+        // explícitamente. Puede llegar fuera de orden: cada item resuelve SU seq en `pendientes`.
         // Item 2 (B3): puede llegar mucho despues, incluso tras el session_end (b1-es-60s-trad.jsonl
         // trae 3 de 6 asi) — sigue funcionando porque ya no hay timeout que haya resuelto la linea antes.
         if (msg.meta && msg.meta.lang_to === lang) {
@@ -666,7 +792,7 @@
             if (item.ok === true && typeof item.text === 'string' && item.text.length > 0) {
               resolverPendiente(item.seq, { texto: item.text });
             } else {
-              resolverPendiente(item.seq, { marca: 'sin traducir' });
+              resolverPendiente(item.seq, { fallback: true });
             }
           });
         }
@@ -803,6 +929,7 @@
       if (miConn !== connId) return;
       backoffMs = 1000;
       wsAbierto = true;
+      conectadoAlgunaVez = true;
       // ancla provisoria hasta que llegue el init (que trae t_hub real): evita que tick() vea
       // "vencido" en la fraccion de segundo entre el open y el primer mensaje.
       ultimoHeartbeatLocalMs = Date.now();
@@ -861,6 +988,9 @@
 
   if (params.get('modo') === 'obs') {
     document.body.classList.add('modo-obs');
+    // M7 [SUPUESTO]: `html:has(body.modo-obs)` puede faltar en un CEF viejo de OBS; poner la
+    // clase también en <html> no depende de :has() y deja <html> transparente en cualquier caso.
+    document.documentElement.classList.add('modo-obs');
   } else {
     if (elBotonProyeccion) elBotonProyeccion.addEventListener('click', toggleModoProyeccion);
     window.addEventListener('keydown', function (ev) {
@@ -881,9 +1011,10 @@
     elLineas.appendChild(aviso);
     elChip.textContent = 'sin sesión';
   } else {
+    elLineas.lang = lang; // M2
     actualizarTitulo();
     cargarTituloInicial();
-    setChip('reconectando'); // estado inicial: se está por intentar la primera conexión
+    setChip('conectando'); // B1: estado inicial, antes de la primera conexión (no es "reconectando")
     if (hubIgnorado && elChipHubInvalido) elChipHubInvalido.hidden = false;
     window.addEventListener('scroll', alScrollear, { passive: true });
     if (elVolverVivo) elVolverVivo.addEventListener('click', volverAlVivo);

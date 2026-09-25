@@ -1,9 +1,11 @@
-# Dos servicios: hub (bus + API + vista web + panel, TODO en un puerto) y worker (ASR real o
-# replay). Invocacion, parado en la RAIZ del repo (no en ops/):
+# Tres servicios: token-init (genera/comparte HUB_TOKEN una sola vez), hub (bus + API + vista web +
+# panel, TODO en un puerto) y worker (ASR real o replay). Invocacion, parado en la RAIZ del repo
+# (no en ops/):
 #
 #   docker compose -f ops/docker-compose.yml up                       # con .env real -> MODO=real
 #   MODO=replay docker compose -f ops/docker-compose.yml up -d --build  # SIN gastar cuota (fuerza replay)
-#   docker compose -f ops/docker-compose.yml down
+#   docker compose -f ops/docker-compose.yml down          # conserva el volumen del token (mismo entre reinicios)
+#   docker compose -f ops/docker-compose.yml down -v       # tambien borra el token generado
 #
 # `env_file: path: ../.env` se resuelve relativo a ESTE archivo (ops/), o sea la RAIZ del repo,
 # sin importar desde donde se invoque `docker compose` (siempre que se use -f ops/docker-compose.yml).
@@ -12,25 +14,55 @@
 # El servicio `web` no existe: el hub sirve la vista y el panel (`--web web --panel panel`,
 # hub/README.md). Ver ops/entrypoint-worker.sh para la logica MODO/GEMINI_API_KEY del worker.
 #
+# HUB_TOKEN compartido (pedido cruzado de backend, reportes/backend-seguridad.md): con
+# HUB_HOST=0.0.0.0 (mas abajo), el hub NO ARRANCA si el token es "dev-token", esta vacio o tiene
+# menos de 16 caracteres (hub/config.py::revisar_token). `token-init` genera uno
+# (`secrets.token_urlsafe(24)`) UNA sola vez en el volumen nombrado `hub-token`
+# (/run/vibeathon/hub-token) sólo si no vino ya un HUB_TOKEN propio por el entorno o por ../.env y
+# el archivo no existe todavia. `hub` y `worker` resuelven el mismo valor en sus propios
+# entrypoints (ops/entrypoint-hub.sh, ops/entrypoint-worker.sh):
+# HUB_TOKEN="${HUB_TOKEN:-$(cat /run/vibeathon/hub-token)}" antes de arrancar el proceso real, asi
+# los dos quedan con el MISMO token sin que nadie tenga que generarlo a mano para levantar la demo.
+# Cada uno loguea el ORIGEN y los primeros 4 caracteres del token, nunca el valor completo (ver
+# README, "Con Docker Compose", para como ver el valor completo si hace falta pegarlo en el panel).
+#
 # Variables nuevas del worker (B8: TRADUCTOR_LOTE_S y demas TRADUCTOR_*, CUOTA_*, GEMINI_SSL_RELAX,
 # ver .env.example) NO necesitan entrada nueva aca: `env_file` ya carga TODO ../.env dentro de cada
 # contenedor; alcanza con definirlas en el .env de la raiz. Sin .env, cada una cae al default del
 # codigo (worker/README.md, tabla "Variables de entorno").
 services:
+  token-init:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    image: vibeathon:dev
+    entrypoint: ["sh", "ops/entrypoint-token-init.sh"]
+    volumes:
+      - hub-token:/run/vibeathon
+
   hub:
     build:
       context: ..
       dockerfile: ops/Dockerfile
     image: vibeathon:dev
-    command: ["python", "-m", "hub", "--web", "web", "--panel", "panel"]
+    entrypoint: ["sh", "ops/entrypoint-hub.sh"]
     env_file:
       - path: ../.env
         required: false
     environment:
       - HUB_HOST=0.0.0.0
       - HUB_PORT=8080
+      # Forma "bare" (sin '='), mismo patron que MODO mas abajo: si HUB_TOKEN esta en el entorno de
+      # quien invoca `docker compose`, gana esa; si no, queda lo que traiga env_file (../.env); si
+      # tampoco, ops/entrypoint-hub.sh cae al generado por token-init.
+      - HUB_TOKEN
+    volumes:
+      - hub-token:/run/vibeathon
     ports:
       - "8080:8080"
+    depends_on:
+      token-init:
+        condition: service_completed_successfully
 
   worker:
     build:
@@ -43,9 +75,23 @@ services:
         required: false
     environment:
       - HUB_PORT=8080
-      # Forma "bare" (sin '='): si MODO esta en el entorno de quien invoca `docker compose` (p.ej.
-      # `MODO=replay docker compose ... up`), gana esa; si no, queda lo que traiga env_file (../.env)
-      # o, si tampoco, el default replay del propio entrypoint-worker.sh.
+      # Forma "bare" (sin '='): si MODO esta en el entorno de quien invoca `docker compose`
+      # (p.ej. `MODO=replay docker compose ... up`), gana esa; si no, queda lo que traiga env_file
+      # (../.env) o, si tampoco, el default replay del propio entrypoint-worker.sh.
       - MODO
+      - HUB_TOKEN
+    volumes:
+      - hub-token:/run/vibeathon
     depends_on:
-      - hub
+      token-init:
+        condition: service_completed_successfully
+      hub:
+        condition: service_started
+    # El worker no es un servicio "correr una vez y listo": en modo replay son loops infinitos por
+    # sesion, y en modo real son dos corridas de duracion fija (asr_real, ops/entrypoint-worker.sh).
+    # Si el contenedor muere (ASR real que falla, reconexion agotada) se reinicia solo; no reinicia
+    # en un `docker compose down` explicito.
+    restart: unless-stopped
+
+volumes:
+  hub-token:

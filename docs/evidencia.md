@@ -24,6 +24,28 @@ Tomas de una sala por vez (salida del comando anterior, 25/09):
 | `sala-a-051845` | en | 87,0 s | 26 | +5,5 s | 0 |
 | `simple-en-053454` | en | 69,2 s | 24 | +5,2 s | 0 |
 
+## 1b. Cinco salas reales en simultáneo (25/09 08:02 AR)
+
+Cinco `worker.run` a la vez contra un hub, 60 s de clip cada uno, arranques escalonados 5 s, tres salas con la key
+principal y dos con una segunda key de otro proyecto (`--key GEMINI_API_KEY_RESERVA`). Las cinco conexiones a la
+Live API abrieron y transcribieron; ninguna falló por cupo. Lo que sí se notó es el tope del traductor de texto del
+nivel gratuito: las tres salas que compartían key tradujeron 78 %, 74 % y 50 % de sus líneas (8 lotes sin cupo), las
+dos con key propia el 100 %. Es la medición que respalda la regla de "dos salas por key en nivel gratuito, o nivel
+pago" del README.
+
+| Casete | Key | Idioma | Audio enviado | Textos | Primer texto | Reaperturas | Traducido | Atraso traducción p50 / p95 |
+|---|---|---|---|---|---|---|---|---|
+| `cinco-1-080158` | principal | en | 70,1 s | 27 | +5,1 s | 0 | 78 % | 4,7 s / 11,5 s |
+| `cinco-2-080158` | principal | es | 68,8 s | 23 | +6,7 s | 0 | 74 % | 4,3 s / 21,4 s |
+| `cinco-3-080158` | principal | en | 68,4 s | 10 | +6,9 s | 0 | 50 % | 7,2 s / 10,2 s |
+| `cinco-4-080158` | reserva | en | 74,4 s | 13 | +6,7 s | 1 (atasco, 0 s perdidos) | 100 % | 4,2 s / 11,0 s |
+| `cinco-5-080158` | reserva | es | 68,8 s | 23 | +7,0 s | 0 | 100 % | 3,5 s / 7,7 s |
+
+Comandos: `.venv/Scripts/python docs/resumen_casetes.py fixtures/casetes/evidencia-25-09/cinco-*.jsonl` y
+`.venv/Scripts/python -m worker.medir_traduccion fixtures/casetes/evidencia-25-09/cinco-*.jsonl`. Detalle y
+comando de la corrida en `reportes/audio-pipeline-final.md` (no versionado) y en `worker/README.md`, "Cómo llegar a
+5 y 10 salas". Sin investigar: la sala 3 dio 10 textos con el mismo clip que la sala 1 dio 27.
+
 ## 2. Corridas fuera de la media: qué pasó y cómo lo cubre el sistema
 
 No todas las corridas salieron como las de arriba. En la toma doble de las 05:16 (dos salas arrancadas en el

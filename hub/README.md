@@ -35,7 +35,7 @@ Las rutas relativas (`--web web`) se resuelven contra el directorio desde el que
 |---|---|---|
 | `HUB_HOST` | `127.0.0.1` | en Docker: `0.0.0.0`. Ojo en Windows: con `127.0.0.1` un cliente que conecta a `localhost` prueba primero `::1` y puede tardar en caer a IPv4; con `HUB_HOST=localhost` el hub escucha en `127.0.0.1` y `::1` |
 | `HUB_PORT` | `8100` | puerto de la API, los WebSocket y (con `--web`/`--panel`) los estáticos. Despliegue: `8080` |
-| `HUB_TOKEN` | `dev-token` (con aviso en el log) | token de productores (`/ingest`, primer frame) y de `GET /api/metricas` (Bearer) |
+| `HUB_TOKEN` | `dev-token` (con aviso en el log) | token de productores (`/ingest`, primer frame) y de `GET /api/metricas` (Bearer). **Si es `dev-token` o tiene menos de 16 caracteres y `HUB_HOST` no es `127.0.0.1`/`localhost`/`::1`, el hub NO arranca (exit 2).** Con `dev-token` avisa siempre, venga del entorno, de `.env` o del default. Generar uno: `python -c "import secrets;print(secrets.token_urlsafe(24))"` |
 | `HUB_WEB_DIR` | (vacío) | = `--web`: carpeta de la vista de audiencia. Vacío: `GET /` devuelve la lista de rutas |
 | `HUB_PANEL_DIR` | (vacío) | = `--panel`: carpeta del panel de monitoreo |
 | `HUB_HISTORY` | `1000` | mensajes por sesión en memoria |
@@ -44,6 +44,10 @@ Las rutas relativas (`--web web`) se resuelven contra el directorio desde el que
 | `HUB_LIVE_S` | `30` | ventana para `state=live` |
 | `HUB_SEND_TIMEOUT_S` | `5` | un envío que tarda más desconecta a ESE espectador |
 | `HUB_PENDIENTE_S` | `120` | vida de un item de `translation` que llegó antes que su `text` |
+| `HUB_MAX_MSG_BYTES` | `65536` | tamaño máximo de un frame de `/ingest`; uno más grande corta ESA conexión (1009). El mensaje real más grande de `fixtures/casetes/**/*.jsonl` pesa 1818 B |
+| `HUB_MAX_SESIONES` | `200` | salas con ingesta en memoria; un mensaje de una sala nueva por encima del tope recibe `rechazado` ("tope de sesiones"). Las terminadas no se liberan hasta reiniciar el hub |
+| `HUB_MAX_ESPERA` | `50` | salas "en espera" (un espectador abrió `/ws/<slug>` de una sala sin ingesta); la siguiente se cierra con 1013 |
+| `HUB_MAX_AUDIENCIA` | `2000` | WebSocket de audiencia simultáneos en TODO el hub; el siguiente se cierra con 1013. No hay tope por IP a propósito (detrás de un NAT toda la audiencia comparte IP) |
 
 Se leen del entorno o de `.env` en la raíz con python-dotenv (sólo las claves `HUB_*`; el entorno
 gana). `--web` y `--panel` ganan sobre `HUB_WEB_DIR` y `HUB_PANEL_DIR`.
@@ -57,13 +61,17 @@ gana). `--web` y `--panel` ganan sobre `HUB_WEB_DIR` y `HUB_PANEL_DIR`.
 | `GET /health` | no | `{"ok":true, sesiones, productores, clientes, uptime_s}` |
 | `GET /api` | no | lista de rutas activas |
 | `GET /api/sesiones` | no | índice de sesiones (R6): `state`, `last_seq`, `replay`, `source`, `test`, `translations_langs`, espectadores |
-| `GET /api/sesiones/<id>/historial?desde=<seq>` | no | mensajes `text` con `seq > desde`, con traducciones ya mergeadas |
+| `GET /api/sesiones/<id>/historial?desde=<seq>[&limit=N]` | no | mensajes `text` con `seq > desde`, con traducciones ya mergeadas. `limit` 1-1000, default 500: devuelve los `limit` MÁS VIEJOS después de `desde`; si quedaron más, la cabecera `X-Historial-Truncado: <cuántos>` lo dice y se sigue con `desde=<último seq recibido>` |
 | `GET /api/sesiones/<id>/historial?desde=<seq>&tipos=todos` | no | ídem con todos los tipos guardados (`session_start`, `rotation`, `session_end`…); lo usa la vista para el backfill al reconectar |
 | `GET /api/metricas` | `Authorization: Bearer <HUB_TOKEN>` | contadores por sesión (clientes, descartes, duplicados, traducciones) |
 | `GET /`, `GET /index.html` | no | con `--web`: `web/index.html` (sin `--web`: la lista de rutas en JSON) |
 | `GET /s/<lo-que-sea>` | no | con `--web`: `web/sesion.html` (la sesión y el idioma los lee el cliente de la URL) |
 | `GET /<archivo>` | no | con `--web`: el archivo de `web/` (`/app.js`, `/estilo.css`, …) |
 | `GET /panel` → `302 /panel/` · `GET /panel/` · `GET /panel/<archivo>` | no | con `--panel`: `panel/index.html` y sus archivos (el 302 conserva la query) |
+
+Cabeceras en TODA respuesta (seguridad, 25/09): `X-Content-Type-Options: nosniff`, `Referrer-Policy:
+no-referrer`, `Server: vibeathon-hub` (sin versiones). `X-Frame-Options: SAMEORIGIN` sólo en `/panel/`
+(tiene el campo del token); la vista queda enmarcable. CORS `*` sigue en las lecturas.
 
 Estáticos (`hub/estaticos.py`): sólo archivos DENTRO de la carpeta, con extensión de una lista
 (`.html .js .css .json .svg .png .ico …`; no se sirven `.py` ni archivos que empiezan con `.`), con
@@ -119,3 +127,29 @@ mandar el token él mismo (pedido a `monitor`).
 `hub/tests/mutante_fanout.py` reemplaza el fan-out por uno SERIAL y corre el test del cliente
 colgado: tiene que FALLAR (`python -m pytest hub/tests/mutante_fanout.py -q` → exit 1). Si pasara,
 el test no estaría midiendo nada.
+
+## Seguridad y límites conocidos (25/09, `reportes/backend-seguridad.md`)
+
+- **Token:** ver `HUB_TOKEN` arriba. Nunca en la query string (el access log la guarda).
+- **Topes:** `HUB_MAX_MSG_BYTES`, `HUB_MAX_SESIONES`, `HUB_MAX_ESPERA`, `HUB_MAX_AUDIENCIA` (arriba).
+  Los campos de primer nivel que no están en `contracts/esquema.json` pasan la validación pero el hub
+  NO los guarda ni los reparte (ver `contracts/README.md`). Un JSON muy anidado recibe `rechazado`
+  (antes: traceback). Los errores de un `rechazado` y del log se cortan a 300 caracteres.
+- **Sin límite de intentos de auth ni de conexiones por IP:** en producción, un proxy delante con
+  `limit_conn`/`limit_req` y TLS (el token viaja en claro por `ws://`).
+- **Hub único en memoria.** Un reinicio del hub pierde las traducciones previas: el worker reenvía sus
+  `text` (salen con `translations: {}`) pero no las `translation` ya entregadas (`worker/emisor.py`).
+  Quien ya estaba mirando conserva las suyas; quien entra o hace backfill de ese tramo, y el export
+  desde el hub, las ven sin traducir. Además, si la vista reconecta antes que el worker, la sala todavía
+  no existe en el hub nuevo, `historial` da 404 y la vista pinta un **"[tramo perdido]" falso**.
+  Medido (`reportes/adversario-final-escala.md`, sección 7, 300 clientes, hub matado y relevantado dos
+  veces): seqs traducidos que perdieron la traducción `[2,3,4,5,6,7,10,11]` en las dos corridas (8/8);
+  backfills 404 = 228/300 (r1) y 4/300 (r2). Ningún cliente perdió `text` (300/300 al último seq).
+  NO está arreglado: pendiente reenviar las `translation` en el Emisor y que la vista trate el 404 con
+  `init.state == "waiting"` como "reintentar".
+- **Historial:** 1000 mensajes por sala (~50 min); una charla más larga se exporta desde el casete.
+  `GET .../historial` es público y sin límite de frecuencia; con `limit` (máx. 1000) el peor caso por
+  pedido baja pero no desaparece (antes 8,1 MB con `tipos=todos` y textos de 3900 caracteres).
+- **Workaround de aiohttp 3.14:** al cerrar desde el server, aiohttp re-arma el heartbeat y el WS
+  quedaba vivo ~30 s (medido: 300 de 300 vivos a 1 s). Los WS rechazados con 1013 se abren sin
+  heartbeat y a los de auth fallida se les cancela a mano (`_cancel_heartbeat`, API privada).
