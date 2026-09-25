@@ -37,6 +37,7 @@ replay_en_bucle() {
     for casete in "$@"; do
         [ -e "$casete" ] || continue
         encontrados=1
+        case "$casete" in *defectuos*|*/ejemplo*) echo "[entrypoint-worker] salteo fixture de test: $casete" >&2; continue;; esac
         sesion=$(basename "$casete" .jsonl)
         (
             while true; do

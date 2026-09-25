@@ -142,3 +142,37 @@ por escrito, y queda registrado en `ESTADO.md` ("Decisiones y porqué") y en `re
 
 Este archivo lo agrega al `README.md` el agente `ops` en el Bloque 6 (dueño de la raíz y del
 README; `demo` no escribe `README.md`). Pedido cruzado registrado en `reportes/demo-b4.md`.
+
+
+## Noche del 24/09 (bloques 5 a 10): qué pasó de verdad
+
+Escrito por el orquestador al cierre, para responder a X2 sin maquillaje.
+
+- **Bloque 5 (checkpoint del MVP):** `qa` corrió dos sesiones reales de 11 minutos en paralelo (cobertura 1,0, `seq`
+  continuo, cinco rotaciones de sesión, latencia percibida p50 ≈ 0,44 s; `qa/out/smoke-b5r.log`). Los cuatro agentes
+  del bloque murieron a las 16:45 por el límite de uso de la cuenta de Claude, sin escribir sus reportes; el orquestador
+  reconstruyó la evidencia desde disco (`reportes/orquestador-b5.md`) y el adversario la re-ejecutó.
+- **Bloques 6 y 7:** remoto público creado a las 18:46 y push con OK de Ricardo; video borrador grabado por el
+  orquestador manejando OBS por WebSocket (Ricardo lo rechazó: captura plana sin narración). Clon limpio siguiendo sólo
+  el README y `docker compose` con key real dentro de Docker, los dos con exit 0.
+- **Bloques 8 y 9:** fuentes por URL y micrófono, glosario automático desde la agenda, reservas de llamadas de
+  traducción entre procesos, panel con token, QR en el índice, README consolidado.
+- **Decisiones de Ricardo, textuales:** "Gemini de punta a punta, sin traductor local de respaldo" (14:55); "no se sube
+  nada hasta que el desarrollo esté completo" (20:47); "el sistema de diseño de live-worship es de Urban, no
+  parecerse; inspirarse en Figma y Behance" (21:50); "el panel es muy AI-like" (23:25); voz Iria de Cartesia, más
+  rápida (22:50); guion A "beneficio primero" (23:20).
+- **Rediseño de vista y panel** sobre un sistema de diseño con referencias de Figma Community y Behance
+  (`docs/design/sistema.md`), implementado por `frontend` y `monitor`; el orquestador ancló las líneas abajo.
+- **Seguridad:** revisión completa (`reportes/seguridad.md`); arreglados el proxy de métricas que filtraba el token
+  y el override `?hub=` sin validar, Docker sin root, servidores de desarrollo en 127.0.0.1, `maxLength` en el
+  contrato. **Quedaron pendientes** los topes de clientes por IP y de sesiones por productor en el hub: `backend` los
+  estaba escribiendo cuando el segundo límite de uso (23:05) lo cortó; sus cambios a medias colgaban los tests y el
+  orquestador los revirtió. Está documentado como limitación conocida en el README.
+- **Tests:** la suite del worker pasa (76). Del hub pasan 39 en cuatro archivos; `hub/tests/test_fanout.py` (200 y
+  500 clientes) colgó en este entorno esa noche y no se investigó a fondo; el fan-out fue re-ejecutado por el
+  adversario en los bloques 1 y 2.
+- **Video final:** guion "beneficio primero" derivado de los guiones reales de videos de Wordly, Interprefy, KUDO,
+  Google, Microsoft, Zoom, Samsung y Apple (`reportes/video-referencias.md`, transcripciones bajadas con yt-dlp);
+  narración en español con Cartesia (voz Iria, velocidad rápida); subtítulos en inglés generados pasando la narración
+  por el propio `worker.run` y `docs/export/exportar.py` (R14); composición con `docs/video/componer.py`; tomas de la
+  interfaz grabadas con OBS controlado por WebSocket. Ricardo sube a YouTube y envía en Devpost.

@@ -1,0 +1,184 @@
+<!doctype html>
+<!--
+  Terminal falsa para los planos 8-9 del Guion A (docs/video/guion-final.md): animacion de tipeo
+  del comando + las lineas REALES que imprimio `MODO=replay docker compose -f
+  ops/docker-compose.yml up` (capturadas hoy, ver docs/video/terminal-lineas.json y el comando
+  documentado en docs/video/guion-final.md). CSS/JS puro, sin libreria de terminal ni screen-recording.
+
+  Las 20 lineas de abajo son un RECORTE elegido a mano de la corrida real (se omiten las lineas de
+  un bug real que encontramos en `ops/entrypoint-worker.sh`: el glob `*-trad*.jsonl` tambien
+  matchea `b5r-en-traducciones-defectuosas.jsonl`, que no es un casete v1 valido y crashea en loop
+  cada 3s -- reportado aparte, no es parte de este render). Ninguna linea fue inventada; las que
+  se ven salieron tal cual del log real (docs/video/terminal-lineas.json).
+
+  Uso:
+    docs/video/terminal.html            -> animacion en tiempo real (para mirar en el navegador)
+    docs/video/terminal.html?instant=1  -> todo visible de una, sin esperar (para QA rapido)
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terminal — grabacion</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #0a0a0d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "Cascadia Code", "Consolas", "SF Mono", Menlo, monospace;
+  }
+  .ventana {
+    width: 1500px;
+    height: 840px;
+    background: #17181d;
+    border-radius: 12px;
+    box-shadow: 0 40px 80px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px #2a2b33;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .barra {
+    height: 40px;
+    background: #21222a;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+  .punto { width: 13px; height: 13px; border-radius: 50%; }
+  .punto--roja { background: #ff5f57; }
+  .punto--amarilla { background: #febc2e; }
+  .punto--verde { background: #28c840; }
+  .barra__titulo {
+    margin-left: 16px;
+    color: #8a8d98;
+    font-size: 14px;
+  }
+  .cuerpo {
+    flex: 1 1 auto;
+    padding: 22px 26px;
+    color: #d7d9e0;
+    font-size: 20px;
+    line-height: 1.55;
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .prompt { color: #6fd67a; }
+  .cmd { color: #f2f4f8; }
+  .cursor {
+    display: inline-block;
+    width: 10px;
+    height: 22px;
+    background: #f2f4f8;
+    vertical-align: text-bottom;
+    animation: parpadeo 1s steps(1) infinite;
+  }
+  @keyframes parpadeo { 50% { opacity: 0; } }
+  .linea {
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+  }
+  .linea.visible { opacity: 1; transform: translateY(0); }
+  .linea--hub { color: #7ec4ff; }
+  .linea--worker { color: #d7d9e0; }
+  .linea--sesion { color: #f2c14e; }
+</style>
+</head>
+<body>
+  <div class="ventana">
+    <div class="barra">
+      <div class="punto punto--roja"></div>
+      <div class="punto punto--amarilla"></div>
+      <div class="punto punto--verde"></div>
+      <span class="barra__titulo">ricardo@vibeathon: ~/subtitulos-en-vivo</span>
+    </div>
+    <div class="cuerpo" id="cuerpo">
+      <span class="prompt">$ </span><span class="cmd" id="cmd"></span><span class="cursor" id="cursor"></span>
+      <div id="lineas"></div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      "use strict";
+      var COMANDO = "MODO=replay docker compose -f ops/docker-compose.yml up";
+      // Lineas reales, ver docs/video/terminal-lineas.json (mismo contenido, para reuso desde Python).
+      var LINEAS = [
+        ["hub", "hub-1     | 02:45:59 WARNING hub: HUB_TOKEN no esta definido (ni en el entorno ni en .env): se usa el token de desarrollo 'dev-token'."],
+        ["hub", "hub-1     | 02:45:59 INFO hub: hub escuchando en http://0.0.0.0:8080 (ws: /ingest, /ws/<sesion>?lang=xx . http: /health, /api/sesiones)"],
+        ["hub", "hub-1     | 02:45:59 INFO hub: sirve la vista: / y /s/<id> desde web"],
+        ["hub", "hub-1     | 02:45:59 INFO hub: sirve el panel: /panel/ desde panel"],
+        ["worker", "worker-1  | [entrypoint-worker] MODO REPLAY (rotulado; no cumple R17a/R21 por si solo) -> ws://hub:8080/ingest"],
+        ["worker", "worker-1  | [entrypoint-worker] replay fixtures/casetes/b1-en-60s-rederivado-trad.jsonl -> sesion b1-en-60s-rederivado-trad"],
+        ["worker", "worker-1  | [entrypoint-worker] replay fixtures/casetes/b1-es-60s-trad-pt.jsonl -> sesion b1-es-60s-trad-pt"],
+        ["worker", "worker-1  | [entrypoint-worker] replay fixtures/casetes/b4-trad-vivo-en.jsonl -> sesion b4-trad-vivo-en"],
+        ["worker", "worker-1  | [entrypoint-worker] replay fixtures/casetes/b8-trad-vivo-en.jsonl -> sesion b8-trad-vivo-en"],
+        ["worker", "worker-1  | [entrypoint-worker] replay fixtures/casetes/b8-trad-vivo-es.jsonl -> sesion b8-trad-vivo-es"],
+        ["worker", "worker-1  | [replay] MODO REPLAY (no es ASR real): b1-en-60s-rederivado-trad.jsonl -> sesion 'b1-en-60s-rederivado-trad', 30 mensajes, velocidad x1.0"],
+        ["worker", "worker-1  | [replay] MODO REPLAY (no es ASR real): b8-trad-vivo-en.jsonl -> sesion 'b8-trad-vivo-en', 130 mensajes, velocidad x1.0"],
+        ["worker", "worker-1  | [emisor] conectado a ws://hub:8080/ingest last_seq={}"],
+        ["sesion", "hub-1     | 02:46:00 INFO hub: sesion nueva: b1-en-60s-rederivado-trad (lang=en, replay=True)"],
+        ["sesion", "hub-1     | 02:46:00 INFO hub: sesion nueva: b8-trad-vivo-es (lang=es, replay=True)"],
+        ["sesion", "hub-1     | 02:46:00 INFO hub: sesion nueva: b4-trad-vivo-en (lang=en, replay=True)"],
+        ["sesion", "hub-1     | 02:46:00 INFO hub: sesion nueva: b8-trad-vivo-en (lang=en, replay=True)"],
+        ["sesion", "hub-1     | 02:46:00 INFO hub: sesion nueva: b1-es-60s-trad (lang=es, replay=True)"],
+        ["hub", "hub-1     | 02:46:00 INFO hub: ingesta: productor conectado desde 172.26.0.3 (productores=7)"],
+        ["hub", "hub-1     | 02:46:07 INFO aiohttp.access: 172.26.0.1 \"GET /api/sesiones HTTP/1.1\" 200 0.000364s"]
+      ];
+
+      var params = new URLSearchParams(location.search);
+      var instant = params.get("instant") === "1";
+      var cmdEl = document.getElementById("cmd");
+      var cursorEl = document.getElementById("cursor");
+      var lineasEl = document.getElementById("lineas");
+
+      function clasePara(tipo) {
+        return tipo === "hub" ? "linea linea--hub" : tipo === "sesion" ? "linea linea--sesion" : "linea linea--worker";
+      }
+
+      LINEAS.forEach(function (item) {
+        var div = document.createElement("div");
+        div.className = clasePara(item[0]);
+        div.textContent = item[1];
+        lineasEl.appendChild(div);
+      });
+
+      if (instant) {
+        cmdEl.textContent = COMANDO;
+        cursorEl.style.display = "none";
+        Array.prototype.forEach.call(lineasEl.children, function (el) { el.classList.add("visible"); });
+        return;
+      }
+
+      // Tipeo del comando (~1.6 s), despues las lineas reales aparecen escalonadas (~4 s).
+      var i = 0;
+      var tipeo = setInterval(function () {
+        cmdEl.textContent = COMANDO.slice(0, i);
+        i += 1;
+        if (i > COMANDO.length) {
+          clearInterval(tipeo);
+          setTimeout(revelarLineas, 250);
+        }
+      }, 1600 / COMANDO.length);
+
+      function revelarLineas() {
+        cursorEl.style.display = "none";
+        var hijos = lineasEl.children;
+        var j = 0;
+        var paso = setInterval(function () {
+          if (j >= hijos.length) { clearInterval(paso); return; }
+          hijos[j].classList.add("visible");
+          j += 1;
+        }, 4000 / hijos.length);
+      }
+    })();
+  </script>
+</body>
+</html>

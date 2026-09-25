@@ -346,6 +346,14 @@ reportes de bloque del equipo, no versionados por tamaño — lo reproducible es
 - [`docs/video/`](docs/video/) — script reproducible que compone el video de entrega (R13a/R13b) a
   partir de grabación real + narración + subtítulos exportados con el propio proyecto (R14).
 
+## Limitaciones conocidas
+
+- El hub no limita todavía clientes por IP ni sesiones por productor autenticado (hallazgo medio de la revisión de
+  seguridad, `reportes/seguridad.md` en el repo de trabajo); en un evento real ponelo detrás de un proxy inverso con
+  límites por IP. El token de ingesta y de métricas (`HUB_TOKEN`) hay que cambiarlo del default.
+- `hub/tests/test_fanout.py` (200 y 500 clientes) colgó en Windows la noche de la vibeathon; el resto de la suite pasa.
+- Fuente de micrófono implementada pero no verificada en esta máquina (OBS retenía el dispositivo).
+
 ## Licencia
 
 Apache 2.0. Ver [LICENSE](LICENSE). El repositorio es público y Nerdearla puede usarlo, adaptarlo y
