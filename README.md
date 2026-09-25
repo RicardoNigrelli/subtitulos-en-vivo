@@ -312,6 +312,7 @@ hilo de Discord citado arriba). Filas con lo medido en una corrida real o deduci
 | Se cae la red entre el worker y el hub, o se reinicia el hub | El worker reconecta y reenvía lo pendiente; la vista se reconecta sola y recupera lo perdido pidiendo `historial?desde=`. | `qa/out/reconexion-b2.log` (backlog 69/69 recuperado); `reportes/frontend-b3.md` (backfill en la vista, 0 perdidas / 0 duplicadas) |
 | Se recarga la pantalla de la sala | La captura sigue: worker y pantalla son procesos separados. Al reconectar, la vista pinta las últimas líneas guardadas y pide por historial lo que se perdió. | Por diseño (separación worker/web); `reportes/verificacion-final.md` no tiene una fila que mida específicamente una recarga de pantalla (sí mide la reconexión del hub, ítem 5b) |
 | Se pierde audio unos segundos en una rotación | El panel lo muestra acumulado (`audio_lost_s`) y la vista marca, en el lugar exacto, "[tramo sin texto: N s]". | `reportes/frontend-b4-huecos.txt` |
+| Gemini deja de cerrar turnos a mitad de sesión (comportamiento del server, observado en corridas reales) | El watchdog de atasco reabre la conexión con solape y reenvía hasta 15 s de audio; la pérdida queda acotada. Medido el 25/09 en cinco corridas reales: 0 s de voz sin texto en tres (incluida la de 2 × 11 min) y 11–15 s en dos cortas. | `qa/out/smoke-b5r.log`, `qa/out/gate2/` (2 × 60 s, 25/09 02:15); comando: `python qa/smoke.py --sesiones 2 --duracion 60 ...` |
 | Se acaba la cuota o falla la key | El worker no falla en silencio: si falta la key corta con un mensaje claro (`GEMINI_API_KEY no esta definida en .env ni en el entorno`); ante un envío o una conexión que fallan, registra el error y, si no logra reabrir, termina. El sistema puede arrancar igual en modo replay, rotulado como tal, para pruebas y demos; para producción, nivel pago de Gemini o repartir sesiones entre varios proyectos (estimación de costo en `docs/costos.md`). Por diseño: no se forzó una cuota agotada real en esta vibeathon. | `worker/gemini.py` (función `api_key`); `worker/session.py` (`_caida`, `_SinReabrir`); `ops/entrypoint-worker.sh` (cae a replay si falta la key); `docs/costos.md` |
 | Stream virtual sin traducción propia (idea del staff: vMix) | Una fuente de navegador POR IDIOMA, `?modo=obs&lang=xx`, fondo transparente sobre el video, dos líneas abajo. | `reportes/obs-transparencia.md` y captura `reportes/obs-transparencia.png` (verificado sobre video real en OBS el 25/09) |
 
@@ -425,7 +426,9 @@ reportes de bloque del equipo, no versionados por tamaño — lo reproducible es
 - El hub no limita todavía clientes por IP ni sesiones por productor autenticado (hallazgo medio de la revisión de
   seguridad, `reportes/seguridad.md` en el repo de trabajo); en un evento real ponelo detrás de un proxy inverso con
   límites por IP. El token de ingesta y de métricas (`HUB_TOKEN`) hay que cambiarlo del default.
-- `hub/tests/test_fanout.py` (200 y 500 clientes) colgó en Windows la noche de la vibeathon; el resto de la suite pasa.
+- `hub/tests/test_fanout.py` (200 y 500 clientes) colgaba la noche de la vibeathon por dos defectos del propio test
+  (cola de 10 mensajes que atrapaba al cliente vivo; mensajes de 62 KB que el contrato rechaza); corregido el 25/09, la
+  suite del hub pasa completa (41).
 - Fuente de micrófono implementada pero no verificada en esta máquina (OBS retenía el dispositivo).
 
 ## Licencia

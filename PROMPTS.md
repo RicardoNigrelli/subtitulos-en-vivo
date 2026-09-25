@@ -168,7 +168,7 @@ Escrito por el orquestador al cierre, para responder a X2 sin maquillaje.
   contrato. **Quedaron pendientes** los topes de clientes por IP y de sesiones por productor en el hub: `backend` los
   estaba escribiendo cuando el segundo límite de uso (23:05) lo cortó; sus cambios a medias colgaban los tests y el
   orquestador los revirtió. Está documentado como limitación conocida en el README.
-- **Tests (estado al 25/09 02:00):** worker 83 y hub 41 en verde. El test de fan-out que "colgaba" tenía dos causas
+- **Tests (estado al 25/09 02:00):** worker 88 y hub 41 en verde. El test de fan-out que "colgaba" tenía dos causas
   propias del test, encontradas en la madrugada: una cola de 10 mensajes que atrapaba también al cliente vivo, y
   mensajes de 62 KB que el contrato (ahora con `maxLength: 4000`) rechaza correctamente.
 - **Video final (PENDIENTE al 25/09 02:00; Ricardo no autoriza grabar hasta un funcionamiento total verificado):**
@@ -188,7 +188,9 @@ con el casete real de la corrida: texto duplicado tras una rotación por atasco 
 un test de fan-out mal diseñado, el modo proyección que se persistía y se ponía en negro con parciales largos, un
 casete viejo que rompía el validador, el entrypoint de Docker que reproducía fixtures de test, la tabla de R19 del
 README con dos p50 rotulados como p50/p95. Lo que se midió y NO se arregló porque no es nuestro: en algunas sesiones
-el primer texto final del server tarda 21–37 s; el watchdog reabre la sesión y el README lo documenta. Un cambio de
+el server tarda en cerrar el primer turno (3,5 s en las mejores, 39,7 s en la peor de las medidas) o deja de cerrar
+turnos a mitad de sesión; el watchdog reabre la sesión y la pérdida queda acotada (11–15 s en dos de cinco corridas
+reales del 25/09, 0 en las otras tres, incluida la de 2 × 11 min). El README lo documenta en "Qué pasa si…". Un cambio de
 umbral (10/4) se probó en replay, salió peor y se revirtió a 22/8, que es el valor de la corrida real de 2 × 11 min.
 Se sumaron, por el hilo de Discord del staff de Nerdearla: modo sala (correr sin límite, parar limpio, reabrir la
 fuente si se cae el cable), la tabla "Qué pasa si…" y la verificación de `?modo=obs` transparente sobre video en OBS.
