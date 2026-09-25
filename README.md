@@ -358,6 +358,8 @@ arranque simple, sin un operador dedicado mirando la mini PC) esto se mantiene o
   el panel remoto con token (`/panel/`, sección "Panel de monitoreo" más abajo), no parado junto al
   escenario.
 
+**Nivel pago en producción:** según la página de estado oficial, "Free-tier requests use sheddable capacity, while billed-tier requests are protected by critical priority" ([status](https://aistudio.google.com/status)); los atascos que documentamos se midieron en nivel gratuito.
+
 **Latencia en producción (nivel pago):** con `TRADUCTOR_RPM`/`TRADUCTOR_TOPE_RPM` en los límites del proyecto y `VENTANA_S=2`, el original llega ~2,3 s después de que el orador empieza la frase (medido) y el traducido ~3,5–4,7 s (estimación con la llamada al modelo medida); detalle en [`docs/evidencia.md`](docs/evidencia.md), sección 1c.
 
 ## Cómo escalar a más sesiones (R21, C3)

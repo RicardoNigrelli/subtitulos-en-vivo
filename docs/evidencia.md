@@ -105,6 +105,14 @@ congelamientos de 8 a 51 s con el socket abierto y sin error, en proyectos gratu
 ~1 s de distancia que tardaron 10–12 s en la primera respuesta contra 4–5 s cuando se espaciaron 12 s o más. Es
 el mismo patrón que nuestra toma doble arrancada en el mismo segundo, y la misma mitigación: escalonar.
 
+La página de estado oficial explica por qué pasa sobre todo en el nivel gratuito
+([aistudio.google.com/status](https://aistudio.google.com/status), consultada el 25/09 09:05 AR): "Free-tier
+requests use sheddable capacity, while billed-tier requests are protected by critical priority." A las 09:00 AR
+del 25/09, con la página en "All Systems Operational", tres salas de prueba de 60 s en nivel gratuito, dos con
+una key y una con la key de otro proyecto, dieron 2 a 4 textos cada una y errores 1011 del servidor, con el envío
+a tiempo (`fixtures/casetes/evidencia-25-09/prueba-*.jsonl`). En
+producción, con nivel pago, las sesiones corren con prioridad crítica.
+
 Cómo se opera para que pase lo menos posible (README, "Qué pasa si…" y "Cómo escalar"): arrancar las salas
 escalonadas 20–30 s, una key o proyecto por sala (`--key`), y dejar activo el watchdog, que ya lo está.
 
